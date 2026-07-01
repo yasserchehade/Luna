@@ -1,6 +1,6 @@
 # Luna
 
-Luna is an AI Administrative Operating System for bills, invoices, renewals, registrations, property expenses, tax deadlines, documents, emails, and reminders.
+Luna is an AI Administrative Operating System that continuously monitors, organizes, and manages a person's or business's administrative obligations across multiple services, including bills, invoices, renewals, registrations, property expenses, tax deadlines, documents, emails, and reminders.
 
 The first MVP focuses on ingesting bills and invoices, extracting key fields with an AI provider-agnostic interface, storing the document and structured data, and showing unpaid, paid, overdue, and upcoming bills in a dashboard.
 
