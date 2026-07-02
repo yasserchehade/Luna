@@ -10,10 +10,14 @@
 8. Humans approve financial, legal, filing, and other irreversible actions.
 9. The MVP must stay focused enough to ship.
 10. Security, privacy, auditability, and data ownership are product requirements, not later polish.
+11. User-owned storage is the default; Luna-managed cloud storage is optional.
+12. The household cabinet should be generated from the user's graph, not forced into one fixed folder structure.
 
 ## Product Posture
 
 Luna should reduce administrative load without hiding important decisions from the user. It can extract, classify, connect, summarize, remind, and prepare actions. It should avoid pretending to be the bank, accountant, school, insurer, or government portal. Instead, Luna coordinates across those systems and gives the household a single place to ask, "What do we know, what is due, and what should happen next?"
+
+Luna should also avoid asking users to manually organize every file. It should maintain a household cabinet that is understandable in normal folders, while the richer graph tracks every relationship behind the scenes.
 
 ## Engineering Posture
 

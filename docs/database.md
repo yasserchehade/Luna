@@ -1,6 +1,6 @@
 # Database
 
-Luna uses PostgreSQL as the structured source of truth. Original files are stored separately and referenced by database records.
+Luna uses PostgreSQL as the structured source of truth. Original files are stored separately in user-owned cabinet storage and referenced by database records.
 
 The database should evolve from the current bills MVP into a household knowledge graph: typed entities, source documents, relationships, tasks, reminders, extraction runs, and audit events.
 
@@ -11,7 +11,7 @@ The current implementation includes:
 - `workspaces`: current ownership boundary for personal, family, landlord, or business spaces.
 - `users`: accounts that own or access Luna data.
 - `workspace_memberships`: user roles inside a workspace.
-- `documents`: original uploaded or emailed files.
+- `documents`: original uploaded or emailed files, including storage provider, current storage path, cabinet status, suggested cabinet path, and confirmed cabinet path.
 - `document_texts`: extracted text and page metadata for stored documents.
 - `bills`: extracted bill and invoice records, including extraction confidence, review status, and review reasons.
 - `household_entities`: typed household graph nodes such as suppliers, properties, vehicles, subscriptions, and assets.
@@ -97,6 +97,23 @@ Use explicit foreign keys for high-volume critical workflows when they are stabl
 ## Storage Rule
 
 Every bill or invoice should point back to an original document where possible. The document is the source of truth; extracted fields can be corrected, but the original remains unchanged.
+
+Document records include provider-aware cabinet references:
+
+```text
+documents
+  storage_provider
+  storage_path
+  original_filename
+  cabinet_status
+  suggested_cabinet_path
+  confirmed_cabinet_path
+  sha256
+```
+
+`storage_provider` can represent local folders first, then user-owned cloud folders such as iCloud Drive, Google Drive, OneDrive, Dropbox, or NAS. Luna-managed encrypted cloud storage should be an optional provider, not the default.
+
+The graph should drive cabinet path suggestions. A document linked to a family trust, property, supplier, and bill can receive a suggested path under the relevant trust or property while keeping all relationships in the database.
 
 ## Planning Notes
 

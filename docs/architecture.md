@@ -1,12 +1,12 @@
 # Architecture
 
-Luna is a modular monorepo with a FastAPI backend, Next.js frontend, PostgreSQL database, Redis-backed job queue, Celery workers, provider-agnostic AI services, and local-first file storage.
+Luna is a modular monorepo with a FastAPI backend, Next.js frontend, PostgreSQL database, Redis-backed job queue, Celery workers, provider-agnostic AI services, and local-first user-owned cabinet storage.
 
 The architecture should support a connected household knowledge graph from day one, even while the first user-facing workflow is bill and invoice processing.
 
 ## System Concept
 
-External systems feed data into Luna. Luna stores source material, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents the user with a unified dashboard and natural-language assistant.
+External systems feed data into Luna. Luna stores or references source material in a user-owned household cabinet, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents the user with a unified dashboard and natural-language assistant.
 
 ```text
 External systems
@@ -36,23 +36,32 @@ User experience
 - Worker: Celery process for document parsing, AI extraction, relationship mapping, reminders, synchronization, and future integration jobs.
 - PostgreSQL: structured source of truth for household entities, documents, relationships, tasks, reminders, extraction runs, and audit events.
 - Redis: queue broker and lightweight job coordination.
-- File storage: local disk for MVP, abstracted for later S3 or Cloudflare R2.
+- File storage: provider-aware household cabinet storage. Local folder first, later user-owned cloud folders such as iCloud Drive, Google Drive, OneDrive, Dropbox, or NAS. Luna-managed encrypted cloud storage should be optional.
 - AI services: provider-agnostic interfaces for extraction, classification, summarization, relationship mapping, and assistant responses.
 - Integration adapters: later connectors for Gmail/Outlook, Google Calendar, MYOB, bank feeds, cloud storage, school systems, and other household services.
 
 ## Phase 1 Data Flow
 
 1. A user uploads a bill or invoice PDF.
-2. Backend stores the original document outside the web root.
+2. Backend stores the original document in local cabinet storage outside the web root.
 3. Backend records document metadata and queues understanding work.
 4. Luna extracts PDF text and stores it as document understanding context.
 5. Worker or API flow calls the configured AI extraction service.
 6. Luna matches the document against known supplier profiles and records template drift when anchors are missing.
 7. Luna creates or links household entities such as supplier, property, utility account, subscription, business, or bill.
-8. Luna stores a draft bill or invoice with confidence metadata.
-9. Luna creates reminders and review tasks for due dates, missing information, or changed supplier templates.
-10. User reviews, corrects, confirms, or marks the obligation as paid.
-11. Dashboard shows upcoming, unpaid, overdue, and completed household obligations.
+8. Luna generates a suggested cabinet path from the graph and extracted document context.
+9. Luna stores a draft bill or invoice with confidence metadata.
+10. Luna creates reminders and review tasks for due dates, missing information, or changed supplier templates.
+11. User reviews, corrects, confirms, files, or marks the obligation as paid.
+12. Dashboard shows upcoming, unpaid, overdue, and completed household obligations.
+
+## Household Cabinet Storage
+
+The household cabinet is a file structure the user can access outside Luna. It may live on a local drive, external drive, NAS, iCloud Drive, Google Drive, OneDrive, Dropbox, or another user-owned storage location.
+
+The knowledge graph is the source of truth. Cabinet folders are a human-readable projection of that graph. For example, a user-defined graph such as `FamilyMember -> FamilyTrust -> Property -> Supplier -> Document` can produce cabinet paths under a family trust, property, supplier, or document category.
+
+For MVP, Luna should generate suggested paths before physically moving or renaming files. This lets the product prove filing intelligence without risking silent destructive changes.
 
 ## Design Constraints
 
@@ -60,6 +69,7 @@ User experience
 - AI services should return structured outputs with confidence, provenance, and missing-field markers.
 - Integrations should be adapters behind internal interfaces.
 - Source documents should remain immutable where possible.
+- Luna should not silently delete, overwrite, or irreversibly move user files.
 - Relationship mapping should be additive and auditable; the system should explain why it linked a document to an entity.
 - The assistant should answer from Luna's structured data and indexed documents, not from ungrounded guesses.
 
@@ -69,5 +79,6 @@ User experience
 - Google Calendar and Outlook Calendar for household deadlines.
 - MYOB for accounting context and export.
 - Bank feeds for payment matching.
-- Cloud storage for source documents and household records.
+- User-owned cloud folders for source documents and household records.
+- Optional Luna encrypted cloud sync or backup for households that want managed convenience.
 - School, insurance, government, and utility portals where APIs or email workflows allow.

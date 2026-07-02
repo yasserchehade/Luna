@@ -4,7 +4,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from psycopg.types.json import Jsonb
 
 from app.db import get_connection, get_default_workspace_id
-from app.models.document import Document, DocumentText
+from app.models.document import Document, DocumentCabinetPlan, DocumentText
+from app.services.cabinet import save_document_cabinet_plan
 from app.services.document_text import extract_pdf_text
 from app.storage.documents import store_uploaded_document
 
@@ -38,11 +39,22 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
                     source,
                     original_filename,
                     content_type,
+                    storage_provider,
                     storage_path,
                     sha256
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, original_filename, content_type, sha256, received_at
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING
+                    id,
+                    original_filename,
+                    content_type,
+                    storage_provider,
+                    storage_path,
+                    cabinet_status,
+                    suggested_cabinet_path,
+                    confirmed_cabinet_path,
+                    sha256,
+                    received_at
                 """,
                 (
                     stored.document_id,
@@ -50,6 +62,7 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
                     "upload",
                     stored.original_filename,
                     stored.content_type,
+                    "local_folder",
                     stored.storage_path,
                     stored.sha256,
                 ),
@@ -89,6 +102,11 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
         original_filename=row["original_filename"],
         content_type=row["content_type"],
         sha256=row["sha256"],
+        storage_provider=row["storage_provider"],
+        storage_path=row["storage_path"],
+        cabinet_status=row["cabinet_status"],
+        suggested_cabinet_path=row["suggested_cabinet_path"],
+        confirmed_cabinet_path=row["confirmed_cabinet_path"],
         received_at=row["received_at"],
         text_extracted=True,
         page_count=extracted_text.page_count,
@@ -106,6 +124,11 @@ def get_document(document_id: str) -> Document:
                     d.id,
                     d.original_filename,
                     d.content_type,
+                    d.storage_provider,
+                    d.storage_path,
+                    d.cabinet_status,
+                    d.suggested_cabinet_path,
+                    d.confirmed_cabinet_path,
                     d.sha256,
                     d.received_at,
                     t.page_count,
@@ -129,6 +152,11 @@ def get_document(document_id: str) -> Document:
         original_filename=row["original_filename"],
         content_type=row["content_type"],
         sha256=row["sha256"],
+        storage_provider=row["storage_provider"],
+        storage_path=row["storage_path"],
+        cabinet_status=row["cabinet_status"],
+        suggested_cabinet_path=row["suggested_cabinet_path"],
+        confirmed_cabinet_path=row["confirmed_cabinet_path"],
         received_at=row["received_at"],
         text_extracted=row["character_count"] is not None,
         page_count=row["page_count"],
@@ -169,4 +197,23 @@ def get_document_text(document_id: str) -> DocumentText:
         page_count=row["page_count"],
         character_count=row["character_count"],
         extracted_at=row["extracted_at"],
+    )
+
+
+@router.post("/{document_id}/cabinet-plan", response_model=DocumentCabinetPlan)
+def plan_document_cabinet(document_id: str) -> DocumentCabinetPlan:
+    try:
+        plan = save_document_cabinet_plan(document_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    return DocumentCabinetPlan(
+        document_id=str(plan["document_id"]),
+        storage_provider=str(plan["storage_provider"]),
+        cabinet_status=str(plan["cabinet_status"]),
+        suggested_cabinet_path=str(plan["suggested_cabinet_path"]),
+        reasons=[str(reason) for reason in plan["reasons"]],
     )

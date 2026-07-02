@@ -15,7 +15,8 @@
 Phase 1 should prove Luna as a Household Operating System while staying focused on one buildable workflow: bills and invoices.
 
 - Upload PDF bills and invoices.
-- Store original documents locally.
+- Store original documents in local user-owned cabinet storage.
+- Generate suggested cabinet paths from extracted fields and graph relationships.
 - Extract supplier, amount, due date, invoice number, category, confidence metadata, and human-review reasons.
 - Save draft bill and invoice records in PostgreSQL.
 - Assign documents and obligations to household entities such as supplier, property, business, utility account, subscription, or family member where available.
@@ -28,6 +29,8 @@ Phase 1 should prove Luna as a Household Operating System while staying focused 
 
 - Add first-class household, family member, supplier, property, vehicle, business, account, and task models.
 - Add relationship records so documents can link to multiple entities with provenance and confidence.
+- Add provider-aware storage metadata for local folders and future user-owned cloud folders.
+- Add safe filing workflows that suggest, confirm, then move or copy files into the household cabinet.
 - Add document search and basic indexing.
 - Add a natural-language question interface grounded in structured data and documents.
 - Add audit events for document views, corrections, relationship edits, and AI suggestions.
@@ -37,7 +40,7 @@ Phase 1 should prove Luna as a Household Operating System while staying focused 
 - Connect Gmail or Outlook for bill and invoice detection.
 - Track source email metadata and attachments.
 - Add duplicate detection across uploads and email.
-- Add cloud storage import or backup.
+- Add user-owned cloud folder import or backup.
 - Queue all ingestion and extraction work through Celery.
 
 ## Phase 4: Proactive Household Assistant

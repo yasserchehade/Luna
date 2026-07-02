@@ -6,6 +6,8 @@ It connects the apps and services a family already uses, understands the relatio
 
 Luna should not replace banking apps, MYOB, calendars, email, cloud storage, school apps, insurance portals, government systems, or utility portals. It should sit above them as an intelligence and coordination layer. The user should not need to remember whether something lives in Gmail, Google Drive, a school portal, a bank feed, MYOB, or a pile of PDFs. They should only need to remember Luna.
 
+Luna should also avoid becoming the default cloud warehouse for every household document. The household archive should be local-first and user-owned by default. A family may keep the Luna cabinet on a local drive, external drive, NAS, iCloud Drive, Google Drive, OneDrive, Dropbox, or another preferred storage location. Luna organizes and understands the cabinet; the user owns where it lives.
+
 ## Core Promise
 
 People should not have to remember where information is stored. They should only have to remember Luna.
@@ -13,6 +15,8 @@ People should not have to remember where information is stored. They should only
 ## What Luna Becomes
 
 Luna becomes a structured household knowledge graph with an AI interface. It knows about household entities, documents, deadlines, obligations, payments, relationships, and context. It can answer questions, surface what needs attention, and prepare the next administrative step for user approval.
+
+The graph should also drive the household cabinet. If a user models `FamilyMember -> FamilyTrust -> Property -> Supplier -> Document`, Luna can use that structure to suggest human-readable archive paths while still preserving one canonical document and many graph relationships.
 
 It should eventually help manage:
 

@@ -23,6 +23,12 @@ class HouseholdEntityCreate(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class HouseholdEntityUpdate(BaseModel):
+    entity_type: str | None = Field(default=None, min_length=1, max_length=80)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    metadata: dict[str, object] | None = None
+
+
 class HouseholdEntityActionResponse(BaseModel):
     entity: HouseholdEntity
 
@@ -48,6 +54,15 @@ class EntityRelationshipCreate(BaseModel):
 
 class EntityRelationshipActionResponse(BaseModel):
     relationship: EntityRelationship
+
+
+class EntityRelationshipDeleteResponse(BaseModel):
+    deleted_relationship_id: str
+
+
+class EntityRelationshipsForEntity(BaseModel):
+    entity_id: str
+    relationships: list[EntityRelationship]
 
 
 class HouseholdGraph(BaseModel):

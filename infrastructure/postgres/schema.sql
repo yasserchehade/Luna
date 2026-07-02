@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS documents (
     source TEXT NOT NULL CHECK (source IN ('upload', 'email')),
     original_filename TEXT NOT NULL,
     content_type TEXT NOT NULL,
+    storage_provider TEXT NOT NULL DEFAULT 'local_folder',
     storage_path TEXT NOT NULL,
+    cabinet_status TEXT NOT NULL DEFAULT 'unplanned' CHECK (cabinet_status IN ('unplanned', 'suggested', 'confirmed', 'filed', 'needs_review')),
+    suggested_cabinet_path TEXT,
+    confirmed_cabinet_path TEXT,
     sha256 TEXT,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -158,6 +162,25 @@ CREATE TABLE IF NOT EXISTS reminders (
 ALTER TABLE bills
     ADD COLUMN IF NOT EXISTS supplier_entity_id UUID;
 
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS storage_provider TEXT NOT NULL DEFAULT 'local_folder';
+
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS cabinet_status TEXT NOT NULL DEFAULT 'unplanned';
+
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS suggested_cabinet_path TEXT;
+
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS confirmed_cabinet_path TEXT;
+
+ALTER TABLE documents
+    DROP CONSTRAINT IF EXISTS documents_cabinet_status_check;
+
+ALTER TABLE documents
+    ADD CONSTRAINT documents_cabinet_status_check
+    CHECK (cabinet_status IN ('unplanned', 'suggested', 'confirmed', 'filed', 'needs_review'));
+
 ALTER TABLE bills
     ADD COLUMN IF NOT EXISTS extraction_confidence NUMERIC(4, 3);
 
@@ -228,6 +251,7 @@ CREATE INDEX IF NOT EXISTS idx_bills_workspace_status ON bills(workspace_id, sta
 CREATE INDEX IF NOT EXISTS idx_bills_workspace_review_status ON bills(workspace_id, review_status);
 CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date);
 CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_documents_cabinet_status ON documents(workspace_id, cabinet_status);
 CREATE INDEX IF NOT EXISTS idx_document_texts_extracted_at ON document_texts(extracted_at);
 CREATE INDEX IF NOT EXISTS idx_household_entities_workspace_type ON household_entities(workspace_id, entity_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_household_entities_unique_name

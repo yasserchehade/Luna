@@ -14,6 +14,7 @@ from app.models.bill import (
     BillStatus,
     BillUpdate,
 )
+from app.services.cabinet import save_document_cabinet_plan
 from app.services.extraction import get_extractor
 from app.services.supplier_profiles import record_supplier_template_match
 
@@ -337,7 +338,16 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                 )
 
     bill = _bill_from_row(row)
-    return BillIngestResponse(document_id=request.document_id, bill=bill, extraction=extracted)
+    cabinet_plan = save_document_cabinet_plan(request.document_id)
+    extraction_with_cabinet = {
+        **extracted,
+        "cabinet_plan": cabinet_plan,
+    }
+    return BillIngestResponse(
+        document_id=request.document_id,
+        bill=bill,
+        extraction=extraction_with_cabinet,
+    )
 
 
 @router.patch("/{bill_id}", response_model=BillActionResponse)

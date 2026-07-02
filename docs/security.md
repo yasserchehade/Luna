@@ -7,7 +7,7 @@ Luna should be designed as a trusted coordination layer. That means privacy, acc
 ## MVP Security Requirements
 
 - Keep secrets in environment variables, never in source control.
-- Store original documents outside the web root.
+- Store original documents in user-owned cabinet storage outside the web root.
 - Validate uploaded file types and sizes.
 - Log important actions without logging sensitive document contents.
 - Require explicit user approval before financial, legal, filing, or irreversible actions.
@@ -22,6 +22,9 @@ Luna should be designed as a trusted coordination layer. That means privacy, acc
 - Children, school, health, identity, and government records should be handled with extra care.
 - Integrations should request the minimum useful scopes.
 - Source documents should remain immutable where possible, with corrections stored as structured records.
+- Original household files should stay local or in user-owned cloud storage by default.
+- Luna-managed cloud document storage should be opt-in and clearly described.
+- Luna should not silently delete, overwrite, or irreversibly move files.
 
 ## AI and Integration Controls
 
@@ -35,9 +38,10 @@ Luna should be designed as a trusted coordination layer. That means privacy, acc
 
 - Authentication and household roles.
 - Encryption at rest for files.
+- Encryption at rest for any Luna-managed cloud document storage.
 - Signed URLs for document access.
 - Audit logs for document views, edits, exports, AI suggestions, and integration syncs.
 - Data retention, deletion, and export policies.
 - Provider-specific controls for AI data handling.
 - Secrets management for production integrations.
-- Backup and restore strategy for documents and structured records.
+- Backup and restore strategy for structured records and optional cabinet backups.

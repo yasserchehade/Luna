@@ -15,6 +15,7 @@ For households overwhelmed by bills, documents, portals, deadlines, and scattere
 - A document and obligation intelligence layer.
 - A coordination surface across email, calendars, accounting, banking, cloud storage, and portals.
 - A system of context that helps people find, understand, and act on household information.
+- A user-owned household cabinet that Luna organizes and understands.
 
 ## What Luna Is Not
 
@@ -23,6 +24,7 @@ For households overwhelmed by bills, documents, portals, deadlines, and scattere
 - Not a replacement for calendars or email.
 - Not a replacement for school, insurance, utility, or government portals.
 - Not a passive document folder.
+- Not a mandatory cloud warehouse for every family document.
 - Not just a chatbot.
 - Not just an AI bill tracker.
 
@@ -45,3 +47,9 @@ Users should be able to ask Luna:
 - What are we missing before tax time?
 
 The answer should come from connected household context, not from the user remembering which app or folder contains the information.
+
+## Storage Positioning
+
+Luna should let households choose where their cabinet lives: local drive, external drive, NAS, iCloud Drive, Google Drive, OneDrive, Dropbox, or optional Luna-managed encrypted cloud storage later.
+
+The user owns the storage. Luna provides the intelligence layer that files documents, connects them to the household graph, creates tasks and reminders, and makes the archive searchable and useful.

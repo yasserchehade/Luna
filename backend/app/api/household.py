@@ -6,8 +6,11 @@ from app.models.household import (
     EntityRelationship,
     EntityRelationshipActionResponse,
     EntityRelationshipCreate,
+    EntityRelationshipDeleteResponse,
+    EntityRelationshipsForEntity,
     HouseholdEntityActionResponse,
     HouseholdEntityCreate,
+    HouseholdEntityUpdate,
     HouseholdEntity,
     HouseholdGraphNode,
     HouseholdGraph,
@@ -89,6 +92,20 @@ def _reminder_from_row(row) -> Reminder:
     )
 
 
+RELATIONSHIP_SELECT = """
+    SELECT
+        id,
+        source_entity_type,
+        source_entity_id,
+        relationship_type,
+        target_entity_type,
+        target_entity_id,
+        provenance_document_id,
+        confidence
+    FROM entity_relationships
+"""
+
+
 @router.get("/entities", response_model=list[HouseholdEntity])
 def list_entities() -> list[HouseholdEntity]:
     with get_connection() as connection:
@@ -151,6 +168,159 @@ def create_entity(request: HouseholdEntityCreate) -> HouseholdEntityActionRespon
 
     if row is None:
         raise RuntimeError("Entity create did not return a saved entity.")
+    return HouseholdEntityActionResponse(entity=_entity_from_row(row))
+
+
+@router.get(
+    "/entities/{entity_id}/relationships",
+    response_model=EntityRelationshipsForEntity,
+)
+def entity_relationships(entity_id: str) -> EntityRelationshipsForEntity:
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id
+                FROM household_entities
+                WHERE workspace_id = %s
+                    AND id = %s
+                """,
+                (workspace_id, entity_id),
+            )
+            if cursor.fetchone() is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Household entity not found.",
+                )
+
+            cursor.execute(
+                RELATIONSHIP_SELECT
+                + """
+                WHERE workspace_id = %s
+                    AND (source_entity_id = %s OR target_entity_id = %s)
+                ORDER BY created_at
+                """,
+                (workspace_id, entity_id, entity_id),
+            )
+            rows = cursor.fetchall()
+
+    return EntityRelationshipsForEntity(
+        entity_id=entity_id,
+        relationships=[_relationship_from_row(row) for row in rows],
+    )
+
+
+@router.patch("/entities/{entity_id}", response_model=HouseholdEntityActionResponse)
+def update_entity(
+    entity_id: str,
+    request: HouseholdEntityUpdate,
+) -> HouseholdEntityActionResponse:
+    fields = request.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one entity field must be provided.",
+        )
+
+    entity_type = (
+        _normalize_kind(fields["entity_type"])
+        if fields.get("entity_type") is not None
+        else None
+    )
+    display_name = (
+        fields["display_name"].strip()
+        if fields.get("display_name") is not None
+        else None
+    )
+    metadata = Jsonb(fields["metadata"]) if "metadata" in fields else None
+
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            if entity_type is not None or display_name is not None:
+                cursor.execute(
+                    """
+                    SELECT
+                        COALESCE(%s, entity_type) AS next_entity_type,
+                        COALESCE(%s, display_name) AS next_display_name
+                    FROM household_entities
+                    WHERE workspace_id = %s
+                        AND id = %s
+                    """,
+                    (entity_type, display_name, workspace_id, entity_id),
+                )
+                next_identity = cursor.fetchone()
+                if next_identity is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Household entity not found.",
+                    )
+
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM household_entities
+                    WHERE workspace_id = %s
+                        AND entity_type = %s
+                        AND lower(display_name) = lower(%s)
+                        AND id <> %s
+                    LIMIT 1
+                    """,
+                    (
+                        workspace_id,
+                        next_identity["next_entity_type"],
+                        next_identity["next_display_name"],
+                        entity_id,
+                    ),
+                )
+                if cursor.fetchone() is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A household entity with that type and name already exists.",
+                    )
+
+            cursor.execute(
+                """
+                UPDATE household_entities
+                SET
+                    entity_type = COALESCE(%s, entity_type),
+                    display_name = COALESCE(%s, display_name),
+                    metadata = COALESCE(%s, metadata),
+                    updated_at = now()
+                WHERE workspace_id = %s
+                    AND id = %s
+                RETURNING id, entity_type, display_name, metadata
+                """,
+                (entity_type, display_name, metadata, workspace_id, entity_id),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Household entity not found.",
+                )
+
+            if entity_type is not None:
+                cursor.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET source_entity_type = %s
+                    WHERE workspace_id = %s
+                        AND source_entity_id = %s
+                    """,
+                    (entity_type, workspace_id, entity_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET target_entity_type = %s
+                    WHERE workspace_id = %s
+                        AND target_entity_id = %s
+                    """,
+                    (entity_type, workspace_id, entity_id),
+                )
+
     return HouseholdEntityActionResponse(entity=_entity_from_row(row))
 
 
@@ -288,6 +458,33 @@ def create_relationship(
     if row is None:
         raise RuntimeError("Relationship create did not return a saved relationship.")
     return EntityRelationshipActionResponse(relationship=_relationship_from_row(row))
+
+
+@router.delete(
+    "/relationships/{relationship_id}",
+    response_model=EntityRelationshipDeleteResponse,
+)
+def delete_relationship(relationship_id: str) -> EntityRelationshipDeleteResponse:
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM entity_relationships
+                WHERE workspace_id = %s
+                    AND id = %s
+                RETURNING id
+                """,
+                (workspace_id, relationship_id),
+            )
+            row = cursor.fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Relationship not found.",
+        )
+    return EntityRelationshipDeleteResponse(deleted_relationship_id=str(row["id"]))
 
 
 @router.get("/summary", response_model=HouseholdSummary)

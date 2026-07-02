@@ -8,6 +8,47 @@ The graph must be flexible enough for each household to model its own reality. O
 
 Most family structure should be long-lived and change infrequently after setup. Operational records such as bills, tasks, reminders, due dates, maintenance items, and review work attach to the stable graph while they are relevant. When they are no longer active, Luna should archive them rather than delete them, preserving history without cluttering the current dashboard.
 
+## Graph-Driven Cabinet
+
+The household cabinet should be generated from the user's graph. Luna should not force every family into one fixed folder taxonomy.
+
+Example user structure:
+
+```text
+Family Member 1
+  -> Family Trust
+      -> Property 1
+      -> Business 1
+      -> Suppliers
+      -> Documents
+      -> Tasks
+```
+
+Possible cabinet projection:
+
+```text
+Luna Household Cabinet/
+  Family Trust/
+    Properties/
+      Property 1/
+        Bills/
+        Insurance/
+        Maintenance/
+        Suppliers/
+        Documents/
+    Business/
+      Business 1/
+        Invoices/
+        Tax/
+        MYOB/
+        Suppliers/
+    Suppliers/
+    Documents/
+    Tasks/
+```
+
+The graph is the source of truth. The folder structure is only a human-readable projection. A document can be related to a trust, property, supplier, tax year, bill, reminder, and task at the same time, while still having one canonical file path in the cabinet.
+
 ## Why a Knowledge Graph
 
 Household administration is relational. A single document may involve a supplier, property, due date, payment, warranty, account, family member, and tax category. A simple list of bills cannot represent that context cleanly.
@@ -88,6 +129,7 @@ Phase 1 should keep implementation simple while establishing graph habits:
 - Extract a Bill or Invoice from the Document.
 - Link the obligation to a Supplier.
 - Link it to a Property, Business, UtilityAccount, Subscription, or FamilyMember when available.
+- Generate a suggested cabinet path from graph relationships and extracted metadata.
 - Create a Reminder from the due date.
 - Create a Task when human review is needed.
 - Preserve extraction confidence and source evidence.

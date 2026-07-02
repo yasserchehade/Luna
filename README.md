@@ -25,17 +25,17 @@ Over time Luna should coordinate:
 - Frontend: Next.js, React, TypeScript
 - Database: PostgreSQL
 - Background jobs: Celery, Redis
-- File storage: local filesystem first, S3 or Cloudflare R2 later
+- File storage: local-first user-owned cabinet storage, with optional user cloud folders or Luna encrypted cloud later
 - AI: provider-agnostic service interfaces
 - Containers: Docker Compose
 
 ## Architecture Summary
 
-External systems feed documents, events, transactions, and metadata into Luna. Luna stores the original source material, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents a unified dashboard plus a natural-language assistant.
+External systems feed documents, events, transactions, and metadata into Luna. Luna stores or references the original source material in a user-owned household cabinet, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents a unified dashboard plus a natural-language assistant.
 
 The MVP begins with uploaded invoices and bills:
 
-1. Store the original document.
+1. Store or reference the original document in the household cabinet.
 2. Extract supplier, amount, due date, invoice number, and related metadata.
 3. Attach the document to household entities such as supplier, property, utility account, subscription, or business.
 4. Create reminders and review tasks.
@@ -103,7 +103,7 @@ Luna/
 ## Current MVP Surface
 
 - `GET /health` returns service status.
-- `POST /api/documents` accepts PDF bill or invoice uploads and stores the original file locally.
+- `POST /api/documents` accepts PDF bill or invoice uploads and stores the original file in local cabinet storage.
 - `GET /api/bills` returns persisted bill records from PostgreSQL.
 - `POST /api/bills/ingest` accepts a stored document id, runs the current extractor, records the extraction run, and saves a draft bill.
 - The dashboard can upload a PDF, trigger stub ingestion, and show persisted draft bills.
@@ -119,6 +119,7 @@ The Celery worker is wired into Docker Compose but does not perform real extract
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
 - [Database](docs/database.md)
+- [Storage](docs/storage.md)
 - [AI Agents](docs/ai-agents.md)
 - [Security](docs/security.md)
 - [Product Positioning](docs/product-positioning.md)
