@@ -12,19 +12,23 @@
 
 ## Phase 1: Household Bills MVP
 
-Phase 1 should prove Luna as a Household Operating System while staying focused on one buildable workflow: bills and invoices.
+Status: MVP foundation complete.
+
+Phase 1 proves Luna as a Household Operating System while staying focused on one buildable workflow: bills and invoices.
 
 - Upload PDF bills and invoices.
 - Store original documents in local user-owned cabinet storage.
 - Generate suggested cabinet paths from extracted fields and graph relationships.
 - Extract supplier, amount, due date, invoice number, category, confidence metadata, and human-review reasons.
 - Save draft bill and invoice records in PostgreSQL.
-- Assign documents and obligations to household entities such as supplier, property, business, utility account, subscription, or family member where available.
+- Assign documents and obligations to household entities such as supplier, property, business, utility account, subscription, or family member where available. Supplier assignment is automated in Phase 1; richer manual graph assignment continues in Phase 2.
 - Create reminders before due dates.
 - Create review tasks for missing, conflicting, changed-template, or low-confidence extraction results.
 - Show a focused dashboard for upcoming, unpaid, paid, overdue, and needs-review obligations.
 - Keep cabinet archive access and household structure setup in separate views from the daily dashboard.
 - Keep the extraction implementation behind a provider-agnostic interface.
+
+Phase 1 does not attempt production-grade auth, payments, cloud sync, real email intake, or physical file moves. Those belong in later phases after the core document-to-bill-to-graph workflow is stable.
 
 ## Phase 2: Knowledge Graph Foundations
 

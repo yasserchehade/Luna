@@ -9,6 +9,7 @@ from app.models.document import (
     DocumentCabinetPlan,
     DocumentCabinetConfirmRequest,
     DocumentCabinetConfirmResponse,
+    DocumentSearchResult,
     DocumentText,
 )
 from app.services.cabinet import confirm_document_cabinet_path, save_document_cabinet_plan
@@ -160,6 +161,94 @@ def list_documents() -> list[Document]:
             rows = cursor.fetchall()
 
     return [_document_from_row(row) for row in rows]
+
+
+@router.get("/search", response_model=list[DocumentSearchResult])
+def search_documents(query: str) -> list[DocumentSearchResult]:
+    normalized_query = query.strip()
+    if len(normalized_query) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search query must be at least 2 characters.",
+        )
+
+    like_query = f"%{normalized_query}%"
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    d.id,
+                    d.original_filename,
+                    d.content_type,
+                    d.storage_provider,
+                    d.storage_path,
+                    d.cabinet_status,
+                    d.suggested_cabinet_path,
+                    d.confirmed_cabinet_path,
+                    d.sha256,
+                    d.received_at,
+                    t.page_count,
+                    t.character_count,
+                    ts_headline(
+                        'english',
+                        COALESCE(t.text_content, ''),
+                        plainto_tsquery('english', %s),
+                        'MaxWords=18, MinWords=6, ShortWord=2'
+                    ) AS snippet,
+                    b.supplier,
+                    b.invoice_number,
+                    b.category
+                FROM documents d
+                LEFT JOIN document_texts t ON t.document_id = d.id
+                LEFT JOIN bills b ON b.document_id = d.id
+                WHERE
+                    to_tsvector(
+                        'english',
+                        concat_ws(
+                            ' ',
+                            d.original_filename,
+                            d.suggested_cabinet_path,
+                            d.confirmed_cabinet_path,
+                            COALESCE(t.text_content, ''),
+                            b.supplier,
+                            b.invoice_number,
+                            b.category
+                        )
+                    ) @@ plainto_tsquery('english', %s)
+                    OR d.original_filename ILIKE %s
+                    OR d.suggested_cabinet_path ILIKE %s
+                    OR d.confirmed_cabinet_path ILIKE %s
+                    OR b.supplier ILIKE %s
+                    OR b.invoice_number ILIKE %s
+                    OR b.category ILIKE %s
+                ORDER BY d.received_at DESC
+                LIMIT 20
+                """,
+                (
+                    normalized_query,
+                    normalized_query,
+                    like_query,
+                    like_query,
+                    like_query,
+                    like_query,
+                    like_query,
+                    like_query,
+                ),
+            )
+            rows = cursor.fetchall()
+
+    return [
+        DocumentSearchResult(
+            document=_document_from_row(row),
+            supplier=row["supplier"],
+            invoice_number=row["invoice_number"],
+            category=row["category"],
+            snippet=row["snippet"],
+        )
+        for row in rows
+    ]
 
 
 @router.get("/{document_id}", response_model=Document)

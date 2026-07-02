@@ -48,6 +48,14 @@ type DocumentRecord = {
   confirmed_cabinet_path?: string | null;
 };
 
+type DocumentSearchResult = {
+  document: DocumentRecord;
+  supplier?: string | null;
+  invoice_number?: string | null;
+  category?: string | null;
+  snippet?: string | null;
+};
+
 type ActiveTab = "dashboard" | "cabinet" | "structure";
 
 function getApiBaseUrl() {
@@ -98,6 +106,25 @@ async function getDocuments(): Promise<DocumentRecord[]> {
   }
 }
 
+async function searchDocuments(query: string): Promise<DocumentSearchResult[]> {
+  if (query.trim().length < 2) {
+    return [];
+  }
+
+  try {
+    const params = new URLSearchParams({ query });
+    const response = await fetch(`${getApiBaseUrl()}/api/documents/search?${params}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return [];
+    }
+    return response.json();
+  } catch {
+    return [];
+  }
+}
+
 function normalizeTab(tab?: string | string[]): ActiveTab {
   const value = Array.isArray(tab) ? tab[0] : tab;
   if (value === "cabinet" || value === "structure") {
@@ -113,14 +140,26 @@ function cabinetPath(document: DocumentRecord) {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ tab?: string | string[] }>;
+  searchParams?: Promise<{ tab?: string | string[]; q?: string | string[] }>;
 }) {
-  const activeTab = normalizeTab((await searchParams)?.tab);
+  const resolvedSearchParams = await searchParams;
+  const activeTab = normalizeTab(resolvedSearchParams?.tab);
+  const cabinetQuery = Array.isArray(resolvedSearchParams?.q)
+    ? resolvedSearchParams?.q[0] ?? ""
+    : resolvedSearchParams?.q ?? "";
   const [bills, household, documents] = await Promise.all([
     getBills(),
     getHouseholdSummary(),
     getDocuments(),
   ]);
+  const searchResults =
+    activeTab === "cabinet" && cabinetQuery.trim().length >= 2
+      ? await searchDocuments(cabinetQuery)
+      : [];
+  const cabinetDocuments =
+    searchResults.length > 0
+      ? searchResults.map((result) => result.document)
+      : documents;
 
   const unpaid = bills.filter((bill) => bill.status === "unpaid");
   const overdue = bills.filter((bill) => bill.status === "overdue");
@@ -298,6 +337,24 @@ export default async function DashboardPage({
               <h2>Household cabinet</h2>
               <span>{documents.length} records</span>
             </div>
+            <form className="searchForm" action="/" aria-label="Search cabinet">
+              <input type="hidden" name="tab" value="cabinet" />
+              <input
+                aria-label="Search household cabinet"
+                defaultValue={cabinetQuery}
+                name="q"
+                placeholder="Search cabinet"
+                type="search"
+              />
+              <button type="submit">Search</button>
+            </form>
+            {cabinetQuery.trim().length >= 2 ? (
+              <p className="searchMeta">
+                {`Showing ${cabinetDocuments.length} result${
+                  cabinetDocuments.length === 1 ? "" : "s"
+                } for "${cabinetQuery}"`}
+              </p>
+            ) : null}
             <table>
               <thead>
                 <tr>
@@ -307,7 +364,7 @@ export default async function DashboardPage({
                 </tr>
               </thead>
               <tbody>
-                {documents.map((document) => (
+                {cabinetDocuments.map((document) => (
                   <tr key={document.id}>
                     <td>{document.original_filename}</td>
                     <td>

@@ -7,6 +7,7 @@ The API starts small and should grow around real MVP workflows.
 - `GET /health`: service health check.
 - `POST /api/documents`: upload a PDF bill or invoice and create a stored document record.
 - `GET /api/documents`: list recent documents with text extraction and cabinet planning status.
+- `GET /api/documents/search?query=...`: search recent cabinet documents by filename, cabinet path, bill metadata, and extracted text.
 - `GET /api/documents/{id}`: retrieve document metadata including text extraction status.
 - `GET /api/documents/{id}/text`: retrieve extracted text for a stored document.
 - `POST /api/documents/{id}/cabinet-plan`: generate and save a suggested household cabinet path without moving the file.

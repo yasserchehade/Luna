@@ -252,7 +252,20 @@ CREATE INDEX IF NOT EXISTS idx_bills_workspace_review_status ON bills(workspace_
 CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date);
 CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_documents_cabinet_status ON documents(workspace_id, cabinet_status);
+CREATE INDEX IF NOT EXISTS idx_documents_search
+    ON documents USING GIN (
+        to_tsvector(
+            'english',
+            COALESCE(original_filename, '')
+                || ' '
+                || COALESCE(suggested_cabinet_path, '')
+                || ' '
+                || COALESCE(confirmed_cabinet_path, '')
+        )
+    );
 CREATE INDEX IF NOT EXISTS idx_document_texts_extracted_at ON document_texts(extracted_at);
+CREATE INDEX IF NOT EXISTS idx_document_texts_search
+    ON document_texts USING GIN (to_tsvector('english', text_content));
 CREATE INDEX IF NOT EXISTS idx_household_entities_workspace_type ON household_entities(workspace_id, entity_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_household_entities_unique_name
     ON household_entities(workspace_id, entity_type, lower(display_name));

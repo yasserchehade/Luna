@@ -35,6 +35,14 @@ class DocumentCabinetConfirmResponse(BaseModel):
     document: Document
 
 
+class DocumentSearchResult(BaseModel):
+    document: Document
+    supplier: str | None = None
+    invoice_number: str | None = None
+    category: str | None = None
+    snippet: str | None = None
+
+
 class DocumentText(BaseModel):
     document_id: str
     text_content: str
