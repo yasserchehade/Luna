@@ -40,6 +40,16 @@ type HouseholdSummary = {
   upcoming_reminders: HouseholdReminder[];
 };
 
+type DocumentRecord = {
+  id: string;
+  original_filename: string;
+  cabinet_status: "unplanned" | "suggested" | "confirmed" | "filed" | "needs_review";
+  suggested_cabinet_path?: string | null;
+  confirmed_cabinet_path?: string | null;
+};
+
+type ActiveTab = "dashboard" | "cabinet" | "structure";
+
 function getApiBaseUrl() {
   return (
     process.env.API_INTERNAL_BASE_URL ??
@@ -74,12 +84,63 @@ async function getHouseholdSummary(): Promise<HouseholdSummary> {
   }
 }
 
-export default async function DashboardPage() {
-  const [bills, household] = await Promise.all([getBills(), getHouseholdSummary()]);
+async function getDocuments(): Promise<DocumentRecord[]> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/documents`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return [];
+    }
+    return response.json();
+  } catch {
+    return [];
+  }
+}
+
+function normalizeTab(tab?: string | string[]): ActiveTab {
+  const value = Array.isArray(tab) ? tab[0] : tab;
+  if (value === "cabinet" || value === "structure") {
+    return value;
+  }
+  return "dashboard";
+}
+
+function cabinetPath(document: DocumentRecord) {
+  return document.confirmed_cabinet_path ?? document.suggested_cabinet_path;
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string | string[] }>;
+}) {
+  const activeTab = normalizeTab((await searchParams)?.tab);
+  const [bills, household, documents] = await Promise.all([
+    getBills(),
+    getHouseholdSummary(),
+    getDocuments(),
+  ]);
+
   const unpaid = bills.filter((bill) => bill.status === "unpaid");
   const overdue = bills.filter((bill) => bill.status === "overdue");
   const paid = bills.filter((bill) => bill.status === "paid");
   const needsReview = bills.filter((bill) => bill.review_status === "needs_review");
+  const cabinetSuggestions = documents.filter(
+    (document) => document.cabinet_status === "suggested",
+  );
+  const confirmedDocuments = documents.filter(
+    (document) => document.cabinet_status === "confirmed",
+  );
+  const cabinetNeedsReview = documents.filter(
+    (document) =>
+      document.cabinet_status === "unplanned" || document.cabinet_status === "needs_review",
+  );
+  const assetEntities = household.entities.filter((entity) =>
+    ["asset", "property", "vehicle", "business", "family_trust"].includes(
+      entity.entity_type,
+    ),
+  );
 
   return (
     <main className="shell">
@@ -91,125 +152,219 @@ export default async function DashboardPage() {
         <UploadBillForm />
       </section>
 
-      <section className="metrics" aria-label="Bill status summary">
-        <div>
-          <span>Unpaid</span>
-          <strong>{unpaid.length}</strong>
-        </div>
-        <div>
-          <span>Overdue</span>
-          <strong>{overdue.length}</strong>
-        </div>
-        <div>
-          <span>Needs review</span>
-          <strong>{needsReview.length}</strong>
-        </div>
-        <div>
-          <span>Paid</span>
-          <strong>{paid.length}</strong>
-        </div>
+      <section className="tabs" aria-label="Luna sections">
+        <a className={activeTab === "dashboard" ? "activeTab" : ""} href="/">
+          Dashboard
+        </a>
+        <a className={activeTab === "cabinet" ? "activeTab" : ""} href="/?tab=cabinet">
+          Cabinet
+        </a>
+        <a
+          className={activeTab === "structure" ? "activeTab" : ""}
+          href="/?tab=structure"
+        >
+          Structure
+        </a>
       </section>
 
-      <section className="householdGrid" aria-label="Household intelligence summary">
-        <div className="panel">
-          <div className="panelHeader">
-            <h2>Household memory</h2>
-            <span>{household.entities.length} entities</span>
-          </div>
-          <div className="entityList">
-            {household.entities.length === 0 ? (
-              <p className="emptyState">Entities will appear as Luna reads household documents.</p>
-            ) : (
-              household.entities.map((entity) => (
-                <div key={entity.id} className="entityRow">
-                  <strong>{entity.display_name}</strong>
-                  <span>{entity.entity_type.replaceAll("_", " ")}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+      {activeTab === "dashboard" ? (
+        <>
+          <section className="metrics" aria-label="Bill status summary">
+            <div>
+              <span>Unpaid</span>
+              <strong>{unpaid.length}</strong>
+            </div>
+            <div>
+              <span>Overdue</span>
+              <strong>{overdue.length}</strong>
+            </div>
+            <div>
+              <span>Needs review</span>
+              <strong>{needsReview.length}</strong>
+            </div>
+            <div>
+              <span>Paid</span>
+              <strong>{paid.length}</strong>
+            </div>
+          </section>
 
-        <div className="panel">
-          <div className="panelHeader">
-            <h2>Needs attention</h2>
-            <span>{household.open_tasks.length} tasks</span>
-          </div>
-          <div className="taskList">
-            {household.open_tasks.length === 0 ? (
-              <p className="emptyState">Review tasks will appear when Luna needs confirmation.</p>
-            ) : (
-              household.open_tasks.map((task) => (
-                <div key={task.id} className="taskRow">
-                  <strong>{task.title}</strong>
-                  {task.description ? <span>{task.description}</span> : null}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+          <section className="operationalGrid" aria-label="Household intelligence summary">
+            <div className="panel">
+              <div className="panelHeader">
+                <h2>Needs attention</h2>
+                <span>{household.open_tasks.length} tasks</span>
+              </div>
+              <div className="taskList">
+                {household.open_tasks.length === 0 ? (
+                  <p className="emptyState">Review tasks will appear when Luna needs confirmation.</p>
+                ) : (
+                  household.open_tasks.map((task) => (
+                    <div key={task.id} className="taskRow">
+                      <strong>{task.title}</strong>
+                      {task.description ? <span>{task.description}</span> : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
 
-        <div className="panel">
-          <div className="panelHeader">
-            <h2>Upcoming reminders</h2>
-            <span>{household.upcoming_reminders.length} scheduled</span>
-          </div>
-          <div className="taskList">
-            {household.upcoming_reminders.length === 0 ? (
-              <p className="emptyState">Due-date reminders will appear after extraction.</p>
-            ) : (
-              household.upcoming_reminders.map((reminder) => (
-                <div key={reminder.id} className="taskRow">
-                  <strong>{reminder.title}</strong>
-                  <span>{new Date(reminder.remind_at).toLocaleDateString()}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </section>
+            <div className="panel">
+              <div className="panelHeader">
+                <h2>Upcoming reminders</h2>
+                <span>{household.upcoming_reminders.length} scheduled</span>
+              </div>
+              <div className="taskList">
+                {household.upcoming_reminders.length === 0 ? (
+                  <p className="emptyState">Due-date reminders will appear after extraction.</p>
+                ) : (
+                  household.upcoming_reminders.map((reminder) => (
+                    <div key={reminder.id} className="taskRow">
+                      <strong>{reminder.title}</strong>
+                      <span>{new Date(reminder.remind_at).toLocaleDateString()}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
 
-      <section className="tableWrap">
-        <div className="tableHeader">
-          <h2>Bills and invoices</h2>
-          <span>{bills.length} records</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Supplier</th>
-              <th>Amount</th>
-              <th>Due</th>
-              <th>Category</th>
-              <th>Classification</th>
-              <th>Review</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {bills.map((bill) => (
-              <tr key={bill.id}>
-                <td>{bill.supplier}</td>
-                <td>{bill.amount == null ? "Pending" : `$${bill.amount.toFixed(2)}`}</td>
-                <td>{bill.due_date ?? "Pending"}</td>
-                <td>{bill.category ?? "Unsorted"}</td>
-                <td>{bill.classification ?? "Unclassified"}</td>
-                <td>
-                  <span className={`status review-${bill.review_status}`}>
-                    {bill.review_status.replaceAll("_", " ")}
-                  </span>
-                  {bill.review_reasons.length > 0 ? (
-                    <small>{bill.review_reasons[0]}</small>
-                  ) : null}
-                </td>
-                <td>
-                  <span className={`status ${bill.status}`}>{bill.status}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+          <section className="tableWrap">
+            <div className="tableHeader">
+              <h2>Bills and invoices</h2>
+              <span>{bills.length} records</span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Supplier</th>
+                  <th>Amount</th>
+                  <th>Due</th>
+                  <th>Category</th>
+                  <th>Classification</th>
+                  <th>Review</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bills.map((bill) => (
+                  <tr key={bill.id}>
+                    <td>{bill.supplier}</td>
+                    <td>{bill.amount == null ? "Pending" : `$${bill.amount.toFixed(2)}`}</td>
+                    <td>{bill.due_date ?? "Pending"}</td>
+                    <td>{bill.category ?? "Unsorted"}</td>
+                    <td>{bill.classification ?? "Unclassified"}</td>
+                    <td>
+                      <span className={`status review-${bill.review_status}`}>
+                        {bill.review_status.replaceAll("_", " ")}
+                      </span>
+                      {bill.review_reasons.length > 0 ? (
+                        <small>{bill.review_reasons[0]}</small>
+                      ) : null}
+                    </td>
+                    <td>
+                      <span className={`status ${bill.status}`}>{bill.status}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      ) : null}
+
+      {activeTab === "cabinet" ? (
+        <>
+          <section className="metrics" aria-label="Cabinet summary">
+            <div>
+              <span>Documents</span>
+              <strong>{documents.length}</strong>
+            </div>
+            <div>
+              <span>Suggested</span>
+              <strong>{cabinetSuggestions.length}</strong>
+            </div>
+            <div>
+              <span>Confirmed</span>
+              <strong>{confirmedDocuments.length}</strong>
+            </div>
+            <div>
+              <span>Needs review</span>
+              <strong>{cabinetNeedsReview.length}</strong>
+            </div>
+          </section>
+
+          <section className="tableWrap">
+            <div className="tableHeader">
+              <h2>Household cabinet</h2>
+              <span>{documents.length} records</span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Document</th>
+                  <th>Status</th>
+                  <th>Cabinet path</th>
+                </tr>
+              </thead>
+              <tbody>
+                {documents.map((document) => (
+                  <tr key={document.id}>
+                    <td>{document.original_filename}</td>
+                    <td>
+                      <span className={`status cabinet-${document.cabinet_status}`}>
+                        {document.cabinet_status.replaceAll("_", " ")}
+                      </span>
+                    </td>
+                    <td>{cabinetPath(document) ? <code>{cabinetPath(document)}</code> : "Pending"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      ) : null}
+
+      {activeTab === "structure" ? (
+        <section className="structureGrid" aria-label="Household structure">
+          <div className="panel widePanel">
+            <div className="panelHeader">
+              <h2>Household structure</h2>
+              <span>{household.entities.length} entities</span>
+            </div>
+            <div className="entityList">
+              {household.entities.length === 0 ? (
+                <p className="emptyState">Entities will appear as Luna reads household documents.</p>
+              ) : (
+                household.entities.map((entity) => (
+                  <div key={entity.id} className="entityRow">
+                    <strong>{entity.display_name}</strong>
+                    <span>{entity.entity_type.replaceAll("_", " ")}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panelHeader">
+              <h2>Assets</h2>
+              <span>{assetEntities.length} nodes</span>
+            </div>
+            <div className="entityList">
+              {assetEntities.length === 0 ? (
+                <p className="emptyState">Assets will appear as the household structure grows.</p>
+              ) : (
+                assetEntities.map((entity) => (
+                  <div key={entity.id} className="entityRow">
+                    <strong>{entity.display_name}</strong>
+                    <span>{entity.entity_type.replaceAll("_", " ")}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }

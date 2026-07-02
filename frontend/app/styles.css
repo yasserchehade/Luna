@@ -142,10 +142,35 @@ h2 {
   font-size: 32px;
 }
 
-.householdGrid {
+.tabs {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 6px;
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+
+.tabs a {
+  border-radius: 6px 6px 0 0;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 12px 14px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tabs a:hover,
+.tabs .activeTab {
+  background: var(--panel);
+  color: var(--accent-strong);
+}
+
+.operationalGrid,
+.structureGrid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-bottom: 24px;
 }
 
@@ -155,6 +180,10 @@ h2 {
   border-radius: 8px;
   min-height: 220px;
   padding: 18px;
+}
+
+.widePanel {
+  grid-row: span 2;
 }
 
 .panelHeader {
@@ -200,6 +229,30 @@ h2 {
 
 .entityRow span {
   text-transform: capitalize;
+}
+
+.taskRow code {
+  background: #f3f5f1;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+}
+
+td code {
+  color: var(--muted);
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 420px;
+  overflow-wrap: anywhere;
 }
 
 .tableWrap {
@@ -285,6 +338,23 @@ th {
   color: var(--muted);
 }
 
+.status.cabinet-suggested {
+  background: #fff3d7;
+  color: #7a4d00;
+}
+
+.status.cabinet-confirmed,
+.status.cabinet-filed {
+  background: #e7f1e9;
+  color: var(--ok);
+}
+
+.status.cabinet-unplanned,
+.status.cabinet-needs_review {
+  background: #fbe8dd;
+  color: var(--warning);
+}
+
 @media (max-width: 760px) {
   .header {
     align-items: flex-start;
@@ -309,11 +379,19 @@ th {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .householdGrid {
-    grid-template-columns: 1fr;
+  .operationalGrid,
+  .structureGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   h1 {
     font-size: 30px;
+  }
+}
+
+@media (max-width: 560px) {
+  .operationalGrid,
+  .structureGrid {
+    grid-template-columns: 1fr;
   }
 }

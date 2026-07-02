@@ -26,12 +26,12 @@ Household knowledge graph
         |
         v
 User experience
-  Dashboard, review queues, reminders, assistant, daily briefing
+  Dashboard, cabinet, structure graph, review queues, reminders, assistant, daily briefing
 ```
 
 ## Components
 
-- Frontend: household dashboard, document upload, bill review, task and reminder views, future assistant interface.
+- Frontend: focused Dashboard for current attention, Cabinet for document archive access, Structure for household graph setup, plus future bill review, task, reminder, and assistant interfaces.
 - Backend API: authentication boundary, household entities, documents, bills, tasks, reminders, extraction orchestration, and integration adapters.
 - Worker: Celery process for document parsing, AI extraction, relationship mapping, reminders, synchronization, and future integration jobs.
 - PostgreSQL: structured source of truth for household entities, documents, relationships, tasks, reminders, extraction runs, and audit events.

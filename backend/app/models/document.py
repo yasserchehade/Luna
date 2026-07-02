@@ -27,6 +27,14 @@ class DocumentCabinetPlan(BaseModel):
     reasons: list[str]
 
 
+class DocumentCabinetConfirmRequest(BaseModel):
+    cabinet_path: str | None = None
+
+
+class DocumentCabinetConfirmResponse(BaseModel):
+    document: Document
+
+
 class DocumentText(BaseModel):
     document_id: str
     text_content: str

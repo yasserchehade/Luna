@@ -4,12 +4,37 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from psycopg.types.json import Jsonb
 
 from app.db import get_connection, get_default_workspace_id
-from app.models.document import Document, DocumentCabinetPlan, DocumentText
-from app.services.cabinet import save_document_cabinet_plan
+from app.models.document import (
+    Document,
+    DocumentCabinetPlan,
+    DocumentCabinetConfirmRequest,
+    DocumentCabinetConfirmResponse,
+    DocumentText,
+)
+from app.services.cabinet import confirm_document_cabinet_path, save_document_cabinet_plan
 from app.services.document_text import extract_pdf_text
 from app.storage.documents import store_uploaded_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+def _document_from_row(row, text_extracted: bool | None = None) -> Document:
+    character_count = row["character_count"] if "character_count" in row else None
+    return Document(
+        id=str(row["id"]),
+        original_filename=row["original_filename"],
+        content_type=row["content_type"],
+        sha256=row["sha256"],
+        storage_provider=row["storage_provider"],
+        storage_path=row["storage_path"],
+        cabinet_status=row["cabinet_status"],
+        suggested_cabinet_path=row["suggested_cabinet_path"],
+        confirmed_cabinet_path=row["confirmed_cabinet_path"],
+        received_at=row["received_at"],
+        text_extracted=text_extracted if text_extracted is not None else character_count is not None,
+        page_count=row["page_count"] if "page_count" in row else None,
+        character_count=character_count,
+    )
 
 
 @router.post("", response_model=Document, status_code=status.HTTP_201_CREATED)
@@ -97,25 +122,53 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
                 ),
             )
 
-    return Document(
-        id=str(row["id"]),
-        original_filename=row["original_filename"],
-        content_type=row["content_type"],
-        sha256=row["sha256"],
-        storage_provider=row["storage_provider"],
-        storage_path=row["storage_path"],
-        cabinet_status=row["cabinet_status"],
-        suggested_cabinet_path=row["suggested_cabinet_path"],
-        confirmed_cabinet_path=row["confirmed_cabinet_path"],
-        received_at=row["received_at"],
+    return _document_from_row(
+        {
+            **row,
+            "page_count": extracted_text.page_count,
+            "character_count": extracted_text.character_count,
+        },
         text_extracted=True,
-        page_count=extracted_text.page_count,
-        character_count=extracted_text.character_count,
     )
+
+
+@router.get("", response_model=list[Document])
+def list_documents() -> list[Document]:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    d.id,
+                    d.original_filename,
+                    d.content_type,
+                    d.storage_provider,
+                    d.storage_path,
+                    d.cabinet_status,
+                    d.suggested_cabinet_path,
+                    d.confirmed_cabinet_path,
+                    d.sha256,
+                    d.received_at,
+                    t.page_count,
+                    t.character_count
+                FROM documents d
+                LEFT JOIN document_texts t ON t.document_id = d.id
+                ORDER BY d.received_at DESC
+                LIMIT 20
+                """
+            )
+            rows = cursor.fetchall()
+
+    return [_document_from_row(row) for row in rows]
 
 
 @router.get("/{document_id}", response_model=Document)
 def get_document(document_id: str) -> Document:
+    document = _get_document_or_404(document_id)
+    return document
+
+
+def _get_document_or_404(document_id: str) -> Document:
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -147,21 +200,7 @@ def get_document(document_id: str) -> Document:
             detail="Document not found.",
         )
 
-    return Document(
-        id=str(row["id"]),
-        original_filename=row["original_filename"],
-        content_type=row["content_type"],
-        sha256=row["sha256"],
-        storage_provider=row["storage_provider"],
-        storage_path=row["storage_path"],
-        cabinet_status=row["cabinet_status"],
-        suggested_cabinet_path=row["suggested_cabinet_path"],
-        confirmed_cabinet_path=row["confirmed_cabinet_path"],
-        received_at=row["received_at"],
-        text_extracted=row["character_count"] is not None,
-        page_count=row["page_count"],
-        character_count=row["character_count"],
-    )
+    return _document_from_row(row)
 
 
 @router.get("/{document_id}/text", response_model=DocumentText)
@@ -217,3 +256,27 @@ def plan_document_cabinet(document_id: str) -> DocumentCabinetPlan:
         suggested_cabinet_path=str(plan["suggested_cabinet_path"]),
         reasons=[str(reason) for reason in plan["reasons"]],
     )
+
+
+@router.post(
+    "/{document_id}/cabinet-confirm",
+    response_model=DocumentCabinetConfirmResponse,
+)
+def confirm_document_cabinet(
+    document_id: str,
+    request: DocumentCabinetConfirmRequest,
+) -> DocumentCabinetConfirmResponse:
+    try:
+        confirm_document_cabinet_path(document_id, request.cabinet_path)
+    except ValueError as error:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if str(error) == "Document not found."
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=str(error),
+        ) from error
+
+    return DocumentCabinetConfirmResponse(document=_get_document_or_404(document_id))

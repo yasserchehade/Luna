@@ -22,7 +22,8 @@ Phase 1 should prove Luna as a Household Operating System while staying focused 
 - Assign documents and obligations to household entities such as supplier, property, business, utility account, subscription, or family member where available.
 - Create reminders before due dates.
 - Create review tasks for missing, conflicting, changed-template, or low-confidence extraction results.
-- Show a dashboard for upcoming, unpaid, paid, overdue, and needs-review obligations.
+- Show a focused dashboard for upcoming, unpaid, paid, overdue, and needs-review obligations.
+- Keep cabinet archive access and household structure setup in separate views from the daily dashboard.
 - Keep the extraction implementation behind a provider-agnostic interface.
 
 ## Phase 2: Knowledge Graph Foundations

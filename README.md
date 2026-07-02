@@ -31,7 +31,7 @@ Over time Luna should coordinate:
 
 ## Architecture Summary
 
-External systems feed documents, events, transactions, and metadata into Luna. Luna stores or references the original source material in a user-owned household cabinet, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents a unified dashboard plus a natural-language assistant.
+External systems feed documents, events, transactions, and metadata into Luna. Luna stores or references the original source material in a user-owned household cabinet, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents focused views for the dashboard, cabinet, household structure, and future natural-language assistant.
 
 The MVP begins with uploaded invoices and bills:
 
@@ -39,7 +39,7 @@ The MVP begins with uploaded invoices and bills:
 2. Extract supplier, amount, due date, invoice number, and related metadata.
 3. Attach the document to household entities such as supplier, property, utility account, subscription, or business.
 4. Create reminders and review tasks.
-5. Show upcoming, unpaid, overdue, and completed obligations in a dashboard.
+5. Show urgent obligations in a dashboard while keeping the household cabinet and structure available in separate views.
 
 ## Local Development
 
@@ -94,7 +94,7 @@ For backend-only development without Docker:
 Luna/
   docs/              Product, architecture, database, AI, graph, and security notes
   backend/           FastAPI API, extraction service, storage service, DB schema
-  frontend/          Next.js dashboard shell
+  frontend/          Next.js household operating system shell
   infrastructure/    PostgreSQL schema and deployment-facing assets
   docker/            Dockerfiles
   .github/           CI workflows
@@ -105,8 +105,9 @@ Luna/
 - `GET /health` returns service status.
 - `POST /api/documents` accepts PDF bill or invoice uploads and stores the original file in local cabinet storage.
 - `GET /api/bills` returns persisted bill records from PostgreSQL.
+- `GET /api/documents` returns recent document records with cabinet planning status.
 - `POST /api/bills/ingest` accepts a stored document id, runs the current extractor, records the extraction run, and saves a draft bill.
-- The dashboard can upload a PDF, trigger stub ingestion, and show persisted draft bills.
+- The frontend has separate Dashboard, Cabinet, and Structure tabs so active obligations, archived documents, and mostly-static household graph setup do not compete for attention.
 
 The extraction implementation is intentionally a stub behind an interface so OpenAI, Claude, Gemini, or another provider can be added later without changing the API layer.
 

@@ -64,6 +64,45 @@ def save_document_cabinet_plan(document_id: str) -> dict[str, object]:
     return plan
 
 
+def confirm_document_cabinet_path(
+    document_id: str,
+    cabinet_path: str | None = None,
+) -> None:
+    confirmed_path = _safe_cabinet_path(cabinet_path) if cabinet_path else None
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            if confirmed_path is None:
+                cursor.execute(
+                    """
+                    SELECT suggested_cabinet_path
+                    FROM documents
+                    WHERE id = %s
+                    """,
+                    (document_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise ValueError("Document not found.")
+                confirmed_path = row["suggested_cabinet_path"]
+
+            if not confirmed_path:
+                raise ValueError("Document does not have a cabinet path to confirm.")
+
+            cursor.execute(
+                """
+                UPDATE documents
+                SET
+                    cabinet_status = 'confirmed',
+                    confirmed_cabinet_path = %s
+                WHERE id = %s
+                """,
+                (confirmed_path, document_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("Document not found.")
+
+
 def _load_document_context(document_id: str) -> dict[str, object] | None:
     with get_connection() as connection:
         with connection.cursor() as cursor:
@@ -215,3 +254,14 @@ def _safe_segment(value: str) -> str:
     cleaned = cleaned.replace(" ", "-")
     cleaned = re.sub(r"-+", "-", cleaned)
     return (cleaned or "Unsorted")[:MAX_SEGMENT_LENGTH]
+
+
+def _safe_cabinet_path(value: str) -> str:
+    segments = [
+        _safe_segment(segment)
+        for segment in re.split(r"[/\\]+", value)
+        if segment.strip()
+    ]
+    if not segments:
+        return ""
+    return "/".join(segments)
