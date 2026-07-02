@@ -34,10 +34,21 @@ CREATE TABLE IF NOT EXISTS documents (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS document_texts (
+    document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    text_content TEXT NOT NULL DEFAULT '',
+    extraction_method TEXT NOT NULL,
+    page_count INTEGER,
+    character_count INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    extracted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS bills (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    supplier_entity_id UUID,
     supplier TEXT NOT NULL,
     amount NUMERIC(12, 2),
     currency CHAR(3) NOT NULL DEFAULT 'AUD',
@@ -49,6 +60,129 @@ CREATE TABLE IF NOT EXISTS bills (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS household_entities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    entity_type TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE household_entities
+    DROP CONSTRAINT IF EXISTS household_entities_entity_type_check;
+
+CREATE TABLE IF NOT EXISTS entity_relationships (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    source_entity_type TEXT NOT NULL,
+    source_entity_id UUID NOT NULL,
+    relationship_type TEXT NOT NULL,
+    target_entity_type TEXT NOT NULL,
+    target_entity_id UUID NOT NULL,
+    provenance_document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    confidence NUMERIC(4, 3),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS supplier_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    supplier_entity_id UUID REFERENCES household_entities(id) ON DELETE SET NULL,
+    profile_key TEXT NOT NULL,
+    supplier_name TEXT NOT NULL,
+    aliases JSONB NOT NULL DEFAULT '[]'::jsonb,
+    category TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'needs_review', 'archived')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, profile_key)
+);
+
+CREATE TABLE IF NOT EXISTS supplier_template_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    supplier_profile_id UUID NOT NULL REFERENCES supplier_profiles(id) ON DELETE CASCADE,
+    version_label TEXT NOT NULL DEFAULT 'observed',
+    fingerprint TEXT NOT NULL,
+    expected_anchors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'needs_review', 'archived')),
+    first_seen_document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (supplier_profile_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS document_template_matches (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    supplier_profile_id UUID REFERENCES supplier_profiles(id) ON DELETE SET NULL,
+    template_version_id UUID REFERENCES supplier_template_versions(id) ON DELETE SET NULL,
+    fingerprint TEXT,
+    matched_anchors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    missing_anchors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    confidence NUMERIC(4, 3),
+    status TEXT NOT NULL CHECK (status IN ('known', 'unknown', 'changed', 'needs_review')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'dismissed', 'archived')),
+    related_entity_type TEXT,
+    related_entity_id UUID,
+    due_date DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS reminders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    remind_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'sent', 'dismissed', 'archived')),
+    related_entity_type TEXT,
+    related_entity_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE bills
+    ADD COLUMN IF NOT EXISTS supplier_entity_id UUID;
+
+ALTER TABLE tasks
+    DROP CONSTRAINT IF EXISTS tasks_status_check;
+
+ALTER TABLE tasks
+    ADD CONSTRAINT tasks_status_check
+    CHECK (status IN ('open', 'done', 'dismissed', 'archived'));
+
+ALTER TABLE reminders
+    DROP CONSTRAINT IF EXISTS reminders_status_check;
+
+ALTER TABLE reminders
+    ADD CONSTRAINT reminders_status_check
+    CHECK (status IN ('scheduled', 'sent', 'dismissed', 'archived'));
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_bills_supplier_entity'
+    ) THEN
+        ALTER TABLE bills
+            ADD CONSTRAINT fk_bills_supplier_entity
+            FOREIGN KEY (supplier_entity_id)
+            REFERENCES household_entities(id)
+            ON DELETE SET NULL;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS extraction_runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -74,3 +208,19 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE INDEX IF NOT EXISTS idx_bills_workspace_status ON bills(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date);
 CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_document_texts_extracted_at ON document_texts(extracted_at);
+CREATE INDEX IF NOT EXISTS idx_household_entities_workspace_type ON household_entities(workspace_id, entity_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_household_entities_unique_name
+    ON household_entities(workspace_id, entity_type, lower(display_name));
+CREATE INDEX IF NOT EXISTS idx_entity_relationships_source
+    ON entity_relationships(workspace_id, source_entity_type, source_entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_relationships_target
+    ON entity_relationships(workspace_id, target_entity_type, target_entity_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_profiles_workspace_key
+    ON supplier_profiles(workspace_id, profile_key);
+CREATE INDEX IF NOT EXISTS idx_supplier_template_versions_profile
+    ON supplier_template_versions(supplier_profile_id, status);
+CREATE INDEX IF NOT EXISTS idx_document_template_matches_document
+    ON document_template_matches(document_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_workspace_status ON tasks(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_reminders_workspace_status ON reminders(workspace_id, status, remind_at);

@@ -1,26 +1,41 @@
 # Vision
 
-Project Luna is an AI Administrative Operating System.
+Luna is the operating system for modern households.
 
-Its purpose is to help individuals, families, landlords, and small businesses manage administrative obligations such as bills, invoices, insurance renewals, vehicle registrations, property expenses, tax deadlines, documents, emails, and reminders.
+It connects the apps and services a family already uses, understands the relationships between their information, and proactively helps manage the administrative side of family life through one intelligent interface.
 
-## Target Users
+Luna should not replace banking apps, MYOB, calendars, email, cloud storage, school apps, insurance portals, government systems, or utility portals. It should sit above them as an intelligence and coordination layer. The user should not need to remember whether something lives in Gmail, Google Drive, a school portal, a bank feed, MYOB, or a pile of PDFs. They should only need to remember Luna.
 
-- Individuals who want less manual admin.
-- Families coordinating shared obligations.
-- Landlords tracking property-related expenses and renewals.
-- Small businesses managing invoices, receipts, and compliance deadlines.
+## Core Promise
 
-## MVP Goal
+People should not have to remember where information is stored. They should only have to remember Luna.
 
-The first MVP should make bill and invoice management easier:
+## What Luna Becomes
 
-- Ingest bills and invoices from uploaded PDFs or email.
-- Extract supplier, amount, due date, invoice number, category, and classification.
-- Store structured data in PostgreSQL.
-- Save the original document as the source of truth.
-- Display unpaid, paid, overdue, and upcoming bills in a dashboard.
+Luna becomes a structured household knowledge graph with an AI interface. It knows about household entities, documents, deadlines, obligations, payments, relationships, and context. It can answer questions, surface what needs attention, and prepare the next administrative step for user approval.
+
+It should eventually help manage:
+
+- Bills, invoices, payment status, and subscriptions.
+- Banking and MYOB/accounting context.
+- Properties, vehicles, utilities, insurance, warranties, and assets.
+- School obligations, health appointments, government documents, and tax deadlines.
+- Family calendar events, cloud documents, reminders, and tasks.
+
+## MVP Strategy
+
+The MVP still starts with invoice and bill processing because that workflow exercises the most important foundations:
+
+- Document intake.
+- Structured extraction.
+- Entity assignment.
+- Relationship mapping.
+- Reminder creation.
+- Human review.
+- Dashboard visibility.
+
+The MVP should remain focused and buildable, but its data model and architecture must point toward the broader Household Operating System from day one.
 
 ## Long-Term Direction
 
-Luna should become a proactive administrative layer that connects to existing tools, identifies upcoming obligations, prepares actions for review, and keeps reliable records without forcing users into repetitive data entry.
+Luna should become a proactive assistant, not merely a chatbot. It should notice upcoming obligations, connect related records, prepare action plans, and brief the family on what needs attention. It can suggest, summarize, extract, classify, and coordinate, but sensitive actions such as payments, filings, or irreversible changes require explicit human approval.

@@ -1,31 +1,73 @@
 # Architecture
 
-Luna starts as a modular monorepo with a FastAPI backend, Next.js frontend, PostgreSQL database, Redis-backed job queue, and local file storage.
+Luna is a modular monorepo with a FastAPI backend, Next.js frontend, PostgreSQL database, Redis-backed job queue, Celery workers, provider-agnostic AI services, and local-first file storage.
+
+The architecture should support a connected household knowledge graph from day one, even while the first user-facing workflow is bill and invoice processing.
+
+## System Concept
+
+External systems feed data into Luna. Luna stores source material, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents the user with a unified dashboard and natural-language assistant.
+
+```text
+External systems
+  Email, uploads, cloud storage, calendars, MYOB, banks, school apps, portals
+        |
+        v
+Intake and ingestion
+  Documents, events, transactions, account metadata, messages
+        |
+        v
+Understanding layer
+  Text extraction, AI parsing, entity extraction, relationship mapping
+        |
+        v
+Household knowledge graph
+  Household entities, documents, obligations, tasks, reminders, audit history
+        |
+        v
+User experience
+  Dashboard, review queues, reminders, assistant, daily briefing
+```
 
 ## Components
 
-- Frontend: dashboard for bill status, review queues, and document views.
-- Backend API: authentication, document ingestion, bill records, extraction orchestration, and integrations.
-- Worker: Celery process for email sync, PDF parsing, AI extraction, reminders, and future integrations.
-- PostgreSQL: structured source of truth for documents, bills, users, classifications, and audit records.
+- Frontend: household dashboard, document upload, bill review, task and reminder views, future assistant interface.
+- Backend API: authentication boundary, household entities, documents, bills, tasks, reminders, extraction orchestration, and integration adapters.
+- Worker: Celery process for document parsing, AI extraction, relationship mapping, reminders, synchronization, and future integration jobs.
+- PostgreSQL: structured source of truth for household entities, documents, relationships, tasks, reminders, extraction runs, and audit events.
 - Redis: queue broker and lightweight job coordination.
-- File storage: local disk for MVP, later abstracted to S3 or Cloudflare R2.
-- AI extraction providers: interchangeable adapters behind a shared interface.
+- File storage: local disk for MVP, abstracted for later S3 or Cloudflare R2.
+- AI services: provider-agnostic interfaces for extraction, classification, summarization, relationship mapping, and assistant responses.
+- Integration adapters: later connectors for Gmail/Outlook, Google Calendar, MYOB, bank feeds, cloud storage, school systems, and other household services.
 
-## MVP Data Flow
+## Phase 1 Data Flow
 
-1. User uploads a PDF or Luna receives an email attachment.
-2. Backend stores the original document.
-3. Backend queues extraction work.
-4. Worker extracts text and calls the configured AI extraction provider.
-5. Extracted fields are saved as a draft bill.
-6. User reviews and confirms the bill.
-7. Dashboard shows unpaid, paid, overdue, and upcoming obligations.
+1. A user uploads a bill or invoice PDF.
+2. Backend stores the original document outside the web root.
+3. Backend records document metadata and queues understanding work.
+4. Luna extracts PDF text and stores it as document understanding context.
+5. Worker or API flow calls the configured AI extraction service.
+6. Luna matches the document against known supplier profiles and records template drift when anchors are missing.
+7. Luna creates or links household entities such as supplier, property, utility account, subscription, business, or bill.
+8. Luna stores a draft bill or invoice with confidence metadata.
+9. Luna creates reminders and review tasks for due dates, missing information, or changed supplier templates.
+10. User reviews, corrects, confirms, or marks the obligation as paid.
+11. Dashboard shows upcoming, unpaid, overdue, and completed household obligations.
+
+## Design Constraints
+
+- Route handlers should orchestrate work, not contain provider-specific extraction logic.
+- AI services should return structured outputs with confidence, provenance, and missing-field markers.
+- Integrations should be adapters behind internal interfaces.
+- Source documents should remain immutable where possible.
+- Relationship mapping should be additive and auditable; the system should explain why it linked a document to an entity.
+- The assistant should answer from Luna's structured data and indexed documents, not from ungrounded guesses.
 
 ## Future Integration Points
 
-- MYOB for accounting export and reconciliation.
+- Gmail and Outlook for automatic document intake.
+- Google Calendar and Outlook Calendar for household deadlines.
+- MYOB for accounting context and export.
 - Bank feeds for payment matching.
-- Calendar providers for reminders.
-- Cloud storage for document backup.
-- Email providers for automatic bill ingestion.
+- Cloud storage for source documents and household records.
+- School, insurance, government, and utility portals where APIs or email workflows allow.

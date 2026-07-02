@@ -8,34 +8,56 @@
 - Add Next.js dashboard skeleton.
 - Add Docker Compose for local development.
 - Draft PostgreSQL schema.
+- Establish provider-agnostic AI extraction boundary.
 
-## Phase 1: Bills MVP
+## Phase 1: Household Bills MVP
 
-- Upload PDF bills and invoices. Initial endpoint and dashboard control are in place.
-- Store original documents locally. Initial local storage is in place.
-- Extract core invoice fields. Current implementation uses a stub extractor.
-- Save extracted bill records. Draft bill persistence is in place.
-- Show unpaid, paid, overdue, and upcoming bills.
-- Add review and correction workflow.
+Phase 1 should prove Luna as a Household Operating System while staying focused on one buildable workflow: bills and invoices.
 
-## Phase 2: Email Ingestion
+- Upload PDF bills and invoices.
+- Store original documents locally.
+- Extract supplier, amount, due date, invoice number, category, and confidence metadata.
+- Save draft bill and invoice records in PostgreSQL.
+- Assign documents and obligations to household entities such as supplier, property, business, utility account, subscription, or family member where available.
+- Create reminders before due dates.
+- Create review tasks for missing, conflicting, or low-confidence extraction results.
+- Show a dashboard for upcoming, unpaid, paid, overdue, and needs-review obligations.
+- Keep the extraction implementation behind a provider-agnostic interface.
 
-- Connect email inboxes.
-- Detect bill and invoice attachments.
-- Queue extraction jobs.
-- Track source email metadata.
+## Phase 2: Knowledge Graph Foundations
 
-## Phase 3: Automation and Reminders
+- Add first-class household, family member, supplier, property, vehicle, business, account, and task models.
+- Add relationship records so documents can link to multiple entities with provenance and confidence.
+- Add document search and basic indexing.
+- Add a natural-language question interface grounded in structured data and documents.
+- Add audit events for document views, corrections, relationship edits, and AI suggestions.
 
-- Remind users before due dates.
-- Detect overdue obligations.
-- Suggest categories and classifications.
-- Add human approval flows for sensitive actions.
+## Phase 3: Automated Intake
 
-## Phase 4: Integrations
+- Connect Gmail or Outlook for bill and invoice detection.
+- Track source email metadata and attachments.
+- Add duplicate detection across uploads and email.
+- Add cloud storage import or backup.
+- Queue all ingestion and extraction work through Celery.
 
-- MYOB export.
-- Bank feed payment matching.
-- Cloud document storage.
-- Calendar reminders.
-- Multi-user family or business workspaces.
+## Phase 4: Proactive Household Assistant
+
+- Add daily and weekly briefings.
+- Detect overdue obligations and missing payment status.
+- Suggest tasks based on documents, deadlines, and household context.
+- Add calendar reminders and task completion workflows.
+- Expand the assistant from Q&A into action preparation with human approval.
+
+## Phase 5: Financial and Accounting Context
+
+- Add bank feed or transaction import adapters for payment matching.
+- Add MYOB/accounting context for business and tax workflows.
+- Reconcile bills, invoices, subscriptions, and payments.
+- Prepare exportable records for accountants or household review.
+
+## Phase 6: Broader Household Administration
+
+- Add insurance, utilities, vehicles, warranties, assets, school obligations, health events, government documents, and tax obligations as first-class workflows.
+- Add role-based family access.
+- Add retention, deletion, and export workflows.
+- Add more integrations where they reduce manual household admin without replacing source systems.

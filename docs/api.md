@@ -6,16 +6,32 @@ The API starts small and should grow around real MVP workflows.
 
 - `GET /health`: service health check.
 - `POST /api/documents`: upload a PDF bill or invoice and create a stored document record.
+- `GET /api/documents/{id}`: retrieve document metadata including text extraction status.
+- `GET /api/documents/{id}/text`: retrieve extracted text for a stored document.
 - `GET /api/bills`: dashboard bill list from persisted bill records.
-- `POST /api/bills/ingest`: accepts a stored document id, creates an extraction run, and saves a draft bill.
+- `POST /api/bills/ingest`: accepts a stored document id, creates an extraction run, and saves a draft bill. This endpoint is idempotent for documents that already have a bill.
+- `PATCH /api/bills/{id}`: correct extracted bill fields.
+- `POST /api/bills/{id}/confirm`: confirm draft data and move the bill to unpaid.
+- `POST /api/bills/{id}/mark-paid`: record a manual payment status.
+- `POST /api/bills/{id}/archive`: archive a bill that is no longer relevant to active workflows.
+- `GET /api/household/entities`: list household graph entities.
+- `POST /api/household/entities`: create a household graph entity such as a family member, trust, property, supplier, or maintenance item.
+- `GET /api/household/graph`: return graph nodes and relationships for a future visual relationship builder.
+- `POST /api/household/relationships`: connect two household entities with a typed relationship.
+- `GET /api/household/summary`: returns recent household entities, open tasks, and upcoming reminders.
+- `POST /api/household/tasks`: create a household task tied to any graph node.
+- `POST /api/household/tasks/{id}/complete`: mark a household task as done.
+- `POST /api/household/tasks/{id}/dismiss`: dismiss a household task.
+- `POST /api/household/tasks/{id}/archive`: archive a task while preserving graph history.
+- `POST /api/household/reminders`: create a scheduled reminder tied to any graph node.
+- `POST /api/household/reminders/{id}/dismiss`: dismiss a reminder.
+- `POST /api/household/reminders/{id}/archive`: archive a reminder while preserving graph history.
 
 ## Planned MVP Endpoints
 
-- `GET /api/documents/{id}`: retrieve document metadata.
-- `GET /api/bills`: list bills by status, due date, category, and classification.
-- `PATCH /api/bills/{id}`: correct extracted fields.
-- `POST /api/bills/{id}/confirm`: approve extracted draft data.
-- `POST /api/bills/{id}/mark-paid`: record a manual payment status.
+- `GET /api/entities/{id}/relationships`: inspect graph relationships for a household entity.
+- `PATCH /api/household/entities/{id}`: rename, re-type, or update metadata for a graph entity.
+- `DELETE /api/household/relationships/{id}`: remove an incorrect relationship.
 
 ## API Principles
 

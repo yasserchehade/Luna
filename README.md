@@ -1,8 +1,23 @@
 # Luna
 
-Luna is an AI Administrative Operating System that continuously monitors, organizes, and manages a person's or business's administrative obligations across multiple services, including bills, invoices, renewals, registrations, property expenses, tax deadlines, documents, emails, and reminders.
+Luna is a Household Operating System: an intelligence and coordination layer for modern family life.
 
-The first MVP focuses on ingesting bills and invoices, extracting key fields with an AI provider-agnostic interface, storing the document and structured data, and showing unpaid, paid, overdue, and upcoming bills in a dashboard.
+Families already use banking apps, MYOB, calendars, email, school portals, insurance portals, cloud storage, government systems, and utility providers. Luna is not trying to replace those systems. Luna sits above them, connects what they know, understands the relationships between household information, and helps the family manage the administrative work through one intelligent interface.
+
+The core promise is simple: people should not have to remember where information is stored. They should only have to remember Luna.
+
+## Product Direction
+
+Luna starts with bills and invoices because they are frequent, document-heavy, deadline-driven, and painful enough to prove the system. The architecture is broader from day one: documents become structured entities, entities are connected into a household knowledge graph, and Luna uses that graph to create reminders, tasks, dashboards, and proactive briefings.
+
+Over time Luna should coordinate:
+
+- Bills, invoices, payments, and subscriptions.
+- Properties, utilities, insurance, warranties, and assets.
+- Vehicles, registrations, servicing, and policies.
+- School obligations, family calendar events, and health appointments.
+- Government documents, tax deadlines, and cloud documents.
+- Banking and MYOB/accounting context through integrations.
 
 ## Stack
 
@@ -11,8 +26,20 @@ The first MVP focuses on ingesting bills and invoices, extracting key fields wit
 - Database: PostgreSQL
 - Background jobs: Celery, Redis
 - File storage: local filesystem first, S3 or Cloudflare R2 later
-- AI extraction: provider-agnostic adapter interface
+- AI: provider-agnostic service interfaces
 - Containers: Docker Compose
+
+## Architecture Summary
+
+External systems feed documents, events, transactions, and metadata into Luna. Luna stores the original source material, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents a unified dashboard plus a natural-language assistant.
+
+The MVP begins with uploaded invoices and bills:
+
+1. Store the original document.
+2. Extract supplier, amount, due date, invoice number, and related metadata.
+3. Attach the document to household entities such as supplier, property, utility account, subscription, or business.
+4. Create reminders and review tasks.
+5. Show upcoming, unpaid, overdue, and completed obligations in a dashboard.
 
 ## Local Development
 
@@ -65,7 +92,7 @@ For backend-only development without Docker:
 
 ```text
 Luna/
-  docs/              Product, architecture, database, AI, and security notes
+  docs/              Product, architecture, database, AI, graph, and security notes
   backend/           FastAPI API, extraction service, storage service, DB schema
   frontend/          Next.js dashboard shell
   infrastructure/    PostgreSQL schema and deployment-facing assets
@@ -84,3 +111,15 @@ Luna/
 The extraction implementation is intentionally a stub behind an interface so OpenAI, Claude, Gemini, or another provider can be added later without changing the API layer.
 
 The Celery worker is wired into Docker Compose but does not perform real extraction yet. That keeps background processing ready without overbuilding before document ingestion exists.
+
+## Documentation
+
+- [Vision](docs/vision.md)
+- [Principles](docs/principles.md)
+- [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md)
+- [Database](docs/database.md)
+- [AI Agents](docs/ai-agents.md)
+- [Security](docs/security.md)
+- [Product Positioning](docs/product-positioning.md)
+- [Knowledge Graph](docs/knowledge-graph.md)

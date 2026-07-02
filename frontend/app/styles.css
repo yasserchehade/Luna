@@ -142,6 +142,66 @@ h2 {
   font-size: 32px;
 }
 
+.householdGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 24px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 220px;
+  padding: 18px;
+}
+
+.panelHeader {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.panelHeader span,
+.emptyState,
+.taskRow span,
+.entityRow span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.emptyState {
+  line-height: 1.5;
+  margin: 0;
+}
+
+.entityList,
+.taskList {
+  display: grid;
+  gap: 10px;
+}
+
+.entityRow,
+.taskRow {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 5px;
+  padding-top: 10px;
+}
+
+.entityRow:first-child,
+.taskRow:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.entityRow span {
+  text-transform: capitalize;
+}
+
 .tableWrap {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -227,6 +287,10 @@ th {
 
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .householdGrid {
+    grid-template-columns: 1fr;
   }
 
   h1 {

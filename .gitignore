@@ -22,6 +22,7 @@ npm-debug.log*
 # Local storage and generated files
 storage/
 uploads/
+samples/bills/
 *.log
 
 # OS/editor

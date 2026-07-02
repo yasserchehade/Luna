@@ -1,9 +1,11 @@
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from psycopg.types.json import Jsonb
 
 from app.db import get_connection, get_default_workspace_id
-from app.models.document import Document
+from app.models.document import Document, DocumentText
+from app.services.document_text import extract_pdf_text
 from app.storage.documents import store_uploaded_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -53,11 +55,73 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
                 ),
             )
             row = cursor.fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Document upload could not be saved.",
+                )
+
+            extracted_text = extract_pdf_text(stored.storage_path)
+            cursor.execute(
+                """
+                INSERT INTO document_texts (
+                    document_id,
+                    text_content,
+                    extraction_method,
+                    page_count,
+                    character_count,
+                    metadata
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    stored.document_id,
+                    extracted_text.text_content,
+                    extracted_text.extraction_method,
+                    extracted_text.page_count,
+                    extracted_text.character_count,
+                    Jsonb(extracted_text.metadata),
+                ),
+            )
+
+    return Document(
+        id=str(row["id"]),
+        original_filename=row["original_filename"],
+        content_type=row["content_type"],
+        sha256=row["sha256"],
+        received_at=row["received_at"],
+        text_extracted=True,
+        page_count=extracted_text.page_count,
+        character_count=extracted_text.character_count,
+    )
+
+
+@router.get("/{document_id}", response_model=Document)
+def get_document(document_id: str) -> Document:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    d.id,
+                    d.original_filename,
+                    d.content_type,
+                    d.sha256,
+                    d.received_at,
+                    t.page_count,
+                    t.character_count
+                FROM documents d
+                LEFT JOIN document_texts t ON t.document_id = d.id
+                WHERE d.id = %s
+                """,
+                (document_id,),
+            )
+            row = cursor.fetchone()
 
     if row is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Document upload could not be saved.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
         )
 
     return Document(
@@ -66,4 +130,43 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
         content_type=row["content_type"],
         sha256=row["sha256"],
         received_at=row["received_at"],
+        text_extracted=row["character_count"] is not None,
+        page_count=row["page_count"],
+        character_count=row["character_count"],
+    )
+
+
+@router.get("/{document_id}/text", response_model=DocumentText)
+def get_document_text(document_id: str) -> DocumentText:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    document_id,
+                    text_content,
+                    extraction_method,
+                    page_count,
+                    character_count,
+                    extracted_at
+                FROM document_texts
+                WHERE document_id = %s
+                """,
+                (document_id,),
+            )
+            row = cursor.fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document text not found.",
+        )
+
+    return DocumentText(
+        document_id=str(row["document_id"]),
+        text_content=row["text_content"],
+        extraction_method=row["extraction_method"],
+        page_count=row["page_count"],
+        character_count=row["character_count"],
+        extracted_at=row["extracted_at"],
     )
