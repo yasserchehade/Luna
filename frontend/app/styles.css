@@ -236,6 +236,15 @@ td {
   text-align: left;
 }
 
+td small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 6px;
+  max-width: 260px;
+}
+
 th {
   color: var(--muted);
   font-size: 13px;
@@ -263,6 +272,17 @@ th {
 .status.paid {
   background: #e7f1e9;
   color: var(--ok);
+}
+
+.status.review-needs_review {
+  background: #fff3d7;
+  color: #7a4d00;
+}
+
+.status.review-not_required,
+.status.review-confirmed {
+  background: #e9edf5;
+  color: var(--muted);
 }
 
 @media (max-width: 760px) {

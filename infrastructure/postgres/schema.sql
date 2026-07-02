@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS bills (
     category TEXT,
     classification TEXT CHECK (classification IN ('personal', 'business', 'property')),
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'unpaid', 'paid', 'overdue', 'archived')),
+    extraction_confidence NUMERIC(4, 3),
+    review_status TEXT NOT NULL DEFAULT 'needs_review' CHECK (review_status IN ('not_required', 'needs_review', 'confirmed')),
+    review_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -155,6 +158,22 @@ CREATE TABLE IF NOT EXISTS reminders (
 ALTER TABLE bills
     ADD COLUMN IF NOT EXISTS supplier_entity_id UUID;
 
+ALTER TABLE bills
+    ADD COLUMN IF NOT EXISTS extraction_confidence NUMERIC(4, 3);
+
+ALTER TABLE bills
+    ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'needs_review';
+
+ALTER TABLE bills
+    ADD COLUMN IF NOT EXISTS review_reasons JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE bills
+    DROP CONSTRAINT IF EXISTS bills_review_status_check;
+
+ALTER TABLE bills
+    ADD CONSTRAINT bills_review_status_check
+    CHECK (review_status IN ('not_required', 'needs_review', 'confirmed'));
+
 ALTER TABLE tasks
     DROP CONSTRAINT IF EXISTS tasks_status_check;
 
@@ -206,6 +225,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_bills_workspace_status ON bills(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_bills_workspace_review_status ON bills(workspace_id, review_status);
 CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date);
 CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_document_texts_extracted_at ON document_texts(extracted_at);

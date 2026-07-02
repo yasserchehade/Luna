@@ -10,6 +10,9 @@ type Bill = {
   category?: string;
   classification?: string;
   status: "draft" | "unpaid" | "paid" | "overdue" | "archived";
+  extraction_confidence?: number | null;
+  review_status: "not_required" | "needs_review" | "confirmed";
+  review_reasons: string[];
 };
 
 type HouseholdEntity = {
@@ -76,7 +79,7 @@ export default async function DashboardPage() {
   const unpaid = bills.filter((bill) => bill.status === "unpaid");
   const overdue = bills.filter((bill) => bill.status === "overdue");
   const paid = bills.filter((bill) => bill.status === "paid");
-  const upcoming = unpaid.slice(0, 5);
+  const needsReview = bills.filter((bill) => bill.review_status === "needs_review");
 
   return (
     <main className="shell">
@@ -98,8 +101,8 @@ export default async function DashboardPage() {
           <strong>{overdue.length}</strong>
         </div>
         <div>
-          <span>Upcoming</span>
-          <strong>{upcoming.length}</strong>
+          <span>Needs review</span>
+          <strong>{needsReview.length}</strong>
         </div>
         <div>
           <span>Paid</span>
@@ -179,6 +182,7 @@ export default async function DashboardPage() {
               <th>Due</th>
               <th>Category</th>
               <th>Classification</th>
+              <th>Review</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -190,6 +194,14 @@ export default async function DashboardPage() {
                 <td>{bill.due_date ?? "Pending"}</td>
                 <td>{bill.category ?? "Unsorted"}</td>
                 <td>{bill.classification ?? "Unclassified"}</td>
+                <td>
+                  <span className={`status review-${bill.review_status}`}>
+                    {bill.review_status.replaceAll("_", " ")}
+                  </span>
+                  {bill.review_reasons.length > 0 ? (
+                    <small>{bill.review_reasons[0]}</small>
+                  ) : null}
+                </td>
                 <td>
                   <span className={`status ${bill.status}`}>{bill.status}</span>
                 </td>

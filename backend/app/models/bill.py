@@ -11,6 +11,12 @@ class BillStatus(StrEnum):
     archived = "archived"
 
 
+class BillReviewStatus(StrEnum):
+    not_required = "not_required"
+    needs_review = "needs_review"
+    confirmed = "confirmed"
+
+
 class Bill(BaseModel):
     id: str
     supplier: str
@@ -23,6 +29,9 @@ class Bill(BaseModel):
     status: BillStatus
     document_id: str | None = None
     currency: str = "AUD"
+    extraction_confidence: float | None = None
+    review_status: BillReviewStatus = BillReviewStatus.needs_review
+    review_reasons: list[str] = Field(default_factory=list)
 
 
 class BillIngestRequest(BaseModel):

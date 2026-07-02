@@ -8,10 +8,10 @@ The API starts small and should grow around real MVP workflows.
 - `POST /api/documents`: upload a PDF bill or invoice and create a stored document record.
 - `GET /api/documents/{id}`: retrieve document metadata including text extraction status.
 - `GET /api/documents/{id}/text`: retrieve extracted text for a stored document.
-- `GET /api/bills`: dashboard bill list from persisted bill records.
-- `POST /api/bills/ingest`: accepts a stored document id, creates an extraction run, and saves a draft bill. This endpoint is idempotent for documents that already have a bill.
+- `GET /api/bills`: dashboard bill list from persisted bill records, including extraction confidence and review status.
+- `POST /api/bills/ingest`: accepts a stored document id, creates an extraction run, saves a draft bill, and stores review reasons when Luna is uncertain. This endpoint is idempotent for documents that already have a bill.
 - `PATCH /api/bills/{id}`: correct extracted bill fields.
-- `POST /api/bills/{id}/confirm`: confirm draft data and move the bill to unpaid.
+- `POST /api/bills/{id}/confirm`: confirm draft data, clear review reasons, close open review tasks, and move the bill to unpaid.
 - `POST /api/bills/{id}/mark-paid`: record a manual payment status.
 - `POST /api/bills/{id}/archive`: archive a bill that is no longer relevant to active workflows.
 - `GET /api/household/entities`: list household graph entities.

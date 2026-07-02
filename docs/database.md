@@ -13,7 +13,7 @@ The current implementation includes:
 - `workspace_memberships`: user roles inside a workspace.
 - `documents`: original uploaded or emailed files.
 - `document_texts`: extracted text and page metadata for stored documents.
-- `bills`: extracted bill and invoice records.
+- `bills`: extracted bill and invoice records, including extraction confidence, review status, and review reasons.
 - `household_entities`: typed household graph nodes such as suppliers, properties, vehicles, subscriptions, and assets.
 - `entity_relationships`: graph links between documents, entities, obligations, and source evidence.
 - `supplier_profiles`: known supplier extraction profiles, aliases, categories, and review status.

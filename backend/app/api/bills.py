@@ -10,6 +10,7 @@ from app.models.bill import (
     BillActionResponse,
     BillIngestRequest,
     BillIngestResponse,
+    BillReviewStatus,
     BillStatus,
     BillUpdate,
 )
@@ -32,6 +33,13 @@ def _bill_from_row(row) -> Bill:
         category=row["category"],
         classification=row["classification"],
         status=BillStatus(row["status"]),
+        extraction_confidence=(
+            float(row["extraction_confidence"])
+            if row["extraction_confidence"] is not None
+            else None
+        ),
+        review_status=BillReviewStatus(row["review_status"]),
+        review_reasons=list(row["review_reasons"] or []),
     )
 
 
@@ -65,6 +73,35 @@ def _get_or_create_supplier_entity(cursor, workspace_id: UUID, supplier: str) ->
     return created["id"]
 
 
+def _build_review_reasons(extracted: dict[str, object]) -> list[str]:
+    reasons: list[str] = []
+    supplier = str(extracted.get("supplier") or "")
+    confidence = extracted.get("confidence")
+
+    if not supplier or supplier == "Unknown supplier":
+        reasons.append("Supplier could not be identified.")
+    if extracted.get("amount") is None:
+        reasons.append("Amount could not be confidently extracted.")
+    if extracted.get("due_date") is None:
+        reasons.append("Due date could not be confidently extracted.")
+    if isinstance(confidence, (int, float)) and confidence < 0.75:
+        reasons.append("Extraction confidence is below the review threshold.")
+
+    supplier_profile = extracted.get("supplier_profile")
+    if isinstance(supplier_profile, dict):
+        template_status = supplier_profile.get("template_status")
+        if template_status in {"changed", "needs_review"}:
+            reasons.append("Known supplier template appears to have changed.")
+        elif template_status == "unknown":
+            reasons.append("Supplier template has not been reviewed before.")
+
+    return reasons
+
+
+def _review_status_from_reasons(reasons: list[str]) -> BillReviewStatus:
+    return BillReviewStatus.needs_review if reasons else BillReviewStatus.not_required
+
+
 @router.get("", response_model=list[Bill])
 def list_bills() -> list[Bill]:
     with get_connection() as connection:
@@ -82,7 +119,10 @@ def list_bills() -> list[Bill]:
                     invoice_number,
                     category,
                     classification,
-                    status
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
                 FROM bills
                 ORDER BY due_date NULLS LAST, created_at DESC
                 """
@@ -124,7 +164,10 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                     invoice_number,
                     category,
                     classification,
-                    status
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
                 FROM bills
                 WHERE document_id = %s
                 ORDER BY created_at
@@ -147,6 +190,8 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
             extractor = get_extractor()
             extracted = extractor.extract_from_document(request.document_id)
             supplier = str(extracted.get("supplier") or "Unknown supplier")
+            review_reasons = _build_review_reasons(extracted)
+            review_status = _review_status_from_reasons(review_reasons)
             supplier_entity_id = _get_or_create_supplier_entity(
                 cursor,
                 document["workspace_id"],
@@ -185,9 +230,12 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                     invoice_number,
                     category,
                     classification,
-                    status
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING
                     id,
                     document_id,
@@ -199,7 +247,10 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                     invoice_number,
                     category,
                     classification,
-                    status
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
                 """,
                 (
                     document["workspace_id"],
@@ -212,6 +263,9 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                     extracted.get("category"),
                     extracted.get("classification"),
                     BillStatus.draft.value,
+                    extracted.get("confidence"),
+                    review_status.value,
+                    Jsonb(review_reasons),
                 ),
             )
             row = cursor.fetchone()
@@ -261,34 +315,8 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                         row["id"],
                     ),
                 )
-            else:
-                cursor.execute(
-                    """
-                    INSERT INTO tasks (
-                        workspace_id,
-                        title,
-                        description,
-                        related_entity_type,
-                        related_entity_id
-                    )
-                    VALUES (%s, %s, %s, 'bill', %s)
-                    """,
-                    (
-                        document["workspace_id"],
-                        f"Review missing due date for {row['supplier']}",
-                        "Luna could not confidently extract a due date from this document.",
-                        row["id"],
-                    ),
-                )
 
-            supplier_profile = extracted.get("supplier_profile")
-            template_status = (
-                supplier_profile.get("template_status")
-                if isinstance(supplier_profile, dict)
-                else None
-            )
-            if template_status in {"changed", "needs_review"}:
-                missing_anchors = supplier_profile.get("missing_anchors", [])
+            if review_reasons:
                 cursor.execute(
                     """
                     INSERT INTO tasks (
@@ -302,9 +330,8 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                     """,
                     (
                         document["workspace_id"],
-                        f"Review changed template for {row['supplier']}",
-                        "Expected supplier anchors were missing: "
-                        + ", ".join(str(anchor) for anchor in missing_anchors),
+                        f"Review extracted details for {row['supplier']}",
+                        " ".join(review_reasons),
                         row["id"],
                     ),
                 )
@@ -371,7 +398,10 @@ def update_bill(bill_id: str, update: BillUpdate) -> BillActionResponse:
                     invoice_number,
                     category,
                     classification,
-                    status
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
                 """,
                 (
                     fields.get("supplier"),
@@ -386,19 +416,6 @@ def update_bill(bill_id: str, update: BillUpdate) -> BillActionResponse:
             )
             row = cursor.fetchone()
 
-            if fields.get("due_date") is not None:
-                cursor.execute(
-                    """
-                    UPDATE tasks
-                    SET status = 'done', updated_at = now()
-                    WHERE related_entity_type = 'bill'
-                        AND related_entity_id = %s
-                        AND status = 'open'
-                        AND title ILIKE 'Review missing due date%%'
-                    """,
-                    (bill_id,),
-                )
-
     if row is None:
         raise RuntimeError("Bill update did not return a saved bill.")
     return BillActionResponse(bill=_bill_from_row(row))
@@ -406,7 +423,54 @@ def update_bill(bill_id: str, update: BillUpdate) -> BillActionResponse:
 
 @router.post("/{bill_id}/confirm", response_model=BillActionResponse)
 def confirm_bill(bill_id: str) -> BillActionResponse:
-    return _set_bill_status(bill_id, BillStatus.unpaid)
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE bills
+                SET
+                    status = %s,
+                    review_status = %s,
+                    review_reasons = '[]'::jsonb,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING
+                    id,
+                    document_id,
+                    supplier_entity_id,
+                    supplier,
+                    amount,
+                    currency,
+                    due_date,
+                    invoice_number,
+                    category,
+                    classification,
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
+                """,
+                (BillStatus.unpaid.value, BillReviewStatus.confirmed.value, bill_id),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Bill not found.",
+                )
+
+            cursor.execute(
+                """
+                UPDATE tasks
+                SET status = 'done', updated_at = now()
+                WHERE related_entity_type = 'bill'
+                    AND related_entity_id = %s
+                    AND status = 'open'
+                """,
+                (bill_id,),
+            )
+
+    return BillActionResponse(bill=_bill_from_row(row))
 
 
 @router.post("/{bill_id}/mark-paid", response_model=BillActionResponse)
@@ -438,7 +502,10 @@ def _set_bill_status(bill_id: str, bill_status: BillStatus) -> BillActionRespons
                     invoice_number,
                     category,
                     classification,
-                    status
+                    status,
+                    extraction_confidence,
+                    review_status,
+                    review_reasons
                 """,
                 (bill_status.value, bill_id),
             )
