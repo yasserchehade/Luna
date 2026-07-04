@@ -234,6 +234,40 @@ h2 {
   margin: 0;
 }
 
+.emptyGuide {
+  color: var(--muted);
+  display: grid;
+  gap: 10px;
+  line-height: 1.5;
+}
+
+.emptyGuide p,
+.emptyGuide ol {
+  margin: 0;
+}
+
+.emptyGuide ol {
+  color: var(--text);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+}
+
+.emptyGuide li {
+  background: #f3f5f1;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
+.emptyGuide span {
+  font-size: 13px;
+}
+
 .entityList,
 .taskList {
   display: grid;

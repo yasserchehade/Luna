@@ -35,6 +35,17 @@ type StructureEditorProps = {
 };
 
 const RELATIONSHIP_EXAMPLES = ["owns", "lives_at", "supplies", "insured_by", "related_to"];
+const ENTITY_TYPE_PRESETS = [
+  "family_member",
+  "family_trust",
+  "property",
+  "vehicle",
+  "business",
+  "supplier",
+  "account",
+  "utility_account",
+  "subscription",
+];
 
 function apiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -42,6 +53,10 @@ function apiBaseUrl() {
 
 function normalizedLabel(value: string) {
   return value.replaceAll("_", " ");
+}
+
+function entityOptionLabel(entity: HouseholdGraphNode) {
+  return `${entity.display_name} (${normalizedLabel(entity.node_type)})`;
 }
 
 function metadataToText(metadata?: Record<string, unknown>) {
@@ -161,11 +176,18 @@ export function StructureEditor({ graph }: StructureEditorProps) {
 
   async function createRelationship(formData: FormData) {
     await withState(async () => {
+      const sourceEntityId = String(formData.get("source_entity_id") ?? "");
+      const targetEntityId = String(formData.get("target_entity_id") ?? "");
+
+      if (sourceEntityId === targetEntityId) {
+        throw new Error("Choose two different entities for a relationship.");
+      }
+
       await request("/api/household/relationships", {
         body: JSON.stringify({
           relationship_type: String(formData.get("relationship_type") ?? ""),
-          source_entity_id: String(formData.get("source_entity_id") ?? ""),
-          target_entity_id: String(formData.get("target_entity_id") ?? ""),
+          source_entity_id: sourceEntityId,
+          target_entity_id: targetEntityId,
         }),
         method: "POST",
       });
@@ -191,11 +213,17 @@ export function StructureEditor({ graph }: StructureEditorProps) {
           <label>
             <span>Entity type</span>
             <input
+              list="entity-type-presets"
               name="entity_type"
               placeholder="family_trust, property, vehicle"
               required
               type="text"
             />
+            <datalist id="entity-type-presets">
+              {ENTITY_TYPE_PRESETS.map((entityType) => (
+                <option key={entityType} value={entityType} />
+              ))}
+            </datalist>
           </label>
           <label>
             <span>Display name</span>
@@ -227,7 +255,7 @@ export function StructureEditor({ graph }: StructureEditorProps) {
               <option value="">Select source</option>
               {entityNodes.map((entity) => (
                 <option key={entity.id} value={entity.id}>
-                  {entity.display_name}
+                  {entityOptionLabel(entity)}
                 </option>
               ))}
             </select>
@@ -254,7 +282,7 @@ export function StructureEditor({ graph }: StructureEditorProps) {
               <option value="">Select target</option>
               {entityNodes.map((entity) => (
                 <option key={entity.id} value={entity.id}>
-                  {entity.display_name}
+                  {entityOptionLabel(entity)}
                 </option>
               ))}
             </select>
@@ -283,7 +311,16 @@ export function StructureEditor({ graph }: StructureEditorProps) {
           <span>{entityNodes.length} nodes</span>
         </div>
         {entityNodes.length === 0 ? (
-          <p className="emptyState">Create the first household entity to start the graph.</p>
+          <div className="emptyGuide">
+            <p>Create the first household entity to start the graph.</p>
+            <ol>
+              <li>family_member</li>
+              <li>family_trust</li>
+              <li>property</li>
+              <li>supplier</li>
+            </ol>
+            <span>Recommended first chain: family_member to family_trust to property to supplier.</span>
+          </div>
         ) : (
           <div className="entityGroups">
             {entityTypes.map((entityType) => (
@@ -304,6 +341,7 @@ export function StructureEditor({ graph }: StructureEditorProps) {
                           <input
                             aria-label="Entity type"
                             defaultValue={entity.node_type}
+                            list="entity-type-presets"
                             name="entity_type"
                             required
                             type="text"
