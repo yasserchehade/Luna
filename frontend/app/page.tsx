@@ -1,4 +1,6 @@
 import { UploadBillForm } from "../components/UploadBillForm";
+import { BillActions } from "../components/BillActions";
+import { CabinetActions } from "../components/CabinetActions";
 
 type Bill = {
   id: string;
@@ -333,6 +335,7 @@ export default async function DashboardPage({
                   <th>Classification</th>
                   <th>Review</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -353,6 +356,9 @@ export default async function DashboardPage({
                     </td>
                     <td>
                       <span className={`status ${bill.status}`}>{bill.status}</span>
+                    </td>
+                    <td>
+                      <BillActions billId={bill.id} status={bill.status} />
                     </td>
                   </tr>
                 ))}
@@ -412,6 +418,7 @@ export default async function DashboardPage({
                   <th>Document</th>
                   <th>Status</th>
                   <th>Cabinet path</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -424,6 +431,12 @@ export default async function DashboardPage({
                       </span>
                     </td>
                     <td>{cabinetPath(document) ? <code>{cabinetPath(document)}</code> : "Pending"}</td>
+                    <td>
+                      <CabinetActions
+                        cabinetStatus={document.cabinet_status}
+                        documentId={document.id}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>

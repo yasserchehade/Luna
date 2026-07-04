@@ -39,11 +39,29 @@ MONTHS = {
 }
 
 SUPPLIER_PROFILES = {
+    "agl": {
+        "supplier_name": "AGL Sales Pty Ltd",
+        "aliases": ["AGL", "AGL Sales Pty Ltd", "agl.com.au"],
+        "category": "utilities",
+        "expected_anchors": ["Amount due", "Due date", "Account number", "Tax Invoice"],
+    },
+    "tango_energy": {
+        "supplier_name": "Tango Energy",
+        "aliases": ["Tango Energy", "Pacific Blue Retail Pty Ltd", "tangoenergy.com"],
+        "category": "utilities",
+        "expected_anchors": ["Tax invoice number", "Due date", "Total amount due", "NATIONAL METER IDENTIFIER"],
+    },
+    "water_corporation": {
+        "supplier_name": "Water Corporation",
+        "aliases": ["Water Corporation", "watercorporation.com.au"],
+        "category": "utilities",
+        "expected_anchors": ["PLEASE PAY", "DUE BY", "ACCOUNT NUMBER", "WATER USE PERIOD"],
+    },
     "yarra_valley_water": {
         "supplier_name": "Yarra Valley Water",
         "aliases": ["Yarra Valley Water", "YVW", "Yarra Valley Water ABN"],
         "category": "utilities",
-        "expected_anchors": ["Amount due", "Due date", "Total balance", "Property address"],
+        "expected_anchors": ["Amount due", "Due date", "Total balance", "Tax Invoice"],
     },
     "imc_insurance_brokers": {
         "supplier_name": "IMC Insurance Brokers",
@@ -115,6 +133,12 @@ def _empty_extraction(document_id: str, note: str) -> dict[str, object]:
 def _extract_supplier(text: str, filename: str) -> str:
     lowered = text.lower()
     known_suppliers = {
+        "agl sales": "AGL Sales Pty Ltd",
+        "agl energy": "AGL Energy",
+        "pacific blue retail": "Tango Energy",
+        "tango energy": "Tango Energy",
+        "watercorporation": "Water Corporation",
+        "water corporation": "Water Corporation",
         "yarra valley water": "Yarra Valley Water",
         "imc insurance brokers": "IMC Insurance Brokers",
         "allianz australia insurance": "Allianz Australia Insurance Limited",
@@ -171,6 +195,12 @@ def _build_supplier_profile_match(text: str, supplier: str) -> dict[str, object]
 
 def _profile_key_for_supplier(supplier: str) -> str:
     normalized = _normalize_key(supplier)
+    if normalized.startswith("agl"):
+        return "agl"
+    if "tango_energy" in normalized:
+        return "tango_energy"
+    if "water_corporation" in normalized:
+        return "water_corporation"
     if "yarra_valley_water" in normalized:
         return "yarra_valley_water"
     if "imc_insurance_brokers" in normalized:
@@ -204,8 +234,11 @@ def _extract_amount(text: str) -> float | None:
         r"Amount\s+due\s*\n?\s*\$?\s*([\d,]+\.\d{2})",
         r"Total\s+Due:\s*\$?\s*([\d,]+\.\d{2})",
         r"Total\s+balance\s*\$?\s*([\d,]+\.\d{2})",
+        r"Total\s+amount\s+due\s*\$?\s*([\d,]+\.\d{2})",
+        r"PLEASE\s+PAY:\s*\n?\s*\$?\s*([\d,]+\.\d{2})",
         r"Invoice\s+Total\s*\n?.*?\$?\s*([\d,]+\.\d{2})",
         r"Total\s+this\s+bill.*?\$?\s*([\d,]+\.\d{2})",
+        r"Tax\s+Invoice\s*\n?\s*\$?\s*([\d,]+\.\d{2})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
@@ -222,6 +255,9 @@ def _extract_due_date(text: str) -> str | None:
     direct_patterns = [
         r"Due\s+date\s*\n?\s*([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})",
         r"Due\s+date\s*\n?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
+        r"Due\s+by:\s*\n?\s*([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})",
+        r"Due\s+by:\s*\n?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
+        r"Tax\s+Invoice\s*\n?\s*\$?[\d,]+\.\d{2}\s*\n?\s*([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})",
     ]
     for pattern in direct_patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -258,6 +294,8 @@ def _extract_invoice_number(text: str) -> str | None:
         r"Invoice\s+No:\s*([A-Za-z0-9-]+)",
         r"Invoice\s+Number:\s*([A-Za-z0-9-]+)",
         r"Invoice\s+number\s*\n\s*([A-Za-z0-9-]+)",
+        r"Tax\s+invoice\s+number\s*([A-Za-z0-9-]+)",
+        r"BILL\s+ID\s*([A-Za-z0-9-]+)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -277,7 +315,10 @@ def _classify_category(text: str, supplier: str) -> str | None:
     haystack = f"{supplier}\n{text}".lower()
     if any(term in haystack for term in ("insurance", "insured", "policy", "premium")):
         return "insurance"
-    if any(term in haystack for term in ("water", "sewerage", "utility")):
+    if any(
+        term in haystack
+        for term in ("agl", "electricity", "energy", "water", "sewerage", "utility")
+    ):
         return "utilities"
     return None
 

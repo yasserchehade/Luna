@@ -42,6 +42,25 @@ button:disabled {
   opacity: 0.72;
 }
 
+.rowActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 150px;
+}
+
+.rowActions button {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 7px 9px;
+}
+
+.rowActions span {
+  color: var(--warning);
+  font-size: 12px;
+}
+
 .shell {
   margin: 0 auto;
   max-width: 1180px;

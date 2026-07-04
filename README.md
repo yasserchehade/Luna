@@ -110,6 +110,7 @@ Luna/
 - `POST /api/knowledge/ask` answers simple household questions from structured Luna records and source references.
 - `GET /api/audit-events` returns recent audit history for important document, bill, graph, task, reminder, and assistant actions.
 - The frontend has separate Dashboard, Cabinet, Structure, and Assistant tabs so active obligations, archived documents, household graph setup, and grounded questions do not compete for attention.
+- The Dashboard and Cabinet tabs expose basic action controls for confirming bills, marking bills paid, archiving bills, planning cabinet paths, and confirming cabinet paths.
 
 The extraction implementation is intentionally a stub behind an interface so OpenAI, Claude, Gemini, or another provider can be added later without changing the API layer.
 
