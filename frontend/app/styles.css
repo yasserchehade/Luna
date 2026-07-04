@@ -194,6 +194,13 @@ h2 {
   margin-bottom: 24px;
 }
 
+.structureEditor {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(320px, 1.2fr);
+  margin-bottom: 24px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -233,6 +240,23 @@ h2 {
   gap: 10px;
 }
 
+.entityGroups {
+  display: grid;
+  gap: 18px;
+}
+
+.entityGroup {
+  display: grid;
+  gap: 10px;
+}
+
+.entityGroup h3 {
+  color: var(--accent-strong);
+  font-size: 14px;
+  margin: 0;
+  text-transform: capitalize;
+}
+
 .entityRow,
 .taskRow {
   border-top: 1px solid var(--line);
@@ -249,6 +273,106 @@ h2 {
 
 .entityRow span {
   text-transform: capitalize;
+}
+
+.editableEntityRow form,
+.structureForm {
+  display: grid;
+  gap: 12px;
+}
+
+.structureForm label,
+.editableEntityRow label {
+  display: grid;
+  gap: 6px;
+}
+
+.structureForm label span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.structureForm input,
+.structureForm select,
+.structureForm textarea,
+.editableEntityRow input,
+.editableEntityRow textarea {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  min-height: 40px;
+  min-width: 0;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.structureForm textarea,
+.editableEntityRow textarea {
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.4;
+  min-height: 94px;
+  resize: vertical;
+}
+
+.exampleRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.exampleRow button {
+  background: #eef3ef;
+  color: var(--accent-strong);
+  font-size: 12px;
+  min-height: 30px;
+  padding: 6px 8px;
+}
+
+.exampleRow button:hover {
+  background: #dfe9e3;
+}
+
+.relationshipPanel {
+  grid-column: 2;
+}
+
+.relationshipRow {
+  grid-template-columns: 1fr auto;
+}
+
+.relationshipRow strong,
+.relationshipRow span {
+  grid-column: 1;
+}
+
+.relationshipRow .rowActions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-content: flex-end;
+}
+
+.formMessage {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 12px 14px;
+}
+
+.errorMessage {
+  background: #fbe8dd;
+  border-color: #efc2aa;
+  color: var(--warning);
+}
+
+.successMessage {
+  background: #e7f1e9;
+  border-color: #bed9c5;
+  color: var(--ok);
 }
 
 .taskRow code {
@@ -463,7 +587,8 @@ th {
 
   .operationalGrid,
   .structureGrid,
-  .assistantLayout {
+  .assistantLayout,
+  .structureEditor {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -475,7 +600,22 @@ th {
 @media (max-width: 560px) {
   .operationalGrid,
   .structureGrid,
-  .assistantLayout {
+  .assistantLayout,
+  .structureEditor {
     grid-template-columns: 1fr;
+  }
+
+  .relationshipPanel {
+    grid-column: auto;
+  }
+
+  .relationshipRow {
+    grid-template-columns: 1fr;
+  }
+
+  .relationshipRow .rowActions {
+    grid-column: auto;
+    grid-row: auto;
+    justify-content: flex-start;
   }
 }

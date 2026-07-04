@@ -1,6 +1,7 @@
 import { UploadBillForm } from "../components/UploadBillForm";
 import { BillActions } from "../components/BillActions";
 import { CabinetActions } from "../components/CabinetActions";
+import { StructureEditor } from "../components/StructureEditor";
 
 type Bill = {
   id: string;
@@ -21,6 +22,27 @@ type HouseholdEntity = {
   id: string;
   entity_type: string;
   display_name: string;
+};
+
+type HouseholdGraphNode = {
+  id: string;
+  node_type: string;
+  display_name: string;
+  metadata?: Record<string, unknown>;
+};
+
+type EntityRelationship = {
+  id: string;
+  source_entity_type: string;
+  source_entity_id: string;
+  relationship_type: string;
+  target_entity_type: string;
+  target_entity_id: string;
+};
+
+type HouseholdGraph = {
+  nodes: HouseholdGraphNode[];
+  relationships: EntityRelationship[];
 };
 
 type HouseholdTask = {
@@ -107,6 +129,20 @@ async function getHouseholdSummary(): Promise<HouseholdSummary> {
   }
 }
 
+async function getHouseholdGraph(): Promise<HouseholdGraph> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/household/graph`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return { nodes: [], relationships: [] };
+    }
+    return response.json();
+  } catch {
+    return { nodes: [], relationships: [] };
+  }
+}
+
 async function getDocuments(): Promise<DocumentRecord[]> {
   try {
     const response = await fetch(`${getApiBaseUrl()}/api/documents`, {
@@ -190,9 +226,10 @@ export default async function DashboardPage({
   const assistantQuestion = Array.isArray(resolvedSearchParams?.ask)
     ? resolvedSearchParams?.ask[0] ?? ""
     : resolvedSearchParams?.ask ?? "";
-  const [bills, household, documents] = await Promise.all([
+  const [bills, household, householdGraph, documents] = await Promise.all([
     getBills(),
     getHouseholdSummary(),
+    getHouseholdGraph(),
     getDocuments(),
   ]);
   const searchResults =
@@ -222,12 +259,6 @@ export default async function DashboardPage({
     (document) =>
       document.cabinet_status === "unplanned" || document.cabinet_status === "needs_review",
   );
-  const assetEntities = household.entities.filter((entity) =>
-    ["asset", "property", "vehicle", "business", "family_trust"].includes(
-      entity.entity_type,
-    ),
-  );
-
   return (
     <main className="shell">
       <section className="header">
@@ -446,45 +477,7 @@ export default async function DashboardPage({
       ) : null}
 
       {activeTab === "structure" ? (
-        <section className="structureGrid" aria-label="Household structure">
-          <div className="panel widePanel">
-            <div className="panelHeader">
-              <h2>Household structure</h2>
-              <span>{household.entities.length} entities</span>
-            </div>
-            <div className="entityList">
-              {household.entities.length === 0 ? (
-                <p className="emptyState">Entities will appear as Luna reads household documents.</p>
-              ) : (
-                household.entities.map((entity) => (
-                  <div key={entity.id} className="entityRow">
-                    <strong>{entity.display_name}</strong>
-                    <span>{entity.entity_type.replaceAll("_", " ")}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panelHeader">
-              <h2>Assets</h2>
-              <span>{assetEntities.length} nodes</span>
-            </div>
-            <div className="entityList">
-              {assetEntities.length === 0 ? (
-                <p className="emptyState">Assets will appear as the household structure grows.</p>
-              ) : (
-                assetEntities.map((entity) => (
-                  <div key={entity.id} className="entityRow">
-                    <strong>{entity.display_name}</strong>
-                    <span>{entity.entity_type.replaceAll("_", " ")}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </section>
+        <StructureEditor graph={householdGraph} />
       ) : null}
 
       {activeTab === "assistant" ? (
