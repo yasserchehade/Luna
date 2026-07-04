@@ -94,7 +94,48 @@ type KnowledgeAnswer = {
   suggested_next_actions: string[];
 };
 
-type ActiveTab = "dashboard" | "cabinet" | "structure" | "assistant";
+type ActiveTab = "dashboard" | "cabinet" | "bills" | "structure" | "assistant" | "audit" | "settings";
+
+const NAV_ITEMS: { href: string; icon: string; label: string; tab: ActiveTab }[] = [
+  { href: "/", icon: "DB", label: "Dashboard", tab: "dashboard" },
+  { href: "/?tab=cabinet", icon: "CB", label: "Cabinet", tab: "cabinet" },
+  { href: "/?tab=bills", icon: "BI", label: "Bills", tab: "bills" },
+  { href: "/?tab=structure", icon: "ST", label: "Structure", tab: "structure" },
+  { href: "/?tab=assistant", icon: "AI", label: "Assistant", tab: "assistant" },
+  { href: "/?tab=audit", icon: "AU", label: "Audit Log", tab: "audit" },
+  { href: "/?tab=settings", icon: "SE", label: "Settings", tab: "settings" },
+];
+
+const PAGE_META: Record<ActiveTab, { title: string; subtitle: string }> = {
+  dashboard: {
+    title: "Household dashboard",
+    subtitle: "The most relevant tasks, bills, and reminders for your household.",
+  },
+  cabinet: {
+    title: "Household cabinet",
+    subtitle: "A searchable document drawer organised by Luna.",
+  },
+  bills: {
+    title: "Bills and invoices",
+    subtitle: "Review supplier, payment, graph-linking, and extraction status.",
+  },
+  structure: {
+    title: "Household structure",
+    subtitle: "The knowledge graph of your household.",
+  },
+  assistant: {
+    title: "Knowledge assistant",
+    subtitle: "Ask Luna questions grounded in your household records.",
+  },
+  audit: {
+    title: "Audit log",
+    subtitle: "A future view of important household changes and assistant actions.",
+  },
+  settings: {
+    title: "Settings",
+    subtitle: "A future home for household preferences and local storage options.",
+  },
+};
 
 function getApiBaseUrl() {
   return (
@@ -200,7 +241,14 @@ async function askKnowledge(question: string): Promise<KnowledgeAnswer | null> {
 
 function normalizeTab(tab?: string | string[]): ActiveTab {
   const value = Array.isArray(tab) ? tab[0] : tab;
-  if (value === "cabinet" || value === "structure" || value === "assistant") {
+  if (
+    value === "cabinet" ||
+    value === "bills" ||
+    value === "structure" ||
+    value === "assistant" ||
+    value === "audit" ||
+    value === "settings"
+  ) {
     return value;
   }
   return "dashboard";
@@ -265,36 +313,54 @@ export default async function DashboardPage({
     (document) =>
       document.cabinet_status === "unplanned" || document.cabinet_status === "needs_review",
   );
+  const pageMeta = PAGE_META[activeTab];
   return (
-    <main className="shell">
-      <section className="header">
-        <div>
-          <p className="eyebrow">Project Luna</p>
-          <h1>Household operating system</h1>
+    <main className="appShell">
+      <aside className="sidebar" aria-label="Luna navigation">
+        <div className="brandBlock">
+          <span className="brandMark">L</span>
+          <div>
+            <strong>Luna</strong>
+            <span>Household OS</span>
+          </div>
         </div>
-        <UploadBillForm />
-      </section>
 
-      <section className="tabs" aria-label="Luna sections">
-        <a className={activeTab === "dashboard" ? "activeTab" : ""} href="/">
-          Dashboard
-        </a>
-        <a className={activeTab === "cabinet" ? "activeTab" : ""} href="/?tab=cabinet">
-          Cabinet
-        </a>
-        <a
-          className={activeTab === "structure" ? "activeTab" : ""}
-          href="/?tab=structure"
-        >
-          Structure
-        </a>
-        <a
-          className={activeTab === "assistant" ? "activeTab" : ""}
-          href="/?tab=assistant"
-        >
-          Assistant
-        </a>
-      </section>
+        <nav className="sidebarNav">
+          {NAV_ITEMS.map((item) => (
+            <a
+              className={activeTab === item.tab ? "activeNavItem" : ""}
+              href={item.href}
+              key={item.tab}
+            >
+              <span>{item.icon}</span>
+              {item.label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="sidebarUser">
+          <span>Y</span>
+          <div>
+            <strong>Demo household</strong>
+            <small>Local workspace</small>
+          </div>
+        </div>
+      </aside>
+
+      <section className="mainContent">
+        <section className="pageHeader">
+          <div>
+            <p className="eyebrow">Project Luna</p>
+            <h1>{pageMeta.title}</h1>
+            <span>{pageMeta.subtitle}</span>
+          </div>
+          <div className="pageHeaderActions">
+            <a className="assistantButton" href="/?tab=assistant">
+              Knowledge Assistant
+            </a>
+            <UploadBillForm />
+          </div>
+        </section>
 
       {activeTab === "dashboard" ? (
         <>
@@ -357,6 +423,11 @@ export default async function DashboardPage({
             </div>
           </section>
 
+        </>
+      ) : null}
+
+      {activeTab === "bills" ? (
+        <>
           <section className="tableWrap">
             <div className="tableHeader">
               <h2>Bills and invoices</h2>
@@ -587,6 +658,27 @@ export default async function DashboardPage({
           </div>
         </section>
       ) : null}
+
+      {activeTab === "audit" ? (
+        <section className="placeholderPanel">
+          <strong>Audit log is coming into focus.</strong>
+          <span>
+            Luna already records key household events in the backend. This view will surface
+            those events as a readable timeline once the Phase 2 graph workflow settles.
+          </span>
+        </section>
+      ) : null}
+
+      {activeTab === "settings" ? (
+        <section className="placeholderPanel">
+          <strong>Settings will stay local-first.</strong>
+          <span>
+            Future controls for household preferences, cabinet paths, and storage choices will
+            live here without changing the Phase 2 graph foundation.
+          </span>
+        </section>
+      ) : null}
+      </section>
     </main>
   );
 }
