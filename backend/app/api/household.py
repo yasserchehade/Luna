@@ -351,13 +351,16 @@ def update_entity(
 @router.get("/graph", response_model=HouseholdGraph)
 def household_graph() -> HouseholdGraph:
     with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
         with connection.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT id, entity_type, display_name, metadata
                 FROM household_entities
+                WHERE workspace_id = %s
                 ORDER BY created_at
-                """
+                """,
+                (workspace_id,),
             )
             entity_rows = cursor.fetchall()
 
@@ -373,8 +376,10 @@ def household_graph() -> HouseholdGraph:
                     provenance_document_id,
                     confidence
                 FROM entity_relationships
+                WHERE workspace_id = %s
                 ORDER BY created_at
-                """
+                """,
+                (workspace_id,),
             )
             relationship_rows = cursor.fetchall()
 
@@ -390,9 +395,10 @@ def household_graph() -> HouseholdGraph:
                     """
                     SELECT id, original_filename
                     FROM documents
-                    WHERE id = ANY(%s::uuid[])
+                    WHERE workspace_id = %s
+                        AND id = ANY(%s::uuid[])
                     """,
-                    (list(document_ids),),
+                    (workspace_id, list(document_ids)),
                 )
                 document_rows = cursor.fetchall()
 
@@ -686,7 +692,15 @@ def _set_task_status(task_id: str, task_status: TaskStatus) -> TaskActionRespons
                 UPDATE tasks
                 SET status = %s, updated_at = now()
                 WHERE id = %s
-                RETURNING id, title, description, status, due_date, related_entity_type, related_entity_id
+                RETURNING
+                    id,
+                    workspace_id,
+                    title,
+                    description,
+                    status,
+                    due_date,
+                    related_entity_type,
+                    related_entity_id
                 """,
                 (task_status.value, task_id),
             )
@@ -789,7 +803,14 @@ def _set_reminder_status(
                 UPDATE reminders
                 SET status = %s, updated_at = now()
                 WHERE id = %s
-                RETURNING id, title, remind_at, status, related_entity_type, related_entity_id
+                RETURNING
+                    id,
+                    workspace_id,
+                    title,
+                    remind_at,
+                    status,
+                    related_entity_type,
+                    related_entity_id
                 """,
                 (reminder_status.value, reminder_id),
             )
