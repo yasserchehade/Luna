@@ -261,6 +261,424 @@ h2 {
   margin-bottom: 24px;
 }
 
+.structureWorkspace {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.structureActionBar {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 16px 18px;
+}
+
+.structureActionBar div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.structureActionBar span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.structureToolbar,
+.formButtonRow,
+.detailsActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.structureToolbar button,
+.formButtonRow button,
+.detailsActions button,
+.detailRelationshipRow button {
+  font-size: 13px;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.structureToolbar button:last-child,
+.formButtonRow button:last-child,
+.detailsActions button:last-child {
+  background: #eef3ef;
+  color: var(--accent-strong);
+}
+
+.structureToolbar button:last-child:hover,
+.formButtonRow button:last-child:hover,
+.detailsActions button:last-child:hover {
+  background: #dfe9e3;
+}
+
+.structureQuickForm,
+.detailsEditForm {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 16px 18px;
+}
+
+.detailsEditForm {
+  grid-template-columns: 1fr;
+}
+
+.structureQuickForm label,
+.detailsEditForm label {
+  display: grid;
+  gap: 6px;
+}
+
+.structureQuickForm label span,
+.detailsEditForm label span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.structureQuickForm input,
+.structureQuickForm select,
+.structureQuickForm textarea,
+.detailsEditForm input,
+.detailsEditForm textarea {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  min-height: 40px;
+  min-width: 0;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.structureQuickForm textarea,
+.detailsEditForm textarea {
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.4;
+  min-height: 82px;
+  resize: vertical;
+}
+
+.metadataField {
+  grid-column: span 2;
+}
+
+.structureQuickForm .formButtonRow {
+  align-self: end;
+}
+
+.structureTreeLayout {
+  align-items: stretch;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 330px;
+}
+
+.treeCanvas {
+  background:
+    radial-gradient(circle at 1px 1px, #dde5df 1px, transparent 0),
+    var(--panel);
+  background-size: 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 620px;
+  overflow: auto;
+  position: relative;
+}
+
+.treeViewport {
+  min-height: 100%;
+  min-width: 100%;
+  position: relative;
+}
+
+.treeEmptyState {
+  align-content: center;
+  display: grid;
+  gap: 8px;
+  min-height: 420px;
+  padding: 36px;
+  text-align: center;
+}
+
+.treeEmptyState strong {
+  font-size: 20px;
+}
+
+.treeEmptyState span {
+  color: var(--muted);
+}
+
+.relationshipLayer {
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+}
+
+.relationshipPath {
+  fill: none;
+  stroke: #9aa9a3;
+  stroke-width: 1.6;
+}
+
+.relationshipLabel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #41504a;
+  font-size: 12px;
+  line-height: 1;
+  margin: 0 auto;
+  max-width: 132px;
+  overflow: hidden;
+  padding: 5px 7px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treeNode {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(29, 37, 33, 0.07);
+  color: var(--text);
+  display: flex;
+  gap: 12px;
+  justify-content: flex-start;
+  padding: 12px;
+  position: absolute;
+  text-align: left;
+}
+
+.treeNode:hover {
+  background: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 10px 22px rgba(35, 108, 91, 0.14);
+}
+
+.selectedTreeNode,
+.selectedTreeNode:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(35, 108, 91, 0.16), 0 10px 22px rgba(35, 108, 91, 0.14);
+}
+
+.nodeIcon {
+  align-items: center;
+  border-radius: 8px;
+  display: inline-flex;
+  flex: 0 0 40px;
+  font-size: 12px;
+  font-weight: 800;
+  height: 40px;
+  justify-content: center;
+  letter-spacing: 0;
+  width: 40px;
+}
+
+.nodeText {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.nodeText strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodeText span,
+.detailsHero span,
+.detailSection p,
+.linkedRecordList span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.type-family_trust {
+  border-color: #9bd3ad;
+}
+
+.type-family_trust .nodeIcon {
+  background: #e7f5ea;
+  color: #1f6f3e;
+}
+
+.type-family_member {
+  border-color: #98c5ff;
+}
+
+.type-family_member .nodeIcon {
+  background: #e8f2ff;
+  color: #1d5fbf;
+}
+
+.type-property {
+  border-color: #f5ca78;
+}
+
+.type-property .nodeIcon {
+  background: #fff4dc;
+  color: #9a5b00;
+}
+
+.type-vehicle {
+  border-color: #b4c6d8;
+}
+
+.type-vehicle .nodeIcon {
+  background: #edf3f8;
+  color: #3c5368;
+}
+
+.type-business,
+.type-supplier {
+  border-color: #c4a5ff;
+}
+
+.type-business .nodeIcon,
+.type-supplier .nodeIcon {
+  background: #f1eaff;
+  color: #6737b8;
+}
+
+.type-account,
+.type-utility_account,
+.type-subscription {
+  border-color: #8bded3;
+}
+
+.type-account .nodeIcon,
+.type-utility_account .nodeIcon,
+.type-subscription .nodeIcon {
+  background: #e1f7f4;
+  color: #1f756c;
+}
+
+.type-document,
+.type-bill {
+  border-color: #d7dde3;
+}
+
+.type-document .nodeIcon,
+.type-bill .nodeIcon {
+  background: #f1f4f6;
+  color: #5c6a74;
+}
+
+.entityDetailsPanel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  min-height: 620px;
+  padding: 18px;
+}
+
+.detailsHero {
+  align-items: center;
+  background: #f8faf8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+}
+
+.detailsHero div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.detailsHero strong {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.detailSection {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.detailSection h3 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.detailSection code {
+  background: #f6f8f6;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #315346;
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.detailRelationshipList,
+.linkedRecordList {
+  display: grid;
+  gap: 8px;
+}
+
+.detailRelationshipRow {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr auto;
+  padding: 10px;
+}
+
+.detailRelationshipRow span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.detailRelationshipRow strong {
+  color: var(--text);
+}
+
+.detailRelationshipRow button {
+  background: #fbe8dd;
+  color: var(--warning);
+}
+
+.detailRelationshipRow button:hover {
+  background: #f7d8c8;
+}
+
+.linkedRecordList span {
+  background: #f6f8f6;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -686,6 +1104,24 @@ th {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .structureActionBar,
+  .structureTreeLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .structureActionBar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .structureQuickForm {
+    grid-template-columns: 1fr;
+  }
+
+  .metadataField {
+    grid-column: auto;
+  }
+
   h1 {
     font-size: 30px;
   }
@@ -714,6 +1150,19 @@ th {
   }
 
   .graphLinkForm {
+    grid-template-columns: 1fr;
+  }
+
+  .structureTreeLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .treeCanvas,
+  .entityDetailsPanel {
+    min-height: 420px;
+  }
+
+  .detailRelationshipRow {
     grid-template-columns: 1fr;
   }
 }
