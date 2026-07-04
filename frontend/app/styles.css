@@ -61,6 +61,66 @@ button:disabled {
   font-size: 12px;
 }
 
+.graphLinkActions {
+  display: grid;
+  gap: 8px;
+  min-width: 250px;
+}
+
+.relationshipMiniList {
+  display: grid;
+  gap: 5px;
+}
+
+.relationshipMiniList span,
+.linkedEntity,
+.unlinkedEntity,
+.miniError,
+.miniSuccess {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.linkedEntity {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.unlinkedEntity,
+.miniError {
+  color: var(--warning);
+}
+
+.miniSuccess {
+  color: var(--ok);
+}
+
+.graphLinkForm {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(120px, 1fr) minmax(95px, 0.8fr) auto;
+}
+
+.graphLinkForm input,
+.graphLinkForm select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  min-height: 32px;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.graphLinkForm button {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 6px 9px;
+}
+
 .shell {
   margin: 0 auto;
   max-width: 1180px;
@@ -651,5 +711,9 @@ th {
     grid-column: auto;
     grid-row: auto;
     justify-content: flex-start;
+  }
+
+  .graphLinkForm {
+    grid-template-columns: 1fr;
   }
 }

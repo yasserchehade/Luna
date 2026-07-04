@@ -66,6 +66,86 @@ def _relationship_from_row(row) -> EntityRelationship:
     )
 
 
+def _resolve_relationship_node(
+    cursor,
+    *,
+    workspace_id,
+    requested_entity_type: str | None,
+    entity_id: str,
+    side: str,
+) -> str:
+    normalized_type = (
+        _normalize_kind(requested_entity_type)
+        if requested_entity_type is not None
+        else None
+    )
+
+    if normalized_type in {None, "entity", "household_entity"}:
+        cursor.execute(
+            """
+            SELECT entity_type
+            FROM household_entities
+            WHERE workspace_id = %s
+                AND id = %s
+            """,
+            (workspace_id, entity_id),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            return row["entity_type"]
+        if normalized_type is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{side.capitalize()} household entity must exist.",
+            )
+
+    if normalized_type == "document":
+        cursor.execute(
+            """
+            SELECT id
+            FROM documents
+            WHERE workspace_id = %s
+                AND id = %s
+            """,
+            (workspace_id, entity_id),
+        )
+        if cursor.fetchone() is not None:
+            return "document"
+
+    if normalized_type == "bill":
+        cursor.execute(
+            """
+            SELECT id
+            FROM bills
+            WHERE workspace_id = %s
+                AND id = %s
+            """,
+            (workspace_id, entity_id),
+        )
+        if cursor.fetchone() is not None:
+            return "bill"
+
+    if normalized_type not in {None, "document", "bill"}:
+        cursor.execute(
+            """
+            SELECT entity_type
+            FROM household_entities
+            WHERE workspace_id = %s
+                AND id = %s
+                AND entity_type = %s
+            """,
+            (workspace_id, entity_id, normalized_type),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            return row["entity_type"]
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"{side.capitalize()} node must exist in the household graph.",
+    )
+
+
 def _task_from_row(row) -> Task:
     return Task(
         id=str(row["id"]),
@@ -402,6 +482,25 @@ def household_graph() -> HouseholdGraph:
                 )
                 document_rows = cursor.fetchall()
 
+            bill_ids = {
+                str(row[key])
+                for row in relationship_rows
+                for key in ("source_entity_id", "target_entity_id")
+                if row[f"{key.split('_')[0]}_entity_type"] == "bill"
+            }
+            bill_rows = []
+            if bill_ids:
+                cursor.execute(
+                    """
+                    SELECT id, supplier, invoice_number
+                    FROM bills
+                    WHERE workspace_id = %s
+                        AND id = ANY(%s::uuid[])
+                    """,
+                    (workspace_id, list(bill_ids)),
+                )
+                bill_rows = cursor.fetchall()
+
     nodes = [_graph_node_from_entity(row) for row in entity_rows]
     nodes.extend(
         HouseholdGraphNode(
@@ -410,6 +509,18 @@ def household_graph() -> HouseholdGraph:
             display_name=row["original_filename"],
         )
         for row in document_rows
+    )
+    nodes.extend(
+        HouseholdGraphNode(
+            id=str(row["id"]),
+            node_type="bill",
+            display_name=(
+                f"{row['supplier']} {row['invoice_number']}"
+                if row["invoice_number"]
+                else row["supplier"]
+            ),
+        )
+        for row in bill_rows
     )
 
     return HouseholdGraph(
@@ -431,22 +542,28 @@ def create_relationship(
     with get_connection() as connection:
         workspace_id = get_default_workspace_id(connection)
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id, entity_type
-                FROM household_entities
-                WHERE workspace_id = %s
-                    AND id IN (%s, %s)
-                """,
-                (workspace_id, request.source_entity_id, request.target_entity_id),
+            source_entity_type = _resolve_relationship_node(
+                cursor,
+                workspace_id=workspace_id,
+                requested_entity_type=request.source_entity_type,
+                entity_id=request.source_entity_id,
+                side="source",
             )
-            rows = cursor.fetchall()
-            entities = {str(row["id"]): row["entity_type"] for row in rows}
+            target_entity_type = _resolve_relationship_node(
+                cursor,
+                workspace_id=workspace_id,
+                requested_entity_type=request.target_entity_type,
+                entity_id=request.target_entity_id,
+                side="target",
+            )
 
-            if request.source_entity_id not in entities or request.target_entity_id not in entities:
+            if (
+                source_entity_type == target_entity_type
+                and request.source_entity_id == request.target_entity_id
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Source and target entities must both exist in the household graph.",
+                    detail="Source and target must be different graph nodes.",
                 )
 
             cursor.execute(
@@ -474,10 +591,10 @@ def create_relationship(
                 """,
                 (
                     workspace_id,
-                    entities[request.source_entity_id],
+                    source_entity_type,
                     request.source_entity_id,
                     relationship_type,
-                    entities[request.target_entity_id],
+                    target_entity_type,
                     request.target_entity_id,
                     request.provenance_document_id,
                     request.confidence,

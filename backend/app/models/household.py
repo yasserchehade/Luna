@@ -48,6 +48,8 @@ class EntityRelationshipCreate(BaseModel):
     source_entity_id: str
     relationship_type: str = Field(min_length=1, max_length=80)
     target_entity_id: str
+    source_entity_type: str | None = Field(default=None, min_length=1, max_length=80)
+    target_entity_type: str | None = Field(default=None, min_length=1, max_length=80)
     provenance_document_id: str | None = None
     confidence: float | None = None
 

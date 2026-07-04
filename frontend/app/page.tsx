@@ -1,6 +1,7 @@
 import { UploadBillForm } from "../components/UploadBillForm";
 import { BillActions } from "../components/BillActions";
 import { CabinetActions } from "../components/CabinetActions";
+import { GraphLinkActions } from "../components/GraphLinkActions";
 import { StructureEditor } from "../components/StructureEditor";
 
 type Bill = {
@@ -209,6 +210,10 @@ function cabinetPath(document: DocumentRecord) {
   return document.confirmed_cabinet_path ?? document.suggested_cabinet_path;
 }
 
+function normalizedLabel(value: string) {
+  return value.replaceAll("_", " ");
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -244,6 +249,7 @@ export default async function DashboardPage({
     searchResults.length > 0
       ? searchResults.map((result) => result.document)
       : documents;
+  const graphNodesById = new Map(householdGraph.nodes.map((node) => [node.id, node]));
 
   const unpaid = bills.filter((bill) => bill.status === "unpaid");
   const overdue = bills.filter((bill) => bill.status === "overdue");
@@ -364,8 +370,10 @@ export default async function DashboardPage({
                   <th>Due</th>
                   <th>Category</th>
                   <th>Classification</th>
+                  <th>Supplier entity</th>
                   <th>Review</th>
                   <th>Status</th>
+                  <th>Graph</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -378,6 +386,16 @@ export default async function DashboardPage({
                     <td>{bill.category ?? "Unsorted"}</td>
                     <td>{bill.classification ?? "Unclassified"}</td>
                     <td>
+                      {bill.supplier_entity_id ? (
+                        <span className="linkedEntity">
+                          {graphNodesById.get(bill.supplier_entity_id)?.display_name ??
+                            "Linked supplier"}
+                        </span>
+                      ) : (
+                        <span className="unlinkedEntity">Unassigned</span>
+                      )}
+                    </td>
+                    <td>
                       <span className={`status review-${bill.review_status}`}>
                         {bill.review_status.replaceAll("_", " ")}
                       </span>
@@ -387,6 +405,18 @@ export default async function DashboardPage({
                     </td>
                     <td>
                       <span className={`status ${bill.status}`}>{bill.status}</span>
+                    </td>
+                    <td>
+                      {!bill.supplier_entity_id ? (
+                        <GraphLinkActions
+                          nodes={householdGraph.nodes}
+                          relationships={householdGraph.relationships}
+                          sourceId={bill.id}
+                          sourceType="bill"
+                        />
+                      ) : (
+                        <small>{normalizedLabel("supplier_entity_linked")}</small>
+                      )}
                     </td>
                     <td>
                       <BillActions billId={bill.id} status={bill.status} />
@@ -449,6 +479,7 @@ export default async function DashboardPage({
                   <th>Document</th>
                   <th>Status</th>
                   <th>Cabinet path</th>
+                  <th>Graph links</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -462,6 +493,14 @@ export default async function DashboardPage({
                       </span>
                     </td>
                     <td>{cabinetPath(document) ? <code>{cabinetPath(document)}</code> : "Pending"}</td>
+                    <td>
+                      <GraphLinkActions
+                        nodes={householdGraph.nodes}
+                        relationships={householdGraph.relationships}
+                        sourceId={document.id}
+                        sourceType="document"
+                      />
+                    </td>
                     <td>
                       <CabinetActions
                         cabinetStatus={document.cabinet_status}

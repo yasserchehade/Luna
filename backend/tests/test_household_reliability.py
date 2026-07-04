@@ -93,17 +93,27 @@ class FakeCursor:
             }
             return
 
-        if "from household_entities" in normalized and "id in" in normalized:
+        if "from household_entities" in normalized and "select entity_type" in normalized:
             assert "where workspace_id = %s" in normalized
             assert params[0] == ACTIVE_WORKSPACE_ID
-            self._next_all = [
-                {"id": SOURCE_ENTITY_ID, "entity_type": "property"},
-                {"id": TARGET_ENTITY_ID, "entity_type": "supplier"},
-            ]
+            if params[1] == SOURCE_ENTITY_ID:
+                self._next_one = {"entity_type": "property"}
+            elif params[1] == TARGET_ENTITY_ID:
+                self._next_one = {"entity_type": "supplier"}
+            else:
+                self._next_one = None
             return
 
         if normalized.startswith("insert into entity_relationships"):
-            self._next_one = relationship_row()
+            self._next_one = relationship_row(
+                source_entity_type=params[1],
+                source_entity_id=params[2],
+                relationship_type=params[3],
+                target_entity_type=params[4],
+                target_entity_id=params[5],
+                provenance_document_id=params[6],
+                confidence=params[7],
+            )
             return
 
         if normalized.startswith("delete from entity_relationships"):
@@ -147,6 +157,12 @@ class FakeCursor:
             ]
             return
 
+        if "from documents" in normalized and "id = any" not in normalized:
+            assert "where workspace_id = %s" in normalized
+            assert params == (ACTIVE_WORKSPACE_ID, DOCUMENT_ID)
+            self._next_one = {"id": DOCUMENT_ID}
+            return
+
         if "from documents" in normalized:
             assert "where workspace_id = %s" in normalized
             assert params[0] == ACTIVE_WORKSPACE_ID
@@ -163,16 +179,25 @@ class FakeCursor:
         return self._next_all
 
 
-def relationship_row() -> dict[str, Any]:
+def relationship_row(
+    *,
+    source_entity_type: str = "property",
+    source_entity_id: str = SOURCE_ENTITY_ID,
+    relationship_type: str = "uses_supplier",
+    target_entity_type: str = "supplier",
+    target_entity_id: str = TARGET_ENTITY_ID,
+    provenance_document_id: str | None = None,
+    confidence: float | None = 0.9,
+) -> dict[str, Any]:
     return {
         "id": RELATIONSHIP_ID,
-        "source_entity_type": "property",
-        "source_entity_id": SOURCE_ENTITY_ID,
-        "relationship_type": "uses_supplier",
-        "target_entity_type": "supplier",
-        "target_entity_id": TARGET_ENTITY_ID,
-        "provenance_document_id": None,
-        "confidence": 0.9,
+        "source_entity_type": source_entity_type,
+        "source_entity_id": source_entity_id,
+        "relationship_type": relationship_type,
+        "target_entity_type": target_entity_type,
+        "target_entity_id": target_entity_id,
+        "provenance_document_id": provenance_document_id,
+        "confidence": confidence,
     }
 
 
@@ -263,3 +288,24 @@ def test_creating_and_deleting_relationship_records_audit_events(monkeypatch: An
         "relationship.deleted",
     ]
     assert all(event["workspace_id"] == ACTIVE_WORKSPACE_ID for event in state.audit_events)
+
+
+def test_creating_document_relationship_records_audit_event(monkeypatch: Any) -> None:
+    state = FakeDbState()
+    install_fake_db(monkeypatch, state)
+
+    created = household.create_relationship(
+        EntityRelationshipCreate(
+            source_entity_type="document",
+            source_entity_id=DOCUMENT_ID,
+            relationship_type="belongs_to",
+            target_entity_id=SOURCE_ENTITY_ID,
+        )
+    )
+
+    assert created.relationship.source_entity_type == "document"
+    assert created.relationship.source_entity_id == DOCUMENT_ID
+    assert created.relationship.relationship_type == "belongs_to"
+    assert created.relationship.target_entity_type == "property"
+    assert state.audit_events[0]["event_type"] == "relationship.created"
+    assert state.audit_events[0]["workspace_id"] == ACTIVE_WORKSPACE_ID
