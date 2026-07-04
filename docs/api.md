@@ -12,6 +12,7 @@ The API starts small and should grow around real MVP workflows.
 - `GET /api/documents/{id}/text`: retrieve extracted text for a stored document.
 - `POST /api/documents/{id}/cabinet-plan`: generate and save a suggested household cabinet path without moving the file.
 - `POST /api/documents/{id}/cabinet-confirm`: confirm the suggested or supplied cabinet path without moving the file.
+- `POST /api/documents/{id}/cabinet-file`: explicitly copy or move a confirmed document into the configured local cabinet root and mark it filed.
 - `GET /api/bills`: dashboard bill list from persisted bill records, including extraction confidence and review status.
 - `POST /api/bills/ingest`: accepts a stored document id, creates an extraction run, saves a draft bill, and stores review reasons when Luna is uncertain. This endpoint is idempotent for documents that already have a bill.
 - `PATCH /api/bills/{id}`: correct extracted bill fields.

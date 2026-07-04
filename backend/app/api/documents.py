@@ -9,10 +9,16 @@ from app.models.document import (
     DocumentCabinetPlan,
     DocumentCabinetConfirmRequest,
     DocumentCabinetConfirmResponse,
+    DocumentCabinetFileRequest,
+    DocumentCabinetFileResponse,
     DocumentSearchResult,
     DocumentText,
 )
-from app.services.cabinet import confirm_document_cabinet_path, save_document_cabinet_plan
+from app.services.cabinet import (
+    confirm_document_cabinet_path,
+    file_document_in_cabinet,
+    save_document_cabinet_plan,
+)
 from app.services.document_text import extract_pdf_text
 from app.services.audit import record_audit_event
 from app.storage.documents import store_uploaded_document
@@ -426,3 +432,49 @@ def confirm_document_cabinet(
             )
 
     return DocumentCabinetConfirmResponse(document=document)
+
+
+@router.post(
+    "/{document_id}/cabinet-file",
+    response_model=DocumentCabinetFileResponse,
+)
+def file_document_cabinet(
+    document_id: str,
+    request: DocumentCabinetFileRequest,
+) -> DocumentCabinetFileResponse:
+    try:
+        result = file_document_in_cabinet(document_id, request.mode)
+    except ValueError as error:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if str(error) == "Document not found."
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=str(error),
+        ) from error
+
+    document = _get_document_or_404(document_id)
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            record_audit_event(
+                cursor,
+                workspace_id=workspace_id,
+                event_type="document.cabinet_filed",
+                entity_type="document",
+                entity_id=document_id,
+                metadata={
+                    "mode": result["mode"],
+                    "source_path": result["source_path"],
+                    "filed_path": result["filed_path"],
+                },
+            )
+
+    return DocumentCabinetFileResponse(
+        document=document,
+        source_path=str(result["source_path"]),
+        filed_path=str(result["filed_path"]),
+        mode=str(result["mode"]),
+    )

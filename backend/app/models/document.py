@@ -35,6 +35,17 @@ class DocumentCabinetConfirmResponse(BaseModel):
     document: Document
 
 
+class DocumentCabinetFileRequest(BaseModel):
+    mode: str = "copy"
+
+
+class DocumentCabinetFileResponse(BaseModel):
+    document: Document
+    source_path: str
+    filed_path: str
+    mode: str
+
+
 class DocumentSearchResult(BaseModel):
     document: Document
     supplier: str | None = None

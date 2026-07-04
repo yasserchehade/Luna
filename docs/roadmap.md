@@ -35,7 +35,7 @@ Phase 1 does not attempt production-grade auth, payments, cloud sync, real email
 - Add first-class household, family member, supplier, property, vehicle, business, account, and task models.
 - Add relationship records so documents can link to multiple entities with provenance and confidence.
 - Add provider-aware storage metadata for local folders and future user-owned cloud folders.
-- Add safe filing workflows that suggest, confirm, then move or copy files into the household cabinet.
+- Add safe filing workflows that suggest, confirm, then move or copy files into the household cabinet. Initial explicit copy/move filing is in place for confirmed local documents.
 - Add document search and basic indexing.
 - Add a natural-language question interface grounded in structured data and documents.
 - Add audit events for document views, corrections, relationship edits, and AI suggestions. Initial append-only audit logging is in place for key document, bill, graph, task, reminder, and assistant actions.

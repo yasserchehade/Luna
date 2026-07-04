@@ -1,7 +1,9 @@
 import re
+import shutil
 from datetime import date
 from pathlib import Path
 
+from app.core.config import settings
 from app.db import get_connection
 
 
@@ -101,6 +103,61 @@ def confirm_document_cabinet_path(
             )
             if cursor.rowcount == 0:
                 raise ValueError("Document not found.")
+
+
+def file_document_in_cabinet(document_id: str, mode: str = "copy") -> dict[str, object]:
+    normalized_mode = mode.strip().lower()
+    if normalized_mode not in {"copy", "move"}:
+        raise ValueError("Filing mode must be copy or move.")
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT storage_path, confirmed_cabinet_path, cabinet_status
+                FROM documents
+                WHERE id = %s
+                """,
+                (document_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError("Document not found.")
+            if row["cabinet_status"] != "confirmed":
+                raise ValueError("Document must have a confirmed cabinet path before filing.")
+            if not row["confirmed_cabinet_path"]:
+                raise ValueError("Document does not have a confirmed cabinet path.")
+
+            source_path = Path(str(row["storage_path"]))
+            if not source_path.exists() or not source_path.is_file():
+                raise ValueError("Document source file was not found.")
+
+            destination = _cabinet_destination_path(str(row["confirmed_cabinet_path"]))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            filed_path = _unique_destination_path(destination)
+
+            if normalized_mode == "move":
+                shutil.move(str(source_path), str(filed_path))
+            else:
+                shutil.copy2(source_path, filed_path)
+
+            cursor.execute(
+                """
+                UPDATE documents
+                SET
+                    cabinet_status = 'filed',
+                    storage_path = %s
+                WHERE id = %s
+                """,
+                (str(filed_path), document_id),
+            )
+
+    return {
+        "document_id": document_id,
+        "source_path": str(source_path),
+        "filed_path": str(filed_path),
+        "mode": normalized_mode,
+    }
 
 
 def _load_document_context(document_id: str) -> dict[str, object] | None:
@@ -253,6 +310,7 @@ def _safe_segment(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     cleaned = cleaned.replace(" ", "-")
     cleaned = re.sub(r"-+", "-", cleaned)
+    cleaned = cleaned.replace("-.", ".").strip("-")
     return (cleaned or "Unsorted")[:MAX_SEGMENT_LENGTH]
 
 
@@ -260,8 +318,33 @@ def _safe_cabinet_path(value: str) -> str:
     segments = [
         _safe_segment(segment)
         for segment in re.split(r"[/\\]+", value)
-        if segment.strip()
+        if segment.strip() and segment.strip(" .") not in {"", "."}
     ]
     if not segments:
         return ""
     return "/".join(segments)
+
+
+def _cabinet_destination_path(cabinet_path: str) -> Path:
+    root = Path(settings.cabinet_storage_path).resolve()
+    relative_path = Path(*_safe_cabinet_path(cabinet_path).split("/"))
+    destination = (root / relative_path).resolve()
+
+    if root != destination and root not in destination.parents:
+        raise ValueError("Cabinet path escapes the configured cabinet root.")
+    return destination
+
+
+def _unique_destination_path(destination: Path) -> Path:
+    if not destination.exists():
+        return destination
+
+    stem = destination.stem
+    suffix = destination.suffix
+    parent = destination.parent
+    for counter in range(2, 1000):
+        candidate = parent / f"{stem}-{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+
+    raise ValueError("Could not find a safe cabinet filename.")

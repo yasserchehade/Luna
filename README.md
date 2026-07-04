@@ -107,6 +107,7 @@ Luna/
 - `GET /api/bills` returns persisted bill records from PostgreSQL.
 - `GET /api/documents` returns recent document records with cabinet planning status.
 - `POST /api/bills/ingest` accepts a stored document id, runs the current extractor, records the extraction run, and saves a draft bill.
+- `POST /api/documents/{id}/cabinet-file` copies or moves a confirmed document into the configured local cabinet root.
 - `POST /api/knowledge/ask` answers simple household questions from structured Luna records and source references.
 - `GET /api/audit-events` returns recent audit history for important document, bill, graph, task, reminder, and assistant actions.
 - The frontend has separate Dashboard, Cabinet, Structure, and Assistant tabs so active obligations, archived documents, household graph setup, and grounded questions do not compete for attention.

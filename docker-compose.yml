@@ -27,6 +27,7 @@ services:
     volumes:
       - ./backend:/app
       - luna_documents:/app/storage/documents
+      - luna_cabinet:/app/storage/cabinet
     depends_on:
       - postgres
       - redis
@@ -41,6 +42,7 @@ services:
     volumes:
       - ./backend:/app
       - luna_documents:/app/storage/documents
+      - luna_cabinet:/app/storage/cabinet
     depends_on:
       - postgres
       - redis
@@ -65,3 +67,4 @@ services:
 volumes:
   postgres_data:
   luna_documents:
+  luna_cabinet:

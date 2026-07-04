@@ -51,6 +51,15 @@ export function CabinetActions({ cabinetStatus, documentId }: CabinetActionsProp
           Confirm
         </button>
       ) : null}
+      {cabinetStatus === "confirmed" ? (
+        <button
+          disabled={state === "working"}
+          onClick={() => post("cabinet-file", { mode: "copy" })}
+          type="button"
+        >
+          File
+        </button>
+      ) : null}
       {state === "error" ? <span role="alert">Failed</span> : null}
     </div>
   );

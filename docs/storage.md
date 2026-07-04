@@ -72,9 +72,9 @@ Phase 1 should stay safe and simple:
 3. Generate a suggested cabinet path from extracted fields and graph relationships.
 4. Mark uncertain documents as `needs_review`.
 5. Do not physically move or rename files until the document is confirmed.
-6. After confirmation, copy or move the file into the cabinet path according to user settings.
+6. After confirmation, copy or move the file into the cabinet path through an explicit user action.
 
-The first implementation generates suggested paths without moving files. This proves the filing logic while avoiding destructive behavior.
+The first implementation generates suggested paths without moving files, then exposes a separate filing action. Filing defaults to `copy`, stores the file under `CABINET_STORAGE_PATH`, updates the document's canonical storage path, marks the document as `filed`, and records an audit event. `move` is available only when explicitly requested by the API caller.
 
 ## Storage Providers
 
