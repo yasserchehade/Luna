@@ -20,7 +20,8 @@ npm-debug.log*
 !.env.example
 
 # Local storage and generated files
-storage/
+/storage/
+/backend/storage/
 uploads/
 samples/bills/
 *.log
