@@ -24,6 +24,7 @@ from app.models.household import (
     TaskCreate,
     TaskStatus,
 )
+from app.services.audit import record_audit_event
 
 router = APIRouter(prefix="/household", tags=["household"])
 
@@ -165,6 +166,18 @@ def create_entity(request: HouseholdEntityCreate) -> HouseholdEntityActionRespon
                     ),
                 )
                 row = cursor.fetchone()
+                if row is not None:
+                    record_audit_event(
+                        cursor,
+                        workspace_id=workspace_id,
+                        event_type="household_entity.created",
+                        entity_type=row["entity_type"],
+                        entity_id=row["id"],
+                        metadata={
+                            "display_name": row["display_name"],
+                            "metadata_keys": list((row["metadata"] or {}).keys()),
+                        },
+                    )
 
     if row is None:
         raise RuntimeError("Entity create did not return a saved entity.")
@@ -300,6 +313,17 @@ def update_entity(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Household entity not found.",
                 )
+            record_audit_event(
+                cursor,
+                workspace_id=workspace_id,
+                event_type="household_entity.updated",
+                entity_type=row["entity_type"],
+                entity_id=row["id"],
+                metadata={
+                    "updated_fields": sorted(fields.keys()),
+                    "display_name": row["display_name"],
+                },
+            )
 
             if entity_type is not None:
                 cursor.execute(
@@ -454,6 +478,31 @@ def create_relationship(
                 ),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=workspace_id,
+                    event_type="relationship.created",
+                    entity_type="relationship",
+                    entity_id=row["id"],
+                    metadata={
+                        "source_entity_type": row["source_entity_type"],
+                        "source_entity_id": str(row["source_entity_id"]),
+                        "relationship_type": row["relationship_type"],
+                        "target_entity_type": row["target_entity_type"],
+                        "target_entity_id": str(row["target_entity_id"]),
+                        "provenance_document_id": (
+                            str(row["provenance_document_id"])
+                            if row["provenance_document_id"]
+                            else None
+                        ),
+                        "confidence": (
+                            float(row["confidence"])
+                            if row["confidence"] is not None
+                            else None
+                        ),
+                    },
+                )
 
     if row is None:
         raise RuntimeError("Relationship create did not return a saved relationship.")
@@ -473,11 +522,32 @@ def delete_relationship(relationship_id: str) -> EntityRelationshipDeleteRespons
                 DELETE FROM entity_relationships
                 WHERE workspace_id = %s
                     AND id = %s
-                RETURNING id
+                RETURNING
+                    id,
+                    source_entity_type,
+                    source_entity_id,
+                    relationship_type,
+                    target_entity_type,
+                    target_entity_id
                 """,
                 (workspace_id, relationship_id),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=workspace_id,
+                    event_type="relationship.deleted",
+                    entity_type="relationship",
+                    entity_id=row["id"],
+                    metadata={
+                        "source_entity_type": row["source_entity_type"],
+                        "source_entity_id": str(row["source_entity_id"]),
+                        "relationship_type": row["relationship_type"],
+                        "target_entity_type": row["target_entity_type"],
+                        "target_entity_id": str(row["target_entity_id"]),
+                    },
+                )
 
     if row is None:
         raise HTTPException(
@@ -552,7 +622,15 @@ def create_task(request: TaskCreate) -> TaskActionResponse:
                     related_entity_id
                 )
                 VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id, title, description, status, due_date, related_entity_type, related_entity_id
+                RETURNING
+                    id,
+                    workspace_id,
+                    title,
+                    description,
+                    status,
+                    due_date,
+                    related_entity_type,
+                    related_entity_id
                 """,
                 (
                     workspace_id,
@@ -564,6 +642,21 @@ def create_task(request: TaskCreate) -> TaskActionResponse:
                 ),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=workspace_id,
+                    event_type="task.created",
+                    entity_type="task",
+                    entity_id=row["id"],
+                    metadata={
+                        "title": row["title"],
+                        "related_entity_type": row["related_entity_type"],
+                        "related_entity_id": (
+                            str(row["related_entity_id"]) if row["related_entity_id"] else None
+                        ),
+                    },
+                )
 
     if row is None:
         raise RuntimeError("Task create did not return a saved task.")
@@ -598,6 +691,15 @@ def _set_task_status(task_id: str, task_status: TaskStatus) -> TaskActionRespons
                 (task_status.value, task_id),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=row["workspace_id"],
+                    event_type=f"task.{task_status.value}",
+                    entity_type="task",
+                    entity_id=row["id"],
+                    metadata={"title": row["title"], "status": row["status"]},
+                )
 
     if row is None:
         raise HTTPException(
@@ -626,7 +728,14 @@ def create_reminder(request: ReminderCreate) -> ReminderActionResponse:
                     related_entity_id
                 )
                 VALUES (%s, %s, %s, %s, %s)
-                RETURNING id, title, remind_at, status, related_entity_type, related_entity_id
+                RETURNING
+                    id,
+                    workspace_id,
+                    title,
+                    remind_at,
+                    status,
+                    related_entity_type,
+                    related_entity_id
                 """,
                 (
                     workspace_id,
@@ -637,6 +746,22 @@ def create_reminder(request: ReminderCreate) -> ReminderActionResponse:
                 ),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=workspace_id,
+                    event_type="reminder.created",
+                    entity_type="reminder",
+                    entity_id=row["id"],
+                    metadata={
+                        "title": row["title"],
+                        "remind_at": row["remind_at"].isoformat(),
+                        "related_entity_type": row["related_entity_type"],
+                        "related_entity_id": (
+                            str(row["related_entity_id"]) if row["related_entity_id"] else None
+                        ),
+                    },
+                )
 
     if row is None:
         raise RuntimeError("Reminder create did not return a saved reminder.")
@@ -669,6 +794,15 @@ def _set_reminder_status(
                 (reminder_status.value, reminder_id),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=row["workspace_id"],
+                    event_type=f"reminder.{reminder_status.value}",
+                    entity_type="reminder",
+                    entity_id=row["id"],
+                    metadata={"title": row["title"], "status": row["status"]},
+                )
 
     if row is None:
         raise HTTPException(

@@ -22,7 +22,7 @@ The current implementation includes:
 - `tasks`: review or action items created by users, integrations, or AI workflows.
 - `reminders`: scheduled prompts tied to bills or other household entities.
 - `extraction_runs`: AI extraction attempts and confidence metadata.
-- `audit_events`: important user and system actions.
+- `audit_events`: append-only history for important user and system actions such as document uploads, cabinet confirmations, graph edits, bill lifecycle changes, task/reminder changes, and assistant answers.
 
 See [schema.sql](../infrastructure/postgres/schema.sql).
 
@@ -119,6 +119,6 @@ The graph should drive cabinet path suggestions. A document linked to a family t
 
 - Keep household or workspace ownership on every user-visible record.
 - Store AI confidence and provenance for extracted fields and relationships.
-- Prefer append-only audit events for meaningful changes.
+- Prefer append-only audit events for meaningful changes. Audit metadata should explain the action without copying full sensitive source documents into the log.
 - Make tasks and reminders generic enough to attach to any household entity.
 - Avoid hard-coding the MVP around bills in a way that blocks properties, vehicles, insurance, school, health, government, or tax workflows later.

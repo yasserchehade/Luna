@@ -34,6 +34,7 @@ The API starts small and should grow around real MVP workflows.
 - `POST /api/household/reminders/{id}/dismiss`: dismiss a reminder.
 - `POST /api/household/reminders/{id}/archive`: archive a reminder while preserving graph history.
 - `POST /api/knowledge/ask`: answer a simple household question from structured Luna records and source references.
+- `GET /api/audit-events`: list recent append-only audit events for important user and system actions.
 
 ## API Principles
 

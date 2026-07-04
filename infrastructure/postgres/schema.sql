@@ -281,3 +281,7 @@ CREATE INDEX IF NOT EXISTS idx_document_template_matches_document
     ON document_template_matches(document_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_status ON tasks(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_reminders_workspace_status ON reminders(workspace_id, status, remind_at);
+CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_created
+    ON audit_events(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_entity
+    ON audit_events(workspace_id, entity_type, entity_id, created_at DESC);

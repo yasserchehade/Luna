@@ -14,6 +14,7 @@ from app.models.document import (
 )
 from app.services.cabinet import confirm_document_cabinet_path, save_document_cabinet_plan
 from app.services.document_text import extract_pdf_text
+from app.services.audit import record_audit_event
 from app.storage.documents import store_uploaded_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -121,6 +122,20 @@ async def upload_document(file: Annotated[UploadFile, File(...)]) -> Document:
                     extracted_text.character_count,
                     Jsonb(extracted_text.metadata),
                 ),
+            )
+            record_audit_event(
+                cursor,
+                workspace_id=workspace_id,
+                event_type="document.uploaded",
+                entity_type="document",
+                entity_id=stored.document_id,
+                metadata={
+                    "original_filename": stored.original_filename,
+                    "content_type": stored.content_type,
+                    "storage_provider": "local_folder",
+                    "size_bytes": stored.size_bytes,
+                    "text_characters": extracted_text.character_count,
+                },
             )
 
     return _document_from_row(
@@ -254,6 +269,17 @@ def search_documents(query: str) -> list[DocumentSearchResult]:
 @router.get("/{document_id}", response_model=Document)
 def get_document(document_id: str) -> Document:
     document = _get_document_or_404(document_id)
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            record_audit_event(
+                cursor,
+                workspace_id=workspace_id,
+                event_type="document.viewed",
+                entity_type="document",
+                entity_id=document_id,
+                metadata={"original_filename": document.original_filename},
+            )
     return document
 
 
@@ -337,6 +363,21 @@ def plan_document_cabinet(document_id: str) -> DocumentCabinetPlan:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(error),
         ) from error
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            record_audit_event(
+                cursor,
+                workspace_id=workspace_id,
+                event_type="document.cabinet_plan_suggested",
+                entity_type="document",
+                entity_id=document_id,
+                metadata={
+                    "storage_provider": str(plan["storage_provider"]),
+                    "suggested_cabinet_path": str(plan["suggested_cabinet_path"]),
+                    "reasons": [str(reason) for reason in plan["reasons"]],
+                },
+            )
 
     return DocumentCabinetPlan(
         document_id=str(plan["document_id"]),
@@ -368,4 +409,20 @@ def confirm_document_cabinet(
             detail=str(error),
         ) from error
 
-    return DocumentCabinetConfirmResponse(document=_get_document_or_404(document_id))
+    document = _get_document_or_404(document_id)
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            record_audit_event(
+                cursor,
+                workspace_id=workspace_id,
+                event_type="document.cabinet_path_confirmed",
+                entity_type="document",
+                entity_id=document_id,
+                metadata={
+                    "confirmed_cabinet_path": document.confirmed_cabinet_path,
+                    "user_supplied_path": request.cabinet_path is not None,
+                },
+            )
+
+    return DocumentCabinetConfirmResponse(document=document)

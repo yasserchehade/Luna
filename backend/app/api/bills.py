@@ -14,6 +14,7 @@ from app.models.bill import (
     BillStatus,
     BillUpdate,
 )
+from app.services.audit import record_audit_event
 from app.services.cabinet import save_document_cabinet_plan
 from app.services.extraction import get_extractor
 from app.services.supplier_profiles import record_supplier_template_match
@@ -272,6 +273,23 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
             row = cursor.fetchone()
             if row is None:
                 raise RuntimeError("Bill ingest did not return a saved bill.")
+            record_audit_event(
+                cursor,
+                workspace_id=document["workspace_id"],
+                event_type="bill.ingested",
+                entity_type="bill",
+                entity_id=row["id"],
+                metadata={
+                    "document_id": request.document_id,
+                    "supplier": row["supplier"],
+                    "review_status": row["review_status"],
+                    "extraction_confidence": (
+                        float(row["extraction_confidence"])
+                        if row["extraction_confidence"] is not None
+                        else None
+                    ),
+                },
+            )
 
             cursor.execute(
                 """
@@ -425,6 +443,18 @@ def update_bill(bill_id: str, update: BillUpdate) -> BillActionResponse:
                 ),
             )
             row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=existing["workspace_id"],
+                    event_type="bill.updated",
+                    entity_type="bill",
+                    entity_id=row["id"],
+                    metadata={
+                        "updated_fields": sorted(fields.keys()),
+                        "supplier": row["supplier"],
+                    },
+                )
 
     if row is None:
         raise RuntimeError("Bill update did not return a saved bill.")
@@ -446,6 +476,7 @@ def confirm_bill(bill_id: str) -> BillActionResponse:
                 WHERE id = %s
                 RETURNING
                     id,
+                    workspace_id,
                     document_id,
                     supplier_entity_id,
                     supplier,
@@ -468,6 +499,14 @@ def confirm_bill(bill_id: str) -> BillActionResponse:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Bill not found.",
                 )
+            record_audit_event(
+                cursor,
+                workspace_id=row["workspace_id"],
+                event_type="bill.confirmed",
+                entity_type="bill",
+                entity_id=row["id"],
+                metadata={"supplier": row["supplier"], "status": row["status"]},
+            )
 
             cursor.execute(
                 """
@@ -503,6 +542,7 @@ def _set_bill_status(bill_id: str, bill_status: BillStatus) -> BillActionRespons
                 WHERE id = %s
                 RETURNING
                     id,
+                    workspace_id,
                     document_id,
                     supplier_entity_id,
                     supplier,
@@ -525,6 +565,14 @@ def _set_bill_status(bill_id: str, bill_status: BillStatus) -> BillActionRespons
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Bill not found.",
                 )
+            record_audit_event(
+                cursor,
+                workspace_id=row["workspace_id"],
+                event_type=f"bill.{bill_status.value}",
+                entity_type="bill",
+                entity_id=row["id"],
+                metadata={"supplier": row["supplier"], "status": row["status"]},
+            )
 
             if bill_status in {BillStatus.unpaid, BillStatus.paid, BillStatus.archived}:
                 cursor.execute(
