@@ -107,7 +107,8 @@ Luna/
 - `GET /api/bills` returns persisted bill records from PostgreSQL.
 - `GET /api/documents` returns recent document records with cabinet planning status.
 - `POST /api/bills/ingest` accepts a stored document id, runs the current extractor, records the extraction run, and saves a draft bill.
-- The frontend has separate Dashboard, Cabinet, and Structure tabs so active obligations, archived documents, and mostly-static household graph setup do not compete for attention.
+- `POST /api/knowledge/ask` answers simple household questions from structured Luna records and source references.
+- The frontend has separate Dashboard, Cabinet, Structure, and Assistant tabs so active obligations, archived documents, household graph setup, and grounded questions do not compete for attention.
 
 The extraction implementation is intentionally a stub behind an interface so OpenAI, Claude, Gemini, or another provider can be added later without changing the API layer.
 

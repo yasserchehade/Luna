@@ -56,7 +56,20 @@ type DocumentSearchResult = {
   snippet?: string | null;
 };
 
-type ActiveTab = "dashboard" | "cabinet" | "structure";
+type KnowledgeAnswer = {
+  question: string;
+  answer: string;
+  confidence: number;
+  sources: {
+    source_type: string;
+    source_id: string;
+    title: string;
+    detail?: string | null;
+  }[];
+  suggested_next_actions: string[];
+};
+
+type ActiveTab = "dashboard" | "cabinet" | "structure" | "assistant";
 
 function getApiBaseUrl() {
   return (
@@ -125,9 +138,30 @@ async function searchDocuments(query: string): Promise<DocumentSearchResult[]> {
   }
 }
 
+async function askKnowledge(question: string): Promise<KnowledgeAnswer | null> {
+  if (question.trim().length < 2) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/knowledge/ask`, {
+      body: JSON.stringify({ question }),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 function normalizeTab(tab?: string | string[]): ActiveTab {
   const value = Array.isArray(tab) ? tab[0] : tab;
-  if (value === "cabinet" || value === "structure") {
+  if (value === "cabinet" || value === "structure" || value === "assistant") {
     return value;
   }
   return "dashboard";
@@ -140,13 +174,20 @@ function cabinetPath(document: DocumentRecord) {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ tab?: string | string[]; q?: string | string[] }>;
+  searchParams?: Promise<{
+    ask?: string | string[];
+    q?: string | string[];
+    tab?: string | string[];
+  }>;
 }) {
   const resolvedSearchParams = await searchParams;
   const activeTab = normalizeTab(resolvedSearchParams?.tab);
   const cabinetQuery = Array.isArray(resolvedSearchParams?.q)
     ? resolvedSearchParams?.q[0] ?? ""
     : resolvedSearchParams?.q ?? "";
+  const assistantQuestion = Array.isArray(resolvedSearchParams?.ask)
+    ? resolvedSearchParams?.ask[0] ?? ""
+    : resolvedSearchParams?.ask ?? "";
   const [bills, household, documents] = await Promise.all([
     getBills(),
     getHouseholdSummary(),
@@ -156,6 +197,10 @@ export default async function DashboardPage({
     activeTab === "cabinet" && cabinetQuery.trim().length >= 2
       ? await searchDocuments(cabinetQuery)
       : [];
+  const assistantAnswer =
+    activeTab === "assistant" && assistantQuestion.trim().length >= 2
+      ? await askKnowledge(assistantQuestion)
+      : null;
   const cabinetDocuments =
     searchResults.length > 0
       ? searchResults.map((result) => result.document)
@@ -203,6 +248,12 @@ export default async function DashboardPage({
           href="/?tab=structure"
         >
           Structure
+        </a>
+        <a
+          className={activeTab === "assistant" ? "activeTab" : ""}
+          href="/?tab=assistant"
+        >
+          Assistant
         </a>
       </section>
 
@@ -417,6 +468,75 @@ export default async function DashboardPage({
                     <span>{entity.entity_type.replaceAll("_", " ")}</span>
                   </div>
                 ))
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === "assistant" ? (
+        <section className="assistantLayout" aria-label="Household assistant">
+          <div className="panel widePanel">
+            <div className="panelHeader">
+              <h2>Ask Luna</h2>
+              <span>grounded beta</span>
+            </div>
+            <form className="searchForm inlineSearchForm" action="/" aria-label="Ask Luna">
+              <input type="hidden" name="tab" value="assistant" />
+              <input
+                aria-label="Ask Luna a household question"
+                defaultValue={assistantQuestion}
+                name="ask"
+                placeholder="Ask what is due, what needs review, or find a document"
+                type="search"
+              />
+              <button type="submit">Ask</button>
+            </form>
+
+            {assistantAnswer ? (
+              <div className="answerBlock">
+                <strong>{assistantAnswer.answer}</strong>
+                <span>{Math.round(assistantAnswer.confidence * 100)}% grounded confidence</span>
+              </div>
+            ) : (
+              <p className="emptyState">Ask a question to search Luna's structured household memory.</p>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panelHeader">
+              <h2>Sources</h2>
+              <span>{assistantAnswer?.sources.length ?? 0} records</span>
+            </div>
+            <div className="taskList">
+              {assistantAnswer && assistantAnswer.sources.length > 0 ? (
+                assistantAnswer.sources.map((source) => (
+                  <div key={`${source.source_type}-${source.source_id}`} className="taskRow">
+                    <strong>{source.title}</strong>
+                    <span>{source.source_type}</span>
+                    {source.detail ? <code>{source.detail}</code> : null}
+                  </div>
+                ))
+              ) : (
+                <p className="emptyState">Luna will show the records behind each answer here.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panelHeader">
+              <h2>Next actions</h2>
+              <span>{assistantAnswer?.suggested_next_actions.length ?? 0}</span>
+            </div>
+            <div className="taskList">
+              {assistantAnswer && assistantAnswer.suggested_next_actions.length > 0 ? (
+                assistantAnswer.suggested_next_actions.map((action) => (
+                  <div key={action} className="taskRow">
+                    <strong>{action}</strong>
+                  </div>
+                ))
+              ) : (
+                <p className="emptyState">Suggested actions will appear when Luna has a useful next step.</p>
               )}
             </div>
           </div>

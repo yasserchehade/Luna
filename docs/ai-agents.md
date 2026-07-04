@@ -64,6 +64,8 @@ Connects school events, health appointments, family obligations, reminders, and 
 
 Answers natural-language questions using structured records and indexed source documents. It should cite or link back to source records wherever possible.
 
+The first implementation is deterministic and grounded in Luna records rather than a general LLM. It maps simple questions to structured data such as bills, tasks, reminders, documents, and cabinet search results. Model-backed reasoning can be added behind the same interface later.
+
 ### Daily Briefing Agent
 
 Produces proactive daily or weekly summaries: what is due, what changed, what needs review, what was paid, what is overdue, and what the household should decide next.

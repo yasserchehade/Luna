@@ -167,7 +167,8 @@ h2 {
 }
 
 .operationalGrid,
-.structureGrid {
+.structureGrid,
+.assistantLayout {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -285,6 +286,12 @@ td code {
   padding: 14px 18px;
 }
 
+.inlineSearchForm {
+  border-bottom: 0;
+  min-width: 0;
+  padding: 0;
+}
+
 .searchForm input {
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -303,6 +310,24 @@ td code {
   margin: 0;
   min-width: 720px;
   padding: 10px 18px;
+}
+
+.answerBlock {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.answerBlock strong {
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.answerBlock span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 table {
@@ -418,7 +443,8 @@ th {
   }
 
   .operationalGrid,
-  .structureGrid {
+  .structureGrid,
+  .assistantLayout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -429,7 +455,8 @@ th {
 
 @media (max-width: 560px) {
   .operationalGrid,
-  .structureGrid {
+  .structureGrid,
+  .assistantLayout {
     grid-template-columns: 1fr;
   }
 }
