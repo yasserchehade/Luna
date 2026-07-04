@@ -20,6 +20,12 @@ jobs:
       - name: Import FastAPI app
         working-directory: backend
         run: python -c "from app.main import app; print(app.title)"
+      - name: Lint backend
+        working-directory: backend
+        run: ruff check .
+      - name: Test backend
+        working-directory: backend
+        run: pytest
 
   frontend-smoke:
     runs-on: ubuntu-latest
