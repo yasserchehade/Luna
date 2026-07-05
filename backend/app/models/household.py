@@ -72,6 +72,40 @@ class HouseholdGraph(BaseModel):
     relationships: list[EntityRelationship]
 
 
+class GraphSuggestionStatus(StrEnum):
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+
+
+class GraphSuggestionAction(StrEnum):
+    create_entity = "create_entity"
+    connect_entities = "connect_entities"
+    update_metadata = "update_metadata"
+    attach_document = "attach_document"
+    merge_duplicate_entities = "merge_duplicate_entities"
+
+
+class GraphSuggestion(BaseModel):
+    id: str
+    confidence: float
+    suggested_action: GraphSuggestionAction
+    reasoning: str
+    affected_entities: list[dict[str, object]] = Field(default_factory=list)
+    status: GraphSuggestionStatus
+    action_payload: dict[str, object] = Field(default_factory=dict)
+    source_document_id: str | None = None
+    source_bill_id: str | None = None
+
+
+class GraphSuggestionList(BaseModel):
+    suggestions: list[GraphSuggestion]
+
+
+class GraphSuggestionActionResponse(BaseModel):
+    suggestion: GraphSuggestion
+
+
 class TaskStatus(StrEnum):
     open = "open"
     done = "done"

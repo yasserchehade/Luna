@@ -830,11 +830,105 @@ h2 {
   padding-top: 14px;
 }
 
+.suggestionsPanel {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+}
+
+.suggestionsHeader {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.suggestionsHeader div {
+  display: grid;
+  gap: 4px;
+}
+
+.suggestionsHeader h3,
 .detailSection h3 {
   font-size: 14px;
   margin: 0;
 }
 
+.suggestionsHeader span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.suggestionList {
+  display: grid;
+  gap: 10px;
+}
+
+.suggestionCard {
+  background: #fbfaff;
+  border: 1px solid #ded7ff;
+  border-radius: 14px;
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.suggestionCard > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.suggestionCard strong {
+  color: var(--accent-strong);
+}
+
+.suggestionCard span,
+.suggestionCard p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.suggestionCard p {
+  margin: 0;
+}
+
+.suggestionMeta,
+.suggestionActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.suggestionMeta span {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.suggestionActions button {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 7px 9px;
+}
+
+.suggestionActions button:nth-child(2),
+.suggestionActions button:nth-child(3) {
+  background: #f4f3ff;
+  color: var(--accent-strong);
+}
+
+.suggestionActions button:nth-child(2):hover,
+.suggestionActions button:nth-child(3):hover {
+  background: #ebe7ff;
+}
+
+.suggestionCard code,
 .detailSection code {
   background: #f8fafc;
   border: 1px solid var(--line);

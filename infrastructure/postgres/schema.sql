@@ -94,6 +94,32 @@ CREATE TABLE IF NOT EXISTS entity_relationships (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS graph_suggestions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+    action_type TEXT NOT NULL CHECK (
+        action_type IN (
+            'create_entity',
+            'connect_entities',
+            'update_metadata',
+            'attach_document',
+            'merge_duplicate_entities'
+        )
+    ),
+    action_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    confidence NUMERIC(4, 3) NOT NULL,
+    reasoning TEXT NOT NULL,
+    affected_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    source_document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    source_bill_id UUID REFERENCES bills(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at TIMESTAMPTZ,
+    UNIQUE (workspace_id, fingerprint)
+);
+
 CREATE TABLE IF NOT EXISTS supplier_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -273,6 +299,12 @@ CREATE INDEX IF NOT EXISTS idx_entity_relationships_source
     ON entity_relationships(workspace_id, source_entity_type, source_entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_relationships_target
     ON entity_relationships(workspace_id, target_entity_type, target_entity_id);
+CREATE INDEX IF NOT EXISTS idx_graph_suggestions_workspace_status
+    ON graph_suggestions(workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_graph_suggestions_document
+    ON graph_suggestions(workspace_id, source_document_id);
+CREATE INDEX IF NOT EXISTS idx_graph_suggestions_bill
+    ON graph_suggestions(workspace_id, source_bill_id);
 CREATE INDEX IF NOT EXISTS idx_supplier_profiles_workspace_key
     ON supplier_profiles(workspace_id, profile_key);
 CREATE INDEX IF NOT EXISTS idx_supplier_template_versions_profile

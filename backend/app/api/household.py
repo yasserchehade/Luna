@@ -8,6 +8,8 @@ from app.models.household import (
     EntityRelationshipCreate,
     EntityRelationshipDeleteResponse,
     EntityRelationshipsForEntity,
+    GraphSuggestionActionResponse,
+    GraphSuggestionList,
     HouseholdEntityActionResponse,
     HouseholdEntityCreate,
     HouseholdEntityUpdate,
@@ -25,6 +27,11 @@ from app.models.household import (
     TaskStatus,
 )
 from app.services.audit import record_audit_event
+from app.services.graph_suggestions import (
+    accept_graph_suggestion,
+    list_pending_graph_suggestions,
+    reject_graph_suggestion,
+)
 
 router = APIRouter(prefix="/household", tags=["household"])
 
@@ -678,6 +685,62 @@ def delete_relationship(relationship_id: str) -> EntityRelationshipDeleteRespons
             detail="Relationship not found.",
         )
     return EntityRelationshipDeleteResponse(deleted_relationship_id=str(row["id"]))
+
+
+@router.get("/suggestions", response_model=GraphSuggestionList)
+def graph_suggestions() -> GraphSuggestionList:
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            suggestions = list_pending_graph_suggestions(cursor, workspace_id=workspace_id)
+
+    return GraphSuggestionList(suggestions=suggestions)
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/accept",
+    response_model=GraphSuggestionActionResponse,
+)
+def accept_suggestion(suggestion_id: str) -> GraphSuggestionActionResponse:
+    try:
+        with get_connection() as connection:
+            workspace_id = get_default_workspace_id(connection)
+            with connection.cursor() as cursor:
+                suggestion = accept_graph_suggestion(
+                    cursor,
+                    workspace_id=workspace_id,
+                    suggestion_id=suggestion_id,
+                )
+    except LookupError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    return GraphSuggestionActionResponse(suggestion=suggestion)
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/reject",
+    response_model=GraphSuggestionActionResponse,
+)
+def reject_suggestion(suggestion_id: str) -> GraphSuggestionActionResponse:
+    try:
+        with get_connection() as connection:
+            workspace_id = get_default_workspace_id(connection)
+            with connection.cursor() as cursor:
+                suggestion = reject_graph_suggestion(
+                    cursor,
+                    workspace_id=workspace_id,
+                    suggestion_id=suggestion_id,
+                )
+    except LookupError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    return GraphSuggestionActionResponse(suggestion=suggestion)
 
 
 @router.get("/summary", response_model=HouseholdSummary)

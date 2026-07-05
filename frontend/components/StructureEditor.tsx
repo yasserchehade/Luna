@@ -24,6 +24,18 @@ type HouseholdGraph = {
   relationships: EntityRelationship[];
 };
 
+type GraphSuggestion = {
+  id: string;
+  confidence: number;
+  suggested_action: string;
+  reasoning: string;
+  affected_entities: { display_name?: string; entity_id?: string; entity_type?: string }[];
+  status: string;
+  action_payload: Record<string, unknown>;
+  source_document_id?: string | null;
+  source_bill_id?: string | null;
+};
+
 type OperationState = {
   error: string | null;
   loading: boolean;
@@ -32,6 +44,7 @@ type OperationState = {
 
 type StructureEditorProps = {
   graph: HouseholdGraph;
+  suggestions: GraphSuggestion[];
 };
 
 type PanelMode = "none" | "createEntity" | "createRelationship" | "editEntity";
@@ -116,6 +129,18 @@ function nodeInitial(nodeType: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+function suggestionActionLabel(action: string) {
+  return normalizedLabel(action).replace(/^./, (character) => character.toUpperCase());
+}
+
+function suggestionSummary(suggestion: GraphSuggestion) {
+  const names = suggestion.affected_entities
+    .map((entity) => entity.display_name)
+    .filter(Boolean)
+    .join(", ");
+  return names || suggestion.reasoning;
 }
 
 function layoutGraph(graph: HouseholdGraph) {
@@ -211,7 +236,7 @@ function layoutGraph(graph: HouseholdGraph) {
   return { height, positionedNodes, width };
 }
 
-export function StructureEditor({ graph }: StructureEditorProps) {
+export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
   const router = useRouter();
   const nodesById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.id, node])),
@@ -227,6 +252,7 @@ export function StructureEditor({ graph }: StructureEditorProps) {
   });
   const [mode, setMode] = useState<PanelMode>("none");
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id ?? null);
+  const [expandedSuggestionId, setExpandedSuggestionId] = useState<string | null>(null);
 
   const selectedNode = selectedNodeId ? nodesById.get(selectedNodeId) : undefined;
   const selectedRelationships = useMemo(() => {
@@ -350,6 +376,17 @@ export function StructureEditor({ graph }: StructureEditorProps) {
         method: "DELETE",
       });
     }, "Relationship deleted.");
+  }
+
+  async function decideSuggestion(suggestionId: string, decision: "accept" | "reject") {
+    await withState(async () => {
+      await request(`/api/household/suggestions/${suggestionId}/${decision}`, {
+        method: "POST",
+      });
+    }, decision === "accept" ? "Suggestion accepted." : "Suggestion rejected.");
+    if (expandedSuggestionId === suggestionId) {
+      setExpandedSuggestionId(null);
+    }
   }
 
   function openRelationshipFromSelected() {
@@ -583,6 +620,64 @@ export function StructureEditor({ graph }: StructureEditorProps) {
         </div>
 
         <aside className="entityDetailsPanel" aria-label="Entity details">
+          <section className="suggestionsPanel" aria-label="Graph suggestions">
+            <div className="suggestionsHeader">
+              <div>
+                <h3>Suggestions</h3>
+                <span>{suggestions.length} pending</span>
+              </div>
+            </div>
+            {suggestions.length === 0 ? (
+              <p className="emptyState">No graph suggestions yet. New document and bill patterns will appear here.</p>
+            ) : (
+              <div className="suggestionList">
+                {suggestions.map((suggestion) => (
+                  <article className="suggestionCard" key={suggestion.id}>
+                    <div>
+                      <strong>{suggestionActionLabel(suggestion.suggested_action)}</strong>
+                      <span>{suggestionSummary(suggestion)}</span>
+                    </div>
+                    <p>{suggestion.reasoning}</p>
+                    <div className="suggestionMeta">
+                      <span>{Math.round(suggestion.confidence * 100)}% confidence</span>
+                      <span>{normalizedLabel(suggestion.suggested_action)}</span>
+                    </div>
+                    {expandedSuggestionId === suggestion.id ? (
+                      <code>{JSON.stringify(suggestion.action_payload, null, 2)}</code>
+                    ) : null}
+                    <div className="suggestionActions">
+                      <button
+                        disabled={state.loading}
+                        onClick={() => decideSuggestion(suggestion.id, "accept")}
+                        type="button"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        disabled={state.loading}
+                        onClick={() => decideSuggestion(suggestion.id, "reject")}
+                        type="button"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        disabled={state.loading}
+                        onClick={() =>
+                          setExpandedSuggestionId(
+                            expandedSuggestionId === suggestion.id ? null : suggestion.id,
+                          )
+                        }
+                        type="button"
+                      >
+                        View details
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
           {selectedNode ? (
             <>
               <div className={`detailsHero type-${selectedNode.node_type}`}>

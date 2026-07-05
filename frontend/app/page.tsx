@@ -46,6 +46,18 @@ type HouseholdGraph = {
   relationships: EntityRelationship[];
 };
 
+type GraphSuggestion = {
+  id: string;
+  confidence: number;
+  suggested_action: string;
+  reasoning: string;
+  affected_entities: { display_name?: string; entity_id?: string; entity_type?: string }[];
+  status: string;
+  action_payload: Record<string, unknown>;
+  source_document_id?: string | null;
+  source_bill_id?: string | null;
+};
+
 type HouseholdTask = {
   id: string;
   title: string;
@@ -185,6 +197,21 @@ async function getHouseholdGraph(): Promise<HouseholdGraph> {
   }
 }
 
+async function getGraphSuggestions(): Promise<GraphSuggestion[]> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/household/suggestions`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as { suggestions: GraphSuggestion[] };
+    return payload.suggestions;
+  } catch {
+    return [];
+  }
+}
+
 async function getDocuments(): Promise<DocumentRecord[]> {
   try {
     const response = await fetch(`${getApiBaseUrl()}/api/documents`, {
@@ -279,11 +306,12 @@ export default async function DashboardPage({
   const assistantQuestion = Array.isArray(resolvedSearchParams?.ask)
     ? resolvedSearchParams?.ask[0] ?? ""
     : resolvedSearchParams?.ask ?? "";
-  const [bills, household, householdGraph, documents] = await Promise.all([
+  const [bills, household, householdGraph, documents, graphSuggestions] = await Promise.all([
     getBills(),
     getHouseholdSummary(),
     getHouseholdGraph(),
     getDocuments(),
+    getGraphSuggestions(),
   ]);
   const searchResults =
     activeTab === "cabinet" && cabinetQuery.trim().length >= 2
@@ -587,7 +615,7 @@ export default async function DashboardPage({
       ) : null}
 
       {activeTab === "structure" ? (
-        <StructureEditor graph={householdGraph} />
+        <StructureEditor graph={householdGraph} suggestions={graphSuggestions} />
       ) : null}
 
       {activeTab === "assistant" ? (
