@@ -462,6 +462,7 @@ h2 {
 }
 
 .structureToolbar,
+.groupFilterBar,
 .formButtonRow,
 .detailsActions {
   align-items: center;
@@ -508,6 +509,40 @@ h2 {
   grid-template-columns: 1fr;
 }
 
+.groupFilterBar {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  padding: 10px;
+}
+
+.groupFilterBar button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  color: #344054;
+  display: inline-flex;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.groupFilterBar button:hover,
+.groupFilterBar .activeGroupChip {
+  background: var(--accent-soft);
+  border-color: #c8b8ff;
+  color: var(--accent-strong);
+}
+
+.groupFilterBar span {
+  background: #ffffff;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 7px;
+}
+
 .structureQuickForm label,
 .detailsEditForm label {
   display: grid;
@@ -525,6 +560,7 @@ h2 {
 .structureQuickForm select,
 .structureQuickForm textarea,
 .detailsEditForm input,
+.detailsEditForm select,
 .detailsEditForm textarea {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -644,6 +680,14 @@ h2 {
   background: #ffffff;
   border-color: var(--accent);
   box-shadow: 0 14px 28px rgba(109, 61, 245, 0.16);
+}
+
+.dimmedTreeNode {
+  opacity: 0.28;
+}
+
+.dimmedRelationship {
+  opacity: 0.18;
 }
 
 .selectedTreeNode,
@@ -901,6 +945,18 @@ h2 {
   gap: 7px;
 }
 
+.advancedDetails {
+  display: grid;
+  gap: 8px;
+}
+
+.advancedDetails summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .suggestionMeta span {
   background: #ffffff;
   border: 1px solid var(--line);
@@ -944,9 +1000,30 @@ h2 {
 }
 
 .detailRelationshipList,
+.detailsList,
 .linkedRecordList {
   display: grid;
   gap: 8px;
+}
+
+.detailsList div {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+}
+
+.detailsList span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detailsList strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .detailRelationshipRow {
@@ -1207,6 +1284,30 @@ h2 {
   max-width: 100%;
   overflow-wrap: anywhere;
   padding: 6px 8px;
+}
+
+.reminderPill {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 9px;
+  width: fit-content;
+}
+
+.overdueReminder {
+  background: #fbe8dd;
+  color: var(--warning);
+}
+
+.soonReminder {
+  background: #fff3d7;
+  color: #7a4d00;
+}
+
+.upcomingReminder {
+  background: #eef2ff;
+  color: #3451b2;
 }
 
 td code {

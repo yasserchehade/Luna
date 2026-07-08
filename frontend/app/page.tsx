@@ -129,11 +129,11 @@ const PAGE_META: Record<ActiveTab, { title: string; subtitle: string }> = {
   },
   bills: {
     title: "Bills and invoices",
-    subtitle: "Review supplier, payment, graph-linking, and extraction status.",
+    subtitle: "Confirm Luna's understanding of suppliers, amounts, due dates, and household links.",
   },
   structure: {
-    title: "Household structure",
-    subtitle: "The knowledge graph of your household.",
+    title: "Household navigator",
+    subtitle: "People, properties, vehicles, suppliers, policies, and documents in one map.",
   },
   assistant: {
     title: "Knowledge assistant",
@@ -287,6 +287,29 @@ function cabinetPath(document: DocumentRecord) {
 
 function normalizedLabel(value: string) {
   return value.replaceAll("_", " ");
+}
+
+function reminderTiming(value: string) {
+  const today = new Date();
+  const target = new Date(value);
+  today.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  const days = Math.round((target.getTime() - today.getTime()) / 86400000);
+  if (days < 0) return `Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"}`;
+  if (days === 0) return "Due today";
+  if (days === 1) return "Due tomorrow";
+  return `Due in ${days} days`;
+}
+
+function reminderTone(value: string) {
+  const today = new Date();
+  const target = new Date(value);
+  today.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  const days = Math.round((target.getTime() - today.getTime()) / 86400000);
+  if (days < 0) return "overdueReminder";
+  if (days <= 1) return "soonReminder";
+  return "upcomingReminder";
 }
 
 export default async function DashboardPage({
@@ -443,7 +466,9 @@ export default async function DashboardPage({
                   household.upcoming_reminders.map((reminder) => (
                     <div key={reminder.id} className="taskRow">
                       <strong>{reminder.title}</strong>
-                      <span>{new Date(reminder.remind_at).toLocaleDateString()}</span>
+                      <span className={`reminderPill ${reminderTone(reminder.remind_at)}`}>
+                        {reminderTiming(reminder.remind_at)}
+                      </span>
                     </div>
                   ))
                 )}
@@ -470,7 +495,7 @@ export default async function DashboardPage({
                   <th>Category</th>
                   <th>Classification</th>
                   <th>Supplier entity</th>
-                  <th>Review</th>
+                  <th>Confirm Luna</th>
                   <th>Status</th>
                   <th>Graph</th>
                   <th>Actions</th>
@@ -496,7 +521,11 @@ export default async function DashboardPage({
                     </td>
                     <td>
                       <span className={`status review-${bill.review_status}`}>
-                        {bill.review_status.replaceAll("_", " ")}
+                        {bill.review_status === "needs_review"
+                          ? "Needs confirmation"
+                          : bill.review_status === "confirmed"
+                            ? "Confirmed"
+                            : "Looks right"}
                       </span>
                       {bill.review_reasons.length > 0 ? (
                         <small>{bill.review_reasons[0]}</small>

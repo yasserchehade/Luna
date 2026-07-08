@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,32 @@ UTILITY_CATEGORIES = {
     "water": "Water Account",
     "utility": "Utility Account",
     "utilities": "Utility Account",
+}
+
+ADDRESS_RE = re.compile(
+    r"\b\d{1,5}\s+[A-Z][A-Za-z0-9.'-]*(?:\s+[A-Z][A-Za-z0-9.'-]*){0,5}\s+"
+    r"(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Lane|Ln|Court|Ct|Place|Pl|Crescent|Cres|Parade|Pde)\b",
+    re.IGNORECASE,
+)
+ACCOUNT_RE = re.compile(r"\b(?:account|customer|client)\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9 -]{4,24})", re.IGNORECASE)
+POLICY_RE = re.compile(r"\bpolicy\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9 -]{4,24})", re.IGNORECASE)
+REGISTRATION_RE = re.compile(r"\b(?:registration|rego|reg\.?)\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9]{2,4}[- ]?[A-Z0-9]{2,4})", re.IGNORECASE)
+YEAR_RE = re.compile(r"\b(19[8-9]\d|20[0-4]\d)\b")
+VEHICLE_MAKES = {
+    "audi",
+    "bmw",
+    "ford",
+    "honda",
+    "hyundai",
+    "kia",
+    "mazda",
+    "mercedes",
+    "nissan",
+    "subaru",
+    "tesla",
+    "toyota",
+    "volkswagen",
+    "vw",
 }
 
 
@@ -266,6 +293,79 @@ def _build_candidates(
     bills = _load_bills(cursor, workspace_id=workspace_id)
 
     candidates: list[SuggestionCandidate] = []
+    for document_id, document in documents.items():
+        address = _detect_address(_document_text(document))
+        if address and not _entity_exists(
+            entities,
+            entity_type="property",
+            display_name=address,
+        ):
+            candidates.append(
+                SuggestionCandidate(
+                    action_type="create_entity",
+                    action_payload={
+                        "entity_type": "property",
+                        "display_name": address,
+                        "metadata": {"address": address, "notes": "Detected from document text."},
+                    },
+                    confidence=0.74,
+                    reasoning="Luna found a property address in this document.",
+                    affected_entities=[
+                        _affected("document", document_id, _document_name(document, document_id)),
+                    ],
+                    source_document_id=document_id,
+                )
+            )
+
+        vehicle = _detect_vehicle(_document_text(document))
+        if vehicle and not _entity_exists(
+            entities,
+            entity_type="vehicle",
+            display_name=str(vehicle["display_name"]),
+        ):
+            candidates.append(
+                SuggestionCandidate(
+                    action_type="create_entity",
+                    action_payload={
+                        "entity_type": "vehicle",
+                        "display_name": vehicle["display_name"],
+                        "metadata": vehicle["metadata"],
+                    },
+                    confidence=0.7,
+                    reasoning="Luna found vehicle details in this document.",
+                    affected_entities=[
+                        _affected("document", document_id, _document_name(document, document_id)),
+                    ],
+                    source_document_id=document_id,
+                )
+            )
+
+        policy_number = _detect_policy_number(_document_text(document))
+        if policy_number and not _entity_exists(
+            entities,
+            entity_type="insurance_policy",
+            display_name=f"Policy {policy_number}",
+        ):
+            candidates.append(
+                SuggestionCandidate(
+                    action_type="create_entity",
+                    action_payload={
+                        "entity_type": "insurance_policy",
+                        "display_name": f"Policy {policy_number}",
+                        "metadata": {
+                            "policy_number": policy_number,
+                            "notes": "Detected from document text.",
+                        },
+                    },
+                    confidence=0.76,
+                    reasoning="Luna found an insurance policy number in this document.",
+                    affected_entities=[
+                        _affected("document", document_id, _document_name(document, document_id)),
+                    ],
+                    source_document_id=document_id,
+                )
+            )
+
     for bill in bills:
         supplier_id = str(bill["supplier_entity_id"]) if bill["supplier_entity_id"] else None
         document_id = str(bill["document_id"]) if bill["document_id"] else None
@@ -348,6 +448,10 @@ def _build_candidates(
                 "entity_type": "utility_account",
                 "display_name": account_name,
                 "metadata": {
+                    "account_number": _detect_account_number(
+                        _document_text(documents.get(document_id or ""))
+                    ),
+                    "service_type": account_name.replace(" Account", "").lower(),
                     "supplier": bill["supplier"],
                     "source_bill_id": bill_id,
                     "source_document_id": document_id,
@@ -767,6 +871,68 @@ def _document_mentions_entity(
     if isinstance(metadata, dict):
         needles.extend(str(value) for value in metadata.values() if isinstance(value, str))
     return any(needle and needle.lower() in haystack for needle in needles)
+
+
+def _document_text(document: dict[str, Any] | None) -> str:
+    if not document:
+        return ""
+    return " ".join(
+        str(value or "")
+        for value in (
+            document.get("original_filename"),
+            document.get("suggested_cabinet_path"),
+            document.get("confirmed_cabinet_path"),
+            document.get("text_content"),
+        )
+    )
+
+
+def _detect_address(text: str) -> str | None:
+    match = ADDRESS_RE.search(text)
+    if not match:
+        return None
+    return " ".join(match.group(0).split())
+
+
+def _detect_account_number(text: str) -> str | None:
+    match = ACCOUNT_RE.search(text)
+    if not match:
+        return None
+    return " ".join(match.group(1).split()).strip(" -:")
+
+
+def _detect_policy_number(text: str) -> str | None:
+    match = POLICY_RE.search(text)
+    if not match:
+        return None
+    return " ".join(match.group(1).split()).strip(" -:")
+
+
+def _detect_vehicle(text: str) -> dict[str, object] | None:
+    lower_text = text.lower()
+    make = next((candidate for candidate in VEHICLE_MAKES if candidate in lower_text), None)
+    registration_match = REGISTRATION_RE.search(text)
+    if not make and not registration_match:
+        return None
+
+    year_match = YEAR_RE.search(text)
+    registration = (
+        registration_match.group(1).replace(" ", "").upper()
+        if registration_match
+        else None
+    )
+    title_make = make.upper() if make == "vw" else make.title() if make else "Vehicle"
+    display_parts = [part for part in (year_match.group(1) if year_match else None, title_make, registration) if part]
+    display_name = " ".join(display_parts) if display_parts else "Vehicle"
+    return {
+        "display_name": display_name,
+        "metadata": {
+            "make": title_make if make else None,
+            "year": year_match.group(1) if year_match else None,
+            "registration": registration,
+            "notes": "Detected from document text.",
+        },
+    }
 
 
 def _entity_exists(

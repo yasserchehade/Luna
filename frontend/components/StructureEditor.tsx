@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type HouseholdGraphNode = {
@@ -54,6 +54,12 @@ type PositionedNode = HouseholdGraphNode & {
   y: number;
 };
 
+type DetailField = {
+  key: string;
+  label: string;
+  placeholder?: string;
+};
+
 const RELATIONSHIP_EXAMPLES = ["owns", "lives_at", "supplies", "insured_by", "related_to"];
 const ENTITY_TYPE_PRESETS = [
   "family_member",
@@ -62,25 +68,92 @@ const ENTITY_TYPE_PRESETS = [
   "vehicle",
   "business",
   "supplier",
-  "account",
+  "insurance_policy",
   "utility_account",
   "subscription",
 ];
 const TYPE_ORDER = new Map(
   [
-    "family_trust",
     "family_member",
+    "family_trust",
     "business",
     "property",
     "vehicle",
-    "supplier",
-    "account",
     "utility_account",
+    "insurance_policy",
+    "supplier",
     "subscription",
     "document",
     "bill",
   ].map((type, index) => [type, index]),
 );
+const GROUPS = [
+  { id: "all", label: "All", types: [] },
+  { id: "family", label: "Family", types: ["family_member", "family_trust"] },
+  { id: "properties", label: "Properties", types: ["property"] },
+  { id: "vehicles", label: "Vehicles", types: ["vehicle"] },
+  { id: "businesses", label: "Businesses", types: ["business"] },
+  { id: "utilities", label: "Utilities", types: ["utility_account", "account"] },
+  { id: "insurance", label: "Insurance", types: ["insurance_policy"] },
+  { id: "suppliers", label: "Suppliers", types: ["supplier"] },
+  { id: "documents", label: "Documents", types: ["document", "bill"] },
+];
+const DETAIL_FIELDS: Record<string, DetailField[]> = {
+  property: [
+    { key: "address", label: "Address" },
+    { key: "council", label: "Council" },
+    { key: "state", label: "State" },
+    { key: "purchase_date", label: "Purchase date" },
+    { key: "settlement_date", label: "Settlement date" },
+    { key: "notes", label: "Notes" },
+  ],
+  vehicle: [
+    { key: "registration", label: "Registration" },
+    { key: "make", label: "Make" },
+    { key: "model", label: "Model" },
+    { key: "year", label: "Year" },
+    { key: "vin", label: "VIN" },
+    { key: "notes", label: "Notes" },
+  ],
+  family_member: [
+    { key: "full_name", label: "Full name" },
+    { key: "role", label: "Role" },
+    { key: "phone", label: "Phone" },
+    { key: "email", label: "Email" },
+    { key: "notes", label: "Notes" },
+  ],
+  family_trust: [
+    { key: "trust_name", label: "Trust name" },
+    { key: "abn", label: "ABN" },
+    { key: "trustee", label: "Trustee" },
+    { key: "established_date", label: "Established date" },
+    { key: "notes", label: "Notes" },
+  ],
+  supplier: [
+    { key: "company_name", label: "Company name" },
+    { key: "website", label: "Website" },
+    { key: "phone", label: "Phone" },
+    { key: "email", label: "Email" },
+    { key: "customer_number", label: "Customer number" },
+    { key: "abn", label: "ABN" },
+    { key: "notes", label: "Notes" },
+  ],
+  insurance_policy: [
+    { key: "policy_number", label: "Policy number" },
+    { key: "insurer", label: "Insurer" },
+    { key: "renewal_date", label: "Renewal date" },
+    { key: "coverage", label: "Coverage" },
+    { key: "excess", label: "Excess" },
+    { key: "notes", label: "Notes" },
+  ],
+  utility_account: [
+    { key: "account_number", label: "Account number" },
+    { key: "service_type", label: "Service type" },
+    { key: "supplier", label: "Supplier" },
+    { key: "property", label: "Property" },
+    { key: "notes", label: "Notes" },
+  ],
+};
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 78;
 const HORIZONTAL_GAP = 70;
@@ -95,27 +168,45 @@ function normalizedLabel(value: string) {
   return value.replaceAll("_", " ");
 }
 
+function titleCase(value: string) {
+  return normalizedLabel(value).replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function entityOptionLabel(entity: HouseholdGraphNode) {
-  return `${entity.display_name} (${normalizedLabel(entity.node_type)})`;
+  return `${entity.display_name} (${titleCase(entity.node_type)})`;
 }
 
-function metadataToText(metadata?: Record<string, unknown>) {
-  if (!metadata || Object.keys(metadata).length === 0) {
-    return "";
-  }
-  return JSON.stringify(metadata, null, 2);
+function detailFieldsFor(type: string) {
+  return DETAIL_FIELDS[type] ?? [
+    { key: "notes", label: "Notes" },
+  ];
 }
 
-function parseMetadata(value: string) {
-  if (value.trim().length === 0) {
-    return {};
-  }
+function nameLabelFor(type: string) {
+  if (type === "family_member") return "Person name";
+  if (type === "property") return "Property name";
+  if (type === "vehicle") return "Vehicle name";
+  if (type === "family_trust") return "Trust name";
+  if (type === "supplier") return "Company name";
+  if (type === "insurance_policy") return "Policy name";
+  if (type === "utility_account") return "Account name";
+  return "Name";
+}
 
-  const parsed = JSON.parse(value) as unknown;
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new Error("Metadata must be a JSON object.");
+function detailsFromForm(formData: FormData, type: string) {
+  const details: Record<string, unknown> = {};
+  for (const field of detailFieldsFor(type)) {
+    const value = String(formData.get(`detail_${field.key}`) ?? "").trim();
+    if (value) {
+      details[field.key] = value;
+    }
   }
-  return parsed as Record<string, unknown>;
+  return details;
+}
+
+function detailValue(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
 function nodeRank(nodeType: string) {
@@ -131,16 +222,39 @@ function nodeInitial(nodeType: string) {
     .toUpperCase();
 }
 
-function suggestionActionLabel(action: string) {
-  return normalizedLabel(action).replace(/^./, (character) => character.toUpperCase());
+function confidenceLabel(confidence: number) {
+  if (confidence >= 0.8) return "High confidence";
+  if (confidence >= 0.55) return "Medium confidence";
+  return "Low confidence";
 }
 
-function suggestionSummary(suggestion: GraphSuggestion) {
-  const names = suggestion.affected_entities
+function suggestionTitle(suggestion: GraphSuggestion) {
+  const payload = suggestion.action_payload;
+  const affectedNames = suggestion.affected_entities
     .map((entity) => entity.display_name)
-    .filter(Boolean)
-    .join(", ");
-  return names || suggestion.reasoning;
+    .filter(Boolean);
+  if (suggestion.suggested_action === "create_entity") {
+    const entityType = String(payload.entity_type ?? "item");
+    const displayName = String(payload.display_name ?? affectedNames[0] ?? "new item");
+    if (entityType === "property") return `Luna found a property: ${displayName}`;
+    if (entityType === "vehicle") return `Luna found a vehicle: ${displayName}`;
+    if (entityType === "insurance_policy") return `Luna found an insurance policy: ${displayName}`;
+    if (entityType === "utility_account") return `Luna found a utility account: ${displayName}`;
+    if (entityType === "supplier") return `Luna found a supplier: ${displayName}`;
+    return `Luna found ${displayName}`;
+  }
+  if (suggestion.suggested_action === "attach_document") {
+    return affectedNames.length >= 2
+      ? `This document appears to belong to ${affectedNames[1]}`
+      : "This document appears to belong somewhere in your household";
+  }
+  if (suggestion.suggested_action === "connect_entities") {
+    return affectedNames.length >= 2
+      ? `Link ${affectedNames[0]} to ${affectedNames[1]}`
+      : "Luna found a useful link";
+  }
+  if (suggestion.suggested_action === "update_metadata") return "Luna found details to add";
+  return "Luna found something useful";
 }
 
 function layoutGraph(graph: HouseholdGraph) {
@@ -177,15 +291,10 @@ function layoutGraph(graph: HouseholdGraph) {
   queue.forEach(({ depth, node }) => depths.set(node.id, depth));
   while (queue.length > 0) {
     const current = queue.shift();
-    if (!current) {
-      break;
-    }
-
+    if (!current) break;
     for (const relationship of outgoing.get(current.node.id) ?? []) {
       const target = nodesById.get(relationship.target_entity_id);
-      if (!target) {
-        continue;
-      }
+      if (!target) continue;
       const nextDepth = Math.max(current.depth + 1, nodeRank(target.node_type));
       const existingDepth = depths.get(target.id);
       if (existingDepth === undefined || nextDepth < existingDepth) {
@@ -196,9 +305,7 @@ function layoutGraph(graph: HouseholdGraph) {
   }
 
   sortedNodes.forEach((node) => {
-    if (!depths.has(node.id)) {
-      depths.set(node.id, Math.min(nodeRank(node.node_type), 5));
-    }
+    if (!depths.has(node.id)) depths.set(node.id, Math.min(nodeRank(node.node_type), 5));
   });
 
   const levels = new Map<number, HouseholdGraphNode[]>();
@@ -238,12 +345,13 @@ function layoutGraph(graph: HouseholdGraph) {
 
 export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
   const router = useRouter();
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const nodesById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.id, node])),
     [graph.nodes],
   );
   const layout = useMemo(() => layoutGraph(graph), [graph]);
-  const [createMetadata, setCreateMetadata] = useState("");
+  const [createType, setCreateType] = useState("property");
   const [relationshipType, setRelationshipType] = useState("owns");
   const [state, setState] = useState<OperationState>({
     error: null,
@@ -253,12 +361,22 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
   const [mode, setMode] = useState<PanelMode>("none");
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id ?? null);
   const [expandedSuggestionId, setExpandedSuggestionId] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState("all");
+  const [focusSelected, setFocusSelected] = useState(true);
 
   const selectedNode = selectedNodeId ? nodesById.get(selectedNodeId) : undefined;
+  const selectedGroupTypes = GROUPS.find((group) => group.id === selectedGroup)?.types ?? [];
+  const connectedNodeIds = useMemo(() => {
+    if (!selectedNodeId) return new Set<string>();
+    const ids = new Set<string>([selectedNodeId]);
+    graph.relationships.forEach((relationship) => {
+      if (relationship.source_entity_id === selectedNodeId) ids.add(relationship.target_entity_id);
+      if (relationship.target_entity_id === selectedNodeId) ids.add(relationship.source_entity_id);
+    });
+    return ids;
+  }, [graph.relationships, selectedNodeId]);
   const selectedRelationships = useMemo(() => {
-    if (!selectedNodeId) {
-      return [];
-    }
+    if (!selectedNodeId) return [];
     return graph.relationships.filter(
       (relationship) =>
         relationship.source_entity_id === selectedNodeId ||
@@ -276,9 +394,27 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
         !!node && (node.node_type === "document" || node.node_type === "bill"),
     );
 
+  function focusNode(nodeId: string) {
+    setSelectedNodeId(nodeId);
+    setMode("none");
+    const node = layout.positionedNodes.get(nodeId);
+    const canvas = canvasRef.current;
+    if (!node || !canvas) return;
+    canvas.scrollTo({
+      left: Math.max(0, node.x - canvas.clientWidth / 2 + NODE_WIDTH / 2),
+      top: Math.max(0, node.y - canvas.clientHeight / 2 + NODE_HEIGHT / 2),
+      behavior: "smooth",
+    });
+  }
+
+  function fitView() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+  }
+
   async function request(path: string, options: RequestInit) {
     setState({ error: null, loading: true, success: null });
-
     const response = await fetch(`${apiBaseUrl()}${path}`, {
       ...options,
       headers: {
@@ -286,9 +422,8 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
         ...(options.headers ?? {}),
       },
     });
-
     if (!response.ok) {
-      let detail = "Structure update failed.";
+      let detail = "Luna could not save this change.";
       try {
         const body = (await response.json()) as { detail?: string };
         detail = body.detail ?? detail;
@@ -307,7 +442,7 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
       router.refresh();
     } catch (error) {
       setState({
-        error: error instanceof Error ? error.message : "Structure update failed.",
+        error: error instanceof Error ? error.message : "Luna could not save this change.",
         loading: false,
         success: null,
       });
@@ -316,31 +451,30 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
 
   async function createEntity(formData: FormData) {
     await withState(async () => {
-      const metadata = parseMetadata(createMetadata);
+      const entityType = String(formData.get("entity_type") ?? createType);
       await request("/api/household/entities", {
         body: JSON.stringify({
           display_name: String(formData.get("display_name") ?? ""),
-          entity_type: String(formData.get("entity_type") ?? ""),
-          metadata,
+          entity_type: entityType,
+          metadata: detailsFromForm(formData, entityType),
         }),
         method: "POST",
       });
-      setCreateMetadata("");
-    }, "Entity created.");
+    }, "Added to your household.");
   }
 
   async function updateEntity(entityId: string, formData: FormData) {
     await withState(async () => {
-      const metadata = parseMetadata(String(formData.get("metadata") ?? ""));
+      const entityType = String(formData.get("entity_type") ?? selectedNode?.node_type ?? "");
       await request(`/api/household/entities/${entityId}`, {
         body: JSON.stringify({
           display_name: String(formData.get("display_name") ?? ""),
-          entity_type: String(formData.get("entity_type") ?? ""),
-          metadata,
+          entity_type: entityType,
+          metadata: detailsFromForm(formData, entityType),
         }),
         method: "PATCH",
       });
-    }, "Entity updated.");
+    }, "Details updated.");
   }
 
   async function createRelationship(formData: FormData) {
@@ -349,14 +483,8 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
       const targetEntityId = String(formData.get("target_entity_id") ?? "");
       const source = nodesById.get(sourceEntityId);
       const target = nodesById.get(targetEntityId);
-
-      if (sourceEntityId === targetEntityId) {
-        throw new Error("Choose two different nodes for a relationship.");
-      }
-      if (!source || !target) {
-        throw new Error("Choose a source and target node.");
-      }
-
+      if (sourceEntityId === targetEntityId) throw new Error("Choose two different items to link.");
+      if (!source || !target) throw new Error("Choose both items to link.");
       await request("/api/household/relationships", {
         body: JSON.stringify({
           relationship_type: String(formData.get("relationship_type") ?? ""),
@@ -367,26 +495,20 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
         }),
         method: "POST",
       });
-    }, "Relationship created.");
+    }, "Items linked.");
   }
 
   async function deleteRelationship(relationshipId: string) {
     await withState(async () => {
-      await request(`/api/household/relationships/${relationshipId}`, {
-        method: "DELETE",
-      });
-    }, "Relationship deleted.");
+      await request(`/api/household/relationships/${relationshipId}`, { method: "DELETE" });
+    }, "Link removed.");
   }
 
   async function decideSuggestion(suggestionId: string, decision: "accept" | "reject") {
     await withState(async () => {
-      await request(`/api/household/suggestions/${suggestionId}/${decision}`, {
-        method: "POST",
-      });
-    }, decision === "accept" ? "Suggestion accepted." : "Suggestion rejected.");
-    if (expandedSuggestionId === suggestionId) {
-      setExpandedSuggestionId(null);
-    }
+      await request(`/api/household/suggestions/${suggestionId}/${decision}`, { method: "POST" });
+    }, decision === "accept" ? "Luna updated the household." : "Luna will not suggest that again.");
+    if (expandedSuggestionId === suggestionId) setExpandedSuggestionId(null);
   }
 
   function openRelationshipFromSelected() {
@@ -397,52 +519,76 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
   }
 
   return (
-    <section className="structureWorkspace" aria-label="Household structure editor">
+    <section className="structureWorkspace" aria-label="Household navigator">
       <div className="structureActionBar">
         <div>
-          <h2>Household structure</h2>
-          <span>{graph.nodes.length} nodes, {graph.relationships.length} relationships</span>
+          <h2>Household navigator</h2>
+          <span>{graph.nodes.length} items Luna knows about</span>
         </div>
         <div className="structureToolbar">
           <button type="button" onClick={() => setMode("createEntity")}>
-            Add entity
+            Add household item
           </button>
-          <button
-            disabled={graph.nodes.length < 2}
-            onClick={() => setMode("createRelationship")}
-            type="button"
-          >
-            Add relationship
+          <button disabled={graph.nodes.length < 2} onClick={() => setMode("createRelationship")} type="button">
+            Link items
+          </button>
+          <button type="button" onClick={fitView}>
+            Fit view
+          </button>
+          <button type="button" onClick={() => setFocusSelected(!focusSelected)}>
+            {focusSelected ? "Show all" : "Focus selected"}
           </button>
         </div>
+      </div>
+
+      <div className="groupFilterBar" aria-label="Household groups">
+        {GROUPS.map((group) => {
+          const count =
+            group.id === "all"
+              ? graph.nodes.length
+              : graph.nodes.filter((node) => group.types.includes(node.node_type)).length;
+          return (
+            <button
+              className={selectedGroup === group.id ? "activeGroupChip" : ""}
+              key={group.id}
+              onClick={() => setSelectedGroup(group.id)}
+              type="button"
+            >
+              {group.label}
+              <span>{count}</span>
+            </button>
+          );
+        })}
       </div>
 
       {mode === "createEntity" ? (
         <form action={createEntity} className="structureQuickForm">
           <label>
-            <span>Entity type</span>
-            <input
-              list="entity-type-presets"
+            <span>Type</span>
+            <select
               name="entity_type"
-              placeholder="family_trust, property, vehicle"
-              required
-              type="text"
-            />
+              onChange={(event) => setCreateType(event.target.value)}
+              value={createType}
+            >
+              {ENTITY_TYPE_PRESETS.map((entityType) => (
+                <option key={entityType} value={entityType}>
+                  {titleCase(entityType)}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
-            <span>Display name</span>
-            <input name="display_name" placeholder="Smith Family Trust" required type="text" />
+            <span>{nameLabelFor(createType)}</span>
+            <input name="display_name" placeholder="12 Smith Street" required type="text" />
           </label>
-          <label className="metadataField">
-            <span>Metadata JSON</span>
-            <textarea
-              onChange={(event) => setCreateMetadata(event.target.value)}
-              placeholder={'{\n  "role": "primary residence"\n}'}
-              value={createMetadata}
-            />
-          </label>
+          {detailFieldsFor(createType).map((field) => (
+            <label key={field.key}>
+              <span>{field.label}</span>
+              <input name={`detail_${field.key}`} placeholder={field.placeholder} type="text" />
+            </label>
+          ))}
           <div className="formButtonRow">
-            <button disabled={state.loading} type="submit">Create</button>
+            <button disabled={state.loading} type="submit">Add</button>
             <button disabled={state.loading} onClick={() => setMode("none")} type="button">
               Cancel
             </button>
@@ -453,111 +599,62 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
       {mode === "createRelationship" ? (
         <form action={createRelationship} className="structureQuickForm">
           <label>
-            <span>Source</span>
-            <select
-              defaultValue={selectedNode?.id ?? ""}
-              disabled={graph.nodes.length === 0}
-              name="source_entity_id"
-              required
-            >
-              <option value="">Select source</option>
+            <span>From</span>
+            <select defaultValue={selectedNode?.id ?? ""} disabled={graph.nodes.length === 0} name="source_entity_id" required>
+              <option value="">Choose item</option>
               {graph.nodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {entityOptionLabel(node)}
-                </option>
+                <option key={node.id} value={node.id}>{entityOptionLabel(node)}</option>
               ))}
             </select>
           </label>
           <label>
-            <span>Relationship</span>
-            <input
-              list="relationship-examples"
-              name="relationship_type"
-              onChange={(event) => setRelationshipType(event.target.value)}
-              required
-              type="text"
-              value={relationshipType}
-            />
+            <span>Link</span>
+            <input list="relationship-examples" name="relationship_type" onChange={(event) => setRelationshipType(event.target.value)} required type="text" value={relationshipType} />
           </label>
           <label>
-            <span>Target</span>
+            <span>To</span>
             <select disabled={graph.nodes.length === 0} name="target_entity_id" required>
-              <option value="">Select target</option>
+              <option value="">Choose item</option>
               {graph.nodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {entityOptionLabel(node)}
-                </option>
+                <option key={node.id} value={node.id}>{entityOptionLabel(node)}</option>
               ))}
             </select>
           </label>
           <div className="formButtonRow">
-            <button disabled={state.loading || graph.nodes.length < 2} type="submit">
-              Connect
-            </button>
-            <button disabled={state.loading} onClick={() => setMode("none")} type="button">
-              Cancel
-            </button>
+            <button disabled={state.loading || graph.nodes.length < 2} type="submit">Link</button>
+            <button disabled={state.loading} onClick={() => setMode("none")} type="button">Cancel</button>
           </div>
         </form>
       ) : null}
 
-      <datalist id="entity-type-presets">
-        {ENTITY_TYPE_PRESETS.map((entityType) => (
-          <option key={entityType} value={entityType} />
-        ))}
-      </datalist>
       <datalist id="relationship-examples">
         {RELATIONSHIP_EXAMPLES.map((example) => (
           <option key={example} value={example} />
         ))}
       </datalist>
 
-      {state.error ? (
-        <p className="formMessage errorMessage" role="alert">
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <p className="formMessage errorMessage" role="alert">{state.error}</p> : null}
       {state.success ? <p className="formMessage successMessage">{state.success}</p> : null}
 
       <div className="structureTreeLayout">
-        <div className="treeCanvas" aria-label="Household knowledge graph">
+        <div className="treeCanvas" aria-label="Household map" ref={canvasRef}>
           {graph.nodes.length === 0 ? (
             <div className="treeEmptyState">
-              <strong>Add your first entity to start building your household knowledge graph.</strong>
-              <span>Start with a family member, family trust, property, then supplier.</span>
+              <strong>Add your first household item.</strong>
+              <span>Luna can also find people, properties, vehicles, suppliers, and policies from documents you upload.</span>
             </div>
           ) : (
-            <div
-              className="treeViewport"
-              style={{ height: layout.height, width: layout.width }}
-            >
-              <svg
-                aria-hidden="true"
-                className="relationshipLayer"
-                height={layout.height}
-                viewBox={`0 0 ${layout.width} ${layout.height}`}
-                width={layout.width}
-              >
+            <div className="treeViewport" style={{ height: layout.height, width: layout.width }}>
+              <svg aria-hidden="true" className="relationshipLayer" height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width}>
                 <defs>
-                  <marker
-                    id="tree-arrow"
-                    markerHeight="8"
-                    markerWidth="8"
-                    orient="auto"
-                    refX="7"
-                    refY="4"
-                    viewBox="0 0 8 8"
-                  >
+                  <marker id="tree-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4" viewBox="0 0 8 8">
                     <path d="M0,0 L8,4 L0,8 Z" fill="#9aa9a3" />
                   </marker>
                 </defs>
                 {graph.relationships.map((relationship) => {
                   const source = layout.positionedNodes.get(relationship.source_entity_id);
                   const target = layout.positionedNodes.get(relationship.target_entity_id);
-                  if (!source || !target) {
-                    return null;
-                  }
-
+                  if (!source || !target) return null;
                   const startX = source.x + NODE_WIDTH / 2;
                   const startY = source.y + NODE_HEIGHT;
                   const endX = target.x + NODE_WIDTH / 2;
@@ -566,111 +663,74 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
                   const labelX = startX + (endX - startX) / 2;
                   const labelY = midY - 8;
                   const path = `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`;
-
+                  const dimmed =
+                    (focusSelected && selectedNodeId && !connectedNodeIds.has(source.id) && !connectedNodeIds.has(target.id)) ||
+                    (selectedGroup !== "all" && !selectedGroupTypes.includes(source.node_type) && !selectedGroupTypes.includes(target.node_type));
                   return (
-                    <g key={relationship.id}>
-                      <path
-                        className="relationshipPath"
-                        d={path}
-                        markerEnd="url(#tree-arrow)"
-                      />
-                      <foreignObject
-                        height="30"
-                        width="140"
-                        x={labelX - 70}
-                        y={labelY}
-                      >
-                        <div className="relationshipLabel">
-                          {normalizedLabel(relationship.relationship_type)}
-                        </div>
+                    <g className={dimmed ? "dimmedRelationship" : ""} key={relationship.id}>
+                      <path className="relationshipPath" d={path} markerEnd="url(#tree-arrow)" />
+                      <foreignObject height="30" width="140" x={labelX - 70} y={labelY}>
+                        <div className="relationshipLabel">{normalizedLabel(relationship.relationship_type)}</div>
                       </foreignObject>
                     </g>
                   );
                 })}
               </svg>
 
-              {Array.from(layout.positionedNodes.values()).map((node) => (
-                <button
-                  aria-pressed={selectedNodeId === node.id}
-                  className={`treeNode type-${node.node_type} ${
-                    selectedNodeId === node.id ? "selectedTreeNode" : ""
-                  }`}
-                  key={node.id}
-                  onClick={() => {
-                    setSelectedNodeId(node.id);
-                    setMode("none");
-                  }}
-                  style={{
-                    height: NODE_HEIGHT,
-                    left: node.x,
-                    top: node.y,
-                    width: NODE_WIDTH,
-                  }}
-                  type="button"
-                >
-                  <span className="nodeIcon">{nodeInitial(node.node_type)}</span>
-                  <span className="nodeText">
-                    <strong>{node.display_name}</strong>
-                    <span>{normalizedLabel(node.node_type)}</span>
-                  </span>
-                </button>
-              ))}
+              {Array.from(layout.positionedNodes.values()).map((node) => {
+                const dimmed =
+                  (focusSelected && selectedNodeId && !connectedNodeIds.has(node.id)) ||
+                  (selectedGroup !== "all" && !selectedGroupTypes.includes(node.node_type));
+                return (
+                  <button
+                    aria-pressed={selectedNodeId === node.id}
+                    className={`treeNode type-${node.node_type} ${selectedNodeId === node.id ? "selectedTreeNode" : ""} ${dimmed ? "dimmedTreeNode" : ""}`}
+                    key={node.id}
+                    onClick={() => focusNode(node.id)}
+                    style={{ height: NODE_HEIGHT, left: node.x, top: node.y, width: NODE_WIDTH }}
+                    type="button"
+                  >
+                    <span className="nodeIcon">{nodeInitial(node.node_type)}</span>
+                    <span className="nodeText">
+                      <strong>{node.display_name}</strong>
+                      <span>{titleCase(node.node_type)}</span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
 
-        <aside className="entityDetailsPanel" aria-label="Entity details">
-          <section className="suggestionsPanel" aria-label="Graph suggestions">
+        <aside className="entityDetailsPanel" aria-label="Household item details">
+          <section className="suggestionsPanel" aria-label="Luna found">
             <div className="suggestionsHeader">
               <div>
-                <h3>Suggestions</h3>
-                <span>{suggestions.length} pending</span>
+                <h3>Luna found</h3>
+                <span>{suggestions.length} awaiting confirmation</span>
               </div>
             </div>
             {suggestions.length === 0 ? (
-              <p className="emptyState">No graph suggestions yet. New document and bill patterns will appear here.</p>
+              <p className="emptyState">Upload documents and Luna will suggest household links and items here.</p>
             ) : (
               <div className="suggestionList">
                 {suggestions.map((suggestion) => (
                   <article className="suggestionCard" key={suggestion.id}>
                     <div>
-                      <strong>{suggestionActionLabel(suggestion.suggested_action)}</strong>
-                      <span>{suggestionSummary(suggestion)}</span>
+                      <strong>{suggestionTitle(suggestion)}</strong>
+                      <span>{confidenceLabel(suggestion.confidence)}</span>
                     </div>
                     <p>{suggestion.reasoning}</p>
-                    <div className="suggestionMeta">
-                      <span>{Math.round(suggestion.confidence * 100)}% confidence</span>
-                      <span>{normalizedLabel(suggestion.suggested_action)}</span>
-                    </div>
                     {expandedSuggestionId === suggestion.id ? (
-                      <code>{JSON.stringify(suggestion.action_payload, null, 2)}</code>
+                      <details className="advancedDetails" open>
+                        <summary>Advanced details</summary>
+                        <code>{JSON.stringify(suggestion.action_payload, null, 2)}</code>
+                      </details>
                     ) : null}
                     <div className="suggestionActions">
-                      <button
-                        disabled={state.loading}
-                        onClick={() => decideSuggestion(suggestion.id, "accept")}
-                        type="button"
-                      >
-                        Accept
-                      </button>
-                      <button
-                        disabled={state.loading}
-                        onClick={() => decideSuggestion(suggestion.id, "reject")}
-                        type="button"
-                      >
-                        Reject
-                      </button>
-                      <button
-                        disabled={state.loading}
-                        onClick={() =>
-                          setExpandedSuggestionId(
-                            expandedSuggestionId === suggestion.id ? null : suggestion.id,
-                          )
-                        }
-                        type="button"
-                      >
-                        View details
-                      </button>
+                      <button disabled={state.loading} onClick={() => decideSuggestion(suggestion.id, "accept")} type="button">Accept</button>
+                      <button disabled={state.loading} onClick={() => decideSuggestion(suggestion.id, "reject")} type="button">Reject</button>
+                      <button disabled={state.loading} onClick={() => setExpandedSuggestionId(expandedSuggestionId === suggestion.id ? null : suggestion.id)} type="button">Details</button>
                     </div>
                   </article>
                 ))}
@@ -684,76 +744,64 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
                 <span className="nodeIcon">{nodeInitial(selectedNode.node_type)}</span>
                 <div>
                   <strong>{selectedNode.display_name}</strong>
-                  <span>{normalizedLabel(selectedNode.node_type)}</span>
+                  <span>{titleCase(selectedNode.node_type)}</span>
                 </div>
               </div>
 
               <div className="detailsActions">
                 {selectedNode.node_type !== "document" && selectedNode.node_type !== "bill" ? (
-                  <button type="button" onClick={() => setMode("editEntity")}>
-                    Edit entity
-                  </button>
+                  <button type="button" onClick={() => setMode("editEntity")}>Edit details</button>
                 ) : null}
-                <button type="button" onClick={openRelationshipFromSelected}>
-                  Create relationship
-                </button>
+                <button type="button" onClick={openRelationshipFromSelected}>Link another item</button>
               </div>
 
-              {mode === "editEntity" &&
-              selectedNode.node_type !== "document" &&
-              selectedNode.node_type !== "bill" ? (
-                <form
-                  action={(formData) => updateEntity(selectedNode.id, formData)}
-                  className="detailsEditForm"
-                >
-                  <label>
-                    <span>Name</span>
-                    <input
-                      defaultValue={selectedNode.display_name}
-                      name="display_name"
-                      required
-                      type="text"
-                    />
-                  </label>
+              {mode === "editEntity" && selectedNode.node_type !== "document" && selectedNode.node_type !== "bill" ? (
+                <form action={(formData) => updateEntity(selectedNode.id, formData)} className="detailsEditForm">
                   <label>
                     <span>Type</span>
-                    <input
-                      defaultValue={selectedNode.node_type}
-                      list="entity-type-presets"
-                      name="entity_type"
-                      required
-                      type="text"
-                    />
+                    <select defaultValue={selectedNode.node_type} name="entity_type">
+                      {ENTITY_TYPE_PRESETS.map((entityType) => (
+                        <option key={entityType} value={entityType}>{titleCase(entityType)}</option>
+                      ))}
+                    </select>
                   </label>
                   <label>
-                    <span>Metadata JSON</span>
-                    <textarea
-                      defaultValue={metadataToText(selectedNode.metadata)}
-                      name="metadata"
-                    />
+                    <span>{nameLabelFor(selectedNode.node_type)}</span>
+                    <input defaultValue={selectedNode.display_name} name="display_name" required type="text" />
                   </label>
+                  {detailFieldsFor(selectedNode.node_type).map((field) => (
+                    <label key={field.key}>
+                      <span>{field.label}</span>
+                      <input defaultValue={detailValue(selectedNode.metadata, field.key)} name={`detail_${field.key}`} type="text" />
+                    </label>
+                  ))}
                   <div className="formButtonRow">
                     <button disabled={state.loading} type="submit">Save</button>
-                    <button disabled={state.loading} onClick={() => setMode("none")} type="button">
-                      Cancel
-                    </button>
+                    <button disabled={state.loading} onClick={() => setMode("none")} type="button">Cancel</button>
                   </div>
                 </form>
               ) : null}
 
               <section className="detailSection">
-                <h3>Metadata</h3>
+                <h3>Details</h3>
                 {selectedNode.metadata && Object.keys(selectedNode.metadata).length > 0 ? (
-                  <code>{metadataToText(selectedNode.metadata)}</code>
+                  <div className="detailsList">
+                    {Object.entries(selectedNode.metadata).map(([key, value]) => (
+                      <div key={key}>
+                        <span>{titleCase(key)}</span>
+                        <strong>{typeof value === "object" ? JSON.stringify(value) : String(value)}</strong>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
-                  <p>No metadata yet.</p>
+                  <p>No details yet.</p>
                 )}
               </section>
 
               <section className="detailSection">
-                <h3>Relationships</h3>
+                <h3>Linked items</h3>
                 {selectedRelationships.length === 0 ? (
-                  <p>No relationships yet.</p>
+                  <p>No linked items yet.</p>
                 ) : (
                   <div className="detailRelationshipList">
                     {selectedRelationships.map((relationship) => {
@@ -766,13 +814,7 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
                             {normalizedLabel(relationship.relationship_type)}{" "}
                             <strong>{target?.display_name ?? relationship.target_entity_type}</strong>
                           </span>
-                          <button
-                            disabled={state.loading}
-                            onClick={() => deleteRelationship(relationship.id)}
-                            type="button"
-                          >
-                            Delete
-                          </button>
+                          <button disabled={state.loading} onClick={() => deleteRelationship(relationship.id)} type="button">Remove</button>
                         </div>
                       );
                     })}
@@ -781,22 +823,20 @@ export function StructureEditor({ graph, suggestions }: StructureEditorProps) {
               </section>
 
               <section className="detailSection">
-                <h3>Linked documents and bills</h3>
+                <h3>Documents and bills</h3>
                 {linkedRecords.length === 0 ? (
                   <p>No linked documents or bills yet.</p>
                 ) : (
                   <div className="linkedRecordList">
                     {linkedRecords.map((record) => (
-                      <span key={record.id}>
-                        {record.display_name} ({normalizedLabel(record.node_type)})
-                      </span>
+                      <span key={record.id}>{record.display_name} ({titleCase(record.node_type)})</span>
                     ))}
                   </div>
                 )}
               </section>
             </>
           ) : (
-            <p className="emptyState">Select a node to see details, relationships, and linked records.</p>
+            <p className="emptyState">Select an item to see details, links, and documents.</p>
           )}
         </aside>
       </div>

@@ -4,6 +4,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.api import household
+from app.services.graph_suggestions import (
+    _detect_account_number,
+    _detect_address,
+    _detect_policy_number,
+    _detect_vehicle,
+)
 
 
 ACTIVE_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
@@ -92,7 +98,10 @@ class FakeCursor:
                     "original_filename": "agl-electricity.pdf",
                     "suggested_cabinet_path": None,
                     "confirmed_cabinet_path": None,
-                    "text_content": "Electricity bill for 12 Smith Street",
+                    "text_content": (
+                        "Electricity bill for 12 Smith Street. Account number 123 456 789. "
+                        "Policy number CAR-778899. Vehicle Honda Civic 2026 registration ABC123."
+                    ),
                 }
             ]
             return
@@ -249,6 +258,27 @@ def json_value(value: Any) -> Any:
     return getattr(value, "obj", value)
 
 
+def test_document_entity_detectors_extract_household_details() -> None:
+    text = (
+        "Renewal notice for 12 Smith Street. Account number 123 456 789. "
+        "Policy number CAR-778899. Vehicle Honda Civic 2026 registration ABC123."
+    )
+
+    vehicle = _detect_vehicle(text)
+
+    assert _detect_address(text) == "12 Smith Street"
+    assert _detect_account_number(text) == "123 456 789"
+    assert _detect_policy_number(text) == "CAR-778899"
+    assert vehicle is not None
+    assert vehicle["display_name"] == "2026 Honda ABC123"
+    assert vehicle["metadata"] == {
+        "make": "Honda",
+        "year": "2026",
+        "registration": "ABC123",
+        "notes": "Detected from document text.",
+    }
+
+
 def test_graph_suggestions_are_generated_and_rejections_are_not_recreated(monkeypatch: Any) -> None:
     state = SuggestionState()
     install_fake_db(monkeypatch, state)
@@ -260,6 +290,16 @@ def test_graph_suggestions_are_generated_and_rejections_are_not_recreated(monkey
         "attach_document",
         "connect_entities",
     }
+    create_entity_payloads = [
+        suggestion.action_payload
+        for suggestion in initial.suggestions
+        if suggestion.suggested_action == "create_entity"
+    ]
+    assert any(payload.get("entity_type") == "vehicle" for payload in create_entity_payloads)
+    assert any(
+        payload.get("entity_type") == "insurance_policy"
+        for payload in create_entity_payloads
+    )
 
     rejected = household.reject_suggestion(initial.suggestions[0].id)
     after_rejection = household.graph_suggestions()
