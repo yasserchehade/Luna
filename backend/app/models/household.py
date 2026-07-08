@@ -54,8 +54,22 @@ class EntityRelationshipCreate(BaseModel):
     confidence: float | None = None
 
 
+class EntityRelationshipUpdate(BaseModel):
+    source_entity_id: str | None = None
+    relationship_type: str | None = Field(default=None, min_length=1, max_length=80)
+    target_entity_id: str | None = None
+    source_entity_type: str | None = Field(default=None, min_length=1, max_length=80)
+    target_entity_type: str | None = Field(default=None, min_length=1, max_length=80)
+    provenance_document_id: str | None = None
+    confidence: float | None = None
+
+
 class EntityRelationshipActionResponse(BaseModel):
     relationship: EntityRelationship
+
+
+class HouseholdEntityDeleteResponse(BaseModel):
+    deleted_entity_id: str
 
 
 class EntityRelationshipDeleteResponse(BaseModel):

@@ -5,7 +5,11 @@ import { FormEvent, useRef, useState } from "react";
 
 type UploadState = "idle" | "uploading" | "error";
 
-export function UploadBillForm() {
+type UploadBillFormProps = {
+  compact?: boolean;
+};
+
+export function UploadBillForm({ compact = false }: UploadBillFormProps) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<UploadState>("idle");
@@ -52,9 +56,9 @@ export function UploadBillForm() {
   }
 
   return (
-    <form className="uploadForm" onSubmit={handleSubmit}>
+    <form className={`uploadForm ${compact ? "compactUploadForm" : ""}`} onSubmit={handleSubmit}>
       <label className="filePicker">
-        <span>PDF bill</span>
+        <span>{compact ? "PDF document or bill" : "PDF bill"}</span>
         <input ref={inputRef} type="file" name="file" accept="application/pdf" />
       </label>
       <button type="submit" disabled={state === "uploading"}>

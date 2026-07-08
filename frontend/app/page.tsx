@@ -1,6 +1,6 @@
-import { UploadBillForm } from "../components/UploadBillForm";
 import { BillActions } from "../components/BillActions";
 import { CabinetActions } from "../components/CabinetActions";
+import { CreateMenu } from "../components/CreateMenu";
 import { GraphLinkActions } from "../components/GraphLinkActions";
 import { StructureEditor } from "../components/StructureEditor";
 
@@ -112,7 +112,7 @@ const NAV_ITEMS: { href: string; icon: string; label: string; tab: ActiveTab }[]
   { href: "/", icon: "DB", label: "Dashboard", tab: "dashboard" },
   { href: "/?tab=cabinet", icon: "CB", label: "Cabinet", tab: "cabinet" },
   { href: "/?tab=bills", icon: "BI", label: "Bills", tab: "bills" },
-  { href: "/?tab=structure", icon: "ST", label: "Structure", tab: "structure" },
+  { href: "/?tab=structure", icon: "NV", label: "Navigator", tab: "structure" },
   { href: "/?tab=assistant", icon: "AI", label: "Assistant", tab: "assistant" },
   { href: "/?tab=audit", icon: "AU", label: "Audit Log", tab: "audit" },
   { href: "/?tab=settings", icon: "SE", label: "Settings", tab: "settings" },
@@ -132,11 +132,11 @@ const PAGE_META: Record<ActiveTab, { title: string; subtitle: string }> = {
     subtitle: "Confirm Luna's understanding of suppliers, amounts, due dates, and household links.",
   },
   structure: {
-    title: "Household navigator",
+    title: "Household Navigator",
     subtitle: "People, properties, vehicles, suppliers, policies, and documents in one map.",
   },
   assistant: {
-    title: "Knowledge assistant",
+    title: "Assistant",
     subtitle: "Ask Luna questions grounded in your household records.",
   },
   audit: {
@@ -317,6 +317,7 @@ export default async function DashboardPage({
 }: {
   searchParams?: Promise<{
     ask?: string | string[];
+    mode?: string | string[];
     q?: string | string[];
     tab?: string | string[];
   }>;
@@ -329,6 +330,15 @@ export default async function DashboardPage({
   const assistantQuestion = Array.isArray(resolvedSearchParams?.ask)
     ? resolvedSearchParams?.ask[0] ?? ""
     : resolvedSearchParams?.ask ?? "";
+  const navigatorModeParam = Array.isArray(resolvedSearchParams?.mode)
+    ? resolvedSearchParams?.mode[0]
+    : resolvedSearchParams?.mode;
+  const navigatorInitialMode =
+    navigatorModeParam === "add"
+      ? "createEntity"
+      : navigatorModeParam === "link"
+        ? "createRelationship"
+        : undefined;
   const [bills, household, householdGraph, documents, graphSuggestions] = await Promise.all([
     getBills(),
     getHouseholdSummary(),
@@ -407,9 +417,9 @@ export default async function DashboardPage({
           </div>
           <div className="pageHeaderActions">
             <a className="assistantButton" href="/?tab=assistant">
-              Knowledge Assistant
+              Assistant
             </a>
-            <UploadBillForm />
+            <CreateMenu />
           </div>
         </section>
 
@@ -644,7 +654,11 @@ export default async function DashboardPage({
       ) : null}
 
       {activeTab === "structure" ? (
-        <StructureEditor graph={householdGraph} suggestions={graphSuggestions} />
+        <StructureEditor
+          graph={householdGraph}
+          initialMode={navigatorInitialMode}
+          suggestions={graphSuggestions}
+        />
       ) : null}
 
       {activeTab === "assistant" ? (

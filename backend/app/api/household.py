@@ -7,11 +7,13 @@ from app.models.household import (
     EntityRelationshipActionResponse,
     EntityRelationshipCreate,
     EntityRelationshipDeleteResponse,
+    EntityRelationshipUpdate,
     EntityRelationshipsForEntity,
     GraphSuggestionActionResponse,
     GraphSuggestionList,
     HouseholdEntityActionResponse,
     HouseholdEntityCreate,
+    HouseholdEntityDeleteResponse,
     HouseholdEntityUpdate,
     HouseholdEntity,
     HouseholdGraphNode,
@@ -435,6 +437,74 @@ def update_entity(
     return HouseholdEntityActionResponse(entity=_entity_from_row(row))
 
 
+@router.delete(
+    "/entities/{entity_id}",
+    response_model=HouseholdEntityDeleteResponse,
+)
+def delete_entity(entity_id: str) -> HouseholdEntityDeleteResponse:
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, entity_type, display_name
+                FROM household_entities
+                WHERE workspace_id = %s
+                    AND id = %s
+                """,
+                (workspace_id, entity_id),
+            )
+            entity_row = cursor.fetchone()
+            if entity_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Household item not found.",
+                )
+
+            cursor.execute(
+                """
+                SELECT id
+                FROM entity_relationships
+                WHERE workspace_id = %s
+                    AND (source_entity_id = %s OR target_entity_id = %s)
+                LIMIT 1
+                """,
+                (workspace_id, entity_id, entity_id),
+            )
+            if cursor.fetchone() is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Remove this item's links before deleting it.",
+                )
+
+            cursor.execute(
+                """
+                DELETE FROM household_entities
+                WHERE workspace_id = %s
+                    AND id = %s
+                RETURNING id, entity_type, display_name
+                """,
+                (workspace_id, entity_id),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=workspace_id,
+                    event_type="household_entity.deleted",
+                    entity_type=row["entity_type"],
+                    entity_id=row["id"],
+                    metadata={"display_name": row["display_name"]},
+                )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Household item not found.",
+        )
+    return HouseholdEntityDeleteResponse(deleted_entity_id=str(row["id"]))
+
+
 @router.get("/graph", response_model=HouseholdGraph)
 def household_graph() -> HouseholdGraph:
     with get_connection() as connection:
@@ -636,6 +706,144 @@ def create_relationship(
 
     if row is None:
         raise RuntimeError("Relationship create did not return a saved relationship.")
+    return EntityRelationshipActionResponse(relationship=_relationship_from_row(row))
+
+
+@router.patch(
+    "/relationships/{relationship_id}",
+    response_model=EntityRelationshipActionResponse,
+)
+def update_relationship(
+    relationship_id: str,
+    request: EntityRelationshipUpdate,
+) -> EntityRelationshipActionResponse:
+    fields = request.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one link field must be provided.",
+        )
+
+    with get_connection() as connection:
+        workspace_id = get_default_workspace_id(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                RELATIONSHIP_SELECT
+                + """
+                WHERE workspace_id = %s
+                    AND id = %s
+                """,
+                (workspace_id, relationship_id),
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Link not found.",
+                )
+
+            source_entity_id = fields.get("source_entity_id") or str(current["source_entity_id"])
+            target_entity_id = fields.get("target_entity_id") or str(current["target_entity_id"])
+            relationship_type = (
+                _normalize_kind(fields["relationship_type"])
+                if fields.get("relationship_type") is not None
+                else current["relationship_type"]
+            )
+            source_entity_type = _resolve_relationship_node(
+                cursor,
+                workspace_id=workspace_id,
+                requested_entity_type=fields.get("source_entity_type")
+                or current["source_entity_type"],
+                entity_id=source_entity_id,
+                side="source",
+            )
+            target_entity_type = _resolve_relationship_node(
+                cursor,
+                workspace_id=workspace_id,
+                requested_entity_type=fields.get("target_entity_type")
+                or current["target_entity_type"],
+                entity_id=target_entity_id,
+                side="target",
+            )
+
+            if (
+                source_entity_type == target_entity_type
+                and source_entity_id == target_entity_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Choose two different items to link.",
+                )
+
+            provenance_document_id = (
+                fields["provenance_document_id"]
+                if "provenance_document_id" in fields
+                else current["provenance_document_id"]
+            )
+            confidence = (
+                fields["confidence"]
+                if "confidence" in fields
+                else current["confidence"]
+            )
+
+            cursor.execute(
+                """
+                UPDATE entity_relationships
+                SET
+                    source_entity_type = %s,
+                    source_entity_id = %s,
+                    relationship_type = %s,
+                    target_entity_type = %s,
+                    target_entity_id = %s,
+                    provenance_document_id = %s,
+                    confidence = %s
+                WHERE workspace_id = %s
+                    AND id = %s
+                RETURNING
+                    id,
+                    source_entity_type,
+                    source_entity_id,
+                    relationship_type,
+                    target_entity_type,
+                    target_entity_id,
+                    provenance_document_id,
+                    confidence
+                """,
+                (
+                    source_entity_type,
+                    source_entity_id,
+                    relationship_type,
+                    target_entity_type,
+                    target_entity_id,
+                    provenance_document_id,
+                    confidence,
+                    workspace_id,
+                    relationship_id,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                record_audit_event(
+                    cursor,
+                    workspace_id=workspace_id,
+                    event_type="relationship.updated",
+                    entity_type="relationship",
+                    entity_id=row["id"],
+                    metadata={
+                        "updated_fields": sorted(fields.keys()),
+                        "source_entity_type": row["source_entity_type"],
+                        "source_entity_id": str(row["source_entity_id"]),
+                        "relationship_type": row["relationship_type"],
+                        "target_entity_type": row["target_entity_type"],
+                        "target_entity_id": str(row["target_entity_id"]),
+                    },
+                )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Link not found.",
+        )
     return EntityRelationshipActionResponse(relationship=_relationship_from_row(row))
 
 

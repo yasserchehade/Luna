@@ -194,6 +194,49 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.createMenu {
+  position: relative;
+}
+
+.createMenuPanel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+  min-width: 340px;
+  padding: 12px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 10;
+}
+
+.createMenuPanel a {
+  border-radius: 12px;
+  color: #344054;
+  font-weight: 800;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.createMenuPanel a:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.createMenuSection {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.createMenuSection strong {
+  font-size: 13px;
+}
+
 .assistantButton {
   border: 1px solid #c8b8ff;
   border-radius: 12px;
@@ -311,6 +354,21 @@ button:disabled {
   gap: 10px;
   justify-content: flex-end;
   padding: 10px;
+}
+
+.compactUploadForm {
+  border-radius: 12px;
+  box-shadow: none;
+  justify-content: flex-start;
+  padding: 8px;
+}
+
+.compactUploadForm .filePicker {
+  flex: 1 1 100%;
+}
+
+.compactUploadForm .filePicker input {
+  max-width: 180px;
 }
 
 .uploadForm p {
@@ -493,6 +551,17 @@ h2 {
   background: #ebe7ff;
 }
 
+.detailsActions .dangerButton,
+.detailRelationshipRow .dangerButton {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.detailsActions .dangerButton:hover,
+.detailRelationshipRow .dangerButton:hover {
+  background: #ffe4e6;
+}
+
 .structureQuickForm,
 .detailsEditForm {
   background: var(--panel);
@@ -535,12 +604,29 @@ h2 {
   color: var(--accent-strong);
 }
 
+.groupFilterBar .expandedGroupChip {
+  border-color: #bca8ff;
+  box-shadow: 0 0 0 2px rgba(109, 61, 245, 0.08);
+}
+
 .groupFilterBar span {
   background: #ffffff;
   border-radius: 999px;
   color: var(--muted);
   font-size: 12px;
   padding: 2px 7px;
+}
+
+.groupFilterBar small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.navigatorGroupHint {
+  color: var(--muted);
+  font-size: 14px;
+  margin: -6px 4px 0;
 }
 
 .structureQuickForm label,
@@ -1053,6 +1139,51 @@ h2 {
 
 .detailRelationshipRow button:hover {
   background: #f7d8c8;
+}
+
+.linkActionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.linkActionButtons button:first-child {
+  background: #f4f3ff;
+  color: var(--accent-strong);
+}
+
+.linkActionButtons button:first-child:hover {
+  background: #ebe7ff;
+}
+
+.linkEditForm {
+  display: grid;
+  gap: 9px;
+  grid-column: 1 / -1;
+}
+
+.linkEditForm label {
+  display: grid;
+  gap: 5px;
+}
+
+.linkEditForm label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.linkEditForm input,
+.linkEditForm select {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  min-height: 36px;
+  min-width: 0;
+  padding: 8px 9px;
+  width: 100%;
 }
 
 .linkedRecordList span {
