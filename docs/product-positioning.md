@@ -1,17 +1,20 @@
 # Product Positioning
 
-Luna is the Household Operating System for modern family administration.
+Luna is an AI household employee for modern family administration.
 
-It is not a bill tracker, not a replacement bank app, not an accounting system, not a calendar clone, and not a generic chatbot. Luna is the intelligence layer above the tools families already use.
+It is not a bill tracker, not a budgeting app, not a document vault, not a replacement bank app, not an accounting system, not a calendar clone, and not a generic chatbot. Luna is the employee-like operations layer above the tools families already use.
 
 ## Positioning Statement
 
-For households overwhelmed by bills, documents, portals, deadlines, and scattered information, Luna provides one intelligent interface that connects existing systems, understands household context, and proactively coordinates administrative work.
+For households overwhelmed by bills, documents, portals, deadlines, providers, obligations, and scattered information, Luna acts as a permissioned household operations employee that connects existing systems, understands household context, prepares decisions, monitors risks, and coordinates approved administrative work.
 
 ## What Luna Is
 
+- An AI household employee.
+- A household operations platform.
 - A household knowledge graph.
-- A proactive assistant for family administration.
+- A permissioned authority and approval system.
+- A proactive operator for family administration.
 - A document and obligation intelligence layer.
 - A coordination surface across email, calendars, accounting, banking, cloud storage, and portals.
 - A system of context that helps people find, understand, and act on household information.
@@ -27,12 +30,13 @@ For households overwhelmed by bills, documents, portals, deadlines, and scattere
 - Not a mandatory cloud warehouse for every family document.
 - Not just a chatbot.
 - Not just an AI bill tracker.
+- Not an unbounded autonomous agent.
 
 ## Product Wedge
 
-Bills and invoices are the first wedge because they naturally combine documents, suppliers, due dates, payments, reminders, properties, businesses, subscriptions, and tax context.
+Bills and invoices are the first wedge because they naturally combine documents, suppliers, due dates, payments, reminders, properties, businesses, subscriptions, approvals, authority, and tax context.
 
-The MVP should feel useful as a bill workflow, but the product language and architecture should make it clear that every bill is also a node in a broader household graph.
+The MVP should feel useful as an assisted household work workflow, but the product language and architecture should make it clear that every bill is also a task Luna is preparing, monitoring, or routing for approval inside a broader household graph and authority model.
 
 ## User Promise
 
@@ -44,6 +48,8 @@ Users should be able to ask Luna:
 - Where is the document for that policy?
 - What changed this week?
 - What do I need to review?
+- What needs my approval?
+- What is Luna authorised to handle?
 - What are we missing before tax time?
 
 The answer should come from connected household context, not from the user remembering which app or folder contains the information.

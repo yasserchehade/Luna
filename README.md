@@ -1,14 +1,14 @@
 # Luna
 
-Luna is a Household Operating System: an intelligence and coordination layer for modern family life.
+Luna is an AI household employee: an intelligence, authority, and coordination layer for modern family life.
 
-Families already use banking apps, MYOB, calendars, email, school portals, insurance portals, cloud storage, government systems, and utility providers. Luna is not trying to replace those systems. Luna sits above them, connects what they know, understands the relationships between household information, and helps the family manage the administrative work through one intelligent interface.
+Families already use banking apps, MYOB, calendars, email, accountants, school portals, insurance portals, cloud storage, government systems, and utility providers. Luna is not trying to replace those systems. Luna sits above them, connects what they know, understands the relationships between household information, and helps the family manage administrative work through one employee-like interface.
 
-The core promise is simple: people should not have to remember where information is stored. They should only have to remember Luna.
+The core mission is simple: eliminate repetitive household administrative work that does not add value to the family's life.
 
 ## Product Direction
 
-Luna starts with bills and invoices because they are frequent, document-heavy, deadline-driven, and painful enough to prove the system. The architecture is broader from day one: documents become structured entities, entities are connected into a household knowledge graph, and Luna uses that graph to create reminders, tasks, dashboards, and proactive briefings.
+Luna starts with household records, documents, obligations, bills, and assisted workflows because they are frequent, document-heavy, deadline-driven, authority-sensitive, and painful enough to prove the system. The architecture is broader from day one: documents become structured entities, entities are connected into a household knowledge graph, and Luna uses that graph plus an authority contract to create reminders, approval requests, tasks, dashboards, and proactive briefings.
 
 Over time Luna should coordinate:
 
@@ -18,6 +18,21 @@ Over time Luna should coordinate:
 - School obligations, family calendar events, and health appointments.
 - Government documents, tax deadlines, and cloud documents.
 - Banking and MYOB/accounting context through integrations.
+- Routine accounts payable, accounts receivable, bank reconciliation, and reporting preparation where authorised.
+
+Luna is public-facing as one employee. Internally, specialist agents may handle finance, documents, property, vehicles, insurance, scheduling, communications, and compliance work, but the household interacts with Luna only.
+
+## Authority Model
+
+Luna's actions depend on the household employment contract. The contract defines what Luna may read, write, execute, who can approve, what spending limits apply, and when work must be escalated.
+
+External connections have three levels:
+
+1. Read: Luna can observe and retrieve information.
+2. Write: Luna can create or modify records, drafts, events, folders, or similar objects.
+3. Execute: Luna can perform consequential actions such as paying bills, booking services, renewing policies, or cancelling subscriptions.
+
+The MVP is assisted, not autonomous: Luna prepares and requests approval. Real-world execution remains disabled until the authority model, approvals, and audit trails are mature.
 
 ## Stack
 
@@ -26,12 +41,13 @@ Over time Luna should coordinate:
 - Database: PostgreSQL
 - Background jobs: Celery, Redis
 - File storage: local-first user-owned cabinet storage, with optional user cloud folders or Luna encrypted cloud later
-- AI: provider-agnostic service interfaces
+- AI: provider-agnostic service interfaces with specialist agents behind one Luna interface
+- Authority: household roles, approval workflows, connection scopes, and audit trails
 - Containers: Docker Compose
 
 ## Architecture Summary
 
-External systems feed documents, events, transactions, and metadata into Luna. Luna stores or references the original source material in a user-owned household cabinet, extracts structured information, maps entities and relationships, indexes documents, creates tasks and reminders, and presents focused views for the dashboard, cabinet, household structure, and future natural-language assistant.
+External systems feed documents, events, transactions, and metadata into Luna through explicit read, write, or execute connections. Luna stores or references the original source material in a user-owned household cabinet, extracts structured information, maps entities and relationships, checks authority, indexes documents, creates tasks and reminders, prepares work for approval, and presents focused views for the dashboard, cabinet, household structure, approvals, and Luna employee interface.
 
 The MVP begins with uploaded invoices and bills:
 
@@ -39,7 +55,8 @@ The MVP begins with uploaded invoices and bills:
 2. Extract supplier, amount, due date, invoice number, and related metadata.
 3. Attach the document to household entities such as supplier, property, utility account, subscription, or business.
 4. Create reminders and review tasks.
-5. Show urgent obligations in a dashboard while keeping the household cabinet and structure available in separate views.
+5. Request approval where authority requires it.
+6. Show urgent obligations in a dashboard while keeping the household cabinet and structure available in separate views.
 
 ## Local Development
 
@@ -112,6 +129,7 @@ Luna/
 - `GET /api/audit-events` returns recent audit history for important document, bill, graph, task, reminder, and assistant actions.
 - The frontend has separate Dashboard, Cabinet, Structure, and Assistant tabs so active obligations, archived documents, household graph setup, and grounded questions do not compete for attention.
 - The Dashboard and Cabinet tabs expose basic action controls for confirming bills, marking bills paid, archiving bills, planning cabinet paths, and confirming cabinet paths.
+- Authority is not yet first-class in the schema or UI. The next architectural step is to add household roles, connection scopes, approval requests, work orders, and authority-aware audit events before enabling any write or execute integrations.
 
 The extraction implementation is intentionally a stub behind an interface so OpenAI, Claude, Gemini, or another provider can be added later without changing the API layer.
 
@@ -123,9 +141,11 @@ The Celery worker is wired into Docker Compose but does not perform real extract
 - [Principles](docs/principles.md)
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [Product Refocus](docs/product-refocus.md)
 - [Database](docs/database.md)
 - [Storage](docs/storage.md)
 - [AI Agents](docs/ai-agents.md)
+- [Authority Model](docs/authority.md)
 - [Security](docs/security.md)
 - [Product Positioning](docs/product-positioning.md)
 - [Knowledge Graph](docs/knowledge-graph.md)

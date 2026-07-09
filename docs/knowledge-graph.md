@@ -1,8 +1,8 @@
 # Knowledge Graph
 
-Luna's core product asset is a structured knowledge graph of household life.
+Luna's core product asset is a structured knowledge graph of household life, governed by an authority model.
 
-The graph connects documents, people, properties, vehicles, accounts, bills, payments, obligations, events, reminders, tasks, suppliers, policies, warranties, and assets. This is what lets Luna answer questions, create useful reminders, and coordinate across existing systems.
+The graph connects documents, people, properties, vehicles, accounts, bills, payments, obligations, events, reminders, tasks, suppliers, policies, warranties, assets, roles, and authority. This is what lets Luna answer questions, create useful reminders, prepare work, request approval, and coordinate across existing systems.
 
 The graph must be flexible enough for each household to model its own reality. One household might connect `FamilyMember -> FamilyTrust -> Property -> Documents -> Suppliers -> MaintenanceItems -> DueDates`. Another might connect a business, vehicle, insurance policy, bank account, and tax obligation differently. Luna should provide useful defaults without forcing every family into the same structure.
 
@@ -60,6 +60,7 @@ The knowledge graph lets Luna understand:
 - Where the source information came from.
 - What deadline or action it creates.
 - What other records confirm, conflict with, or complete it.
+- Whether Luna has authority to observe, prepare, write, or execute the next step.
 
 ## Initial Entity Types
 
@@ -68,6 +69,10 @@ These are starter types, not a closed list. Users should be able to create pract
 - Household
 - User
 - FamilyMember
+- HouseholdRole
+- AuthorityPolicy
+- ApprovalRequest
+- WorkOrder
 - FamilyTrust
 - Business
 - Property
@@ -95,6 +100,9 @@ These are starter types, not a closed list. Users should be able to create pract
 ## Example Relationships
 
 - Household has FamilyMembers.
+- FamilyMember has a HouseholdRole.
+- AuthorityPolicy grants or limits Luna's work for a connection, work type, member, or approver.
+- ApprovalRequest authorises, rejects, or escalates a WorkOrder.
 - FamilyMember controls, benefits from, or administers a FamilyTrust.
 - FamilyTrust owns or manages a Property.
 - Household owns or manages Properties, Vehicles, Assets, and Businesses.
@@ -106,7 +114,8 @@ These are starter types, not a closed list. Users should be able to create pract
 - InsurancePolicy covers a Property, Vehicle, Asset, or FamilyMember.
 - Warranty covers an Asset or Vehicle.
 - Reminder is triggered by a Bill, Policy, Warranty, CalendarEvent, TaxObligation, or SchoolObligation.
-- Task is created to review, pay, upload, renew, call, file, or confirm an entity.
+- WorkOrder represents prepared work such as review, pay, upload, renew, call, file, reconcile, compile, draft, or confirm.
+- Task is created to review, approve, reject, correct, or complete a WorkOrder or entity.
 
 ## Provenance
 
@@ -117,6 +126,8 @@ Every extracted entity or relationship should keep provenance where possible:
 - AI provider and model.
 - Confidence score.
 - User who confirmed or corrected the data.
+- User who approved, rejected, delegated, or escalated a proposed action.
+- Authority policy that allowed or blocked the action.
 - Timestamp of creation or update.
 
 Provenance matters because Luna will handle sensitive household information. Users need to trust not just the answer, but why Luna believes the answer.
@@ -131,8 +142,9 @@ Phase 1 should keep implementation simple while establishing graph habits:
 - Link it to a Property, Business, UtilityAccount, Subscription, or FamilyMember when available.
 - Generate a suggested cabinet path from graph relationships and extracted metadata.
 - Create a Reminder from the due date.
-- Create a Task when human review is needed.
+- Create a Task or ApprovalRequest when human review or authority is needed.
 - Preserve extraction confidence and source evidence.
+- Preserve whether Luna's work is observed, prepared, proposed, approved, dismissed, or escalated.
 - Treat family structure as durable context.
 - Treat bills, tasks, reminders, due dates, and maintenance work as operational records that can be completed, dismissed, paid, or archived.
 

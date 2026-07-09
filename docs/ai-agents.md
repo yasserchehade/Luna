@@ -1,8 +1,10 @@
 # AI Agents
 
-Luna uses AI as an understanding and coordination layer over household information. The goal is not to build a chatbot bolted onto a bill tracker. The goal is a proactive assistant that reads documents, extracts structure, maps relationships, creates reminders, and helps the household understand what needs attention.
+Luna uses AI as an understanding and coordination layer over household information. The goal is not to build a chatbot bolted onto a bill tracker. The goal is an AI household employee that reads documents, extracts structure, maps relationships, creates reminders, prepares work, requests approval, and helps the household understand what needs attention.
 
-AI output should be grounded in Luna's documents, structured database records, and integration data. Sensitive actions require human approval.
+AI output should be grounded in Luna's documents, structured database records, authority contract, and integration data. Sensitive actions require authority checks and human approval unless a specific trusted routine delegation exists.
+
+Luna is public-facing as one employee. Internally, specialist agents may perform work, but the household should not need to know those specialists exist.
 
 ## Provider-Agnostic Interface
 
@@ -17,12 +19,18 @@ Core interfaces should eventually cover:
 - Summarization.
 - Retrieval-grounded assistant responses.
 - Briefing generation.
+- Authority-aware work preparation.
+- Approval request drafting.
 
 ## Core Agents
 
 ### Intake Agent
 
 Receives uploaded, emailed, synced, or imported source material. It identifies document type, source system, duplicates, priority, and the next processing step.
+
+### Authority Agent
+
+Checks whether Luna may read, write, or execute a proposed action. It evaluates the household contract, member roles, connection scopes, spending limits, approval rules, and escalation rules. It should be called before any write or execute action and before surfacing an approval request as ready.
 
 ### Document Understanding Agent
 
@@ -46,7 +54,7 @@ Creates reminders from due dates, renewal dates, appointment times, expiry dates
 
 ### Finance Agent
 
-Understands bills, invoices, payments, subscriptions, bank account context, MYOB/accounting context, and reconciliation hints. It may prepare payment or export suggestions, but users approve financial actions.
+Understands bills, invoices, payments, subscriptions, bank account context, MYOB/accounting context, accounts payable, accounts receivable, routine reconciliation, and reporting inputs. It may prepare payment, reconciliation, invoice-processing, or export suggestions, but users approve financial actions unless covered by an explicit trusted routine delegation.
 
 ### Property Agent
 
@@ -70,11 +78,20 @@ The first implementation is deterministic and grounded in Luna records rather th
 
 Produces proactive daily or weekly summaries: what is due, what changed, what needs review, what was paid, what is overdue, and what the household should decide next.
 
+### Communications Agent
+
+Prepares drafts for service providers, insurers, schools, accountants, government agencies, or household members. Sending external communications is an execute action unless the authority contract explicitly allows the specific routine send.
+
+### Compliance and Government Agent
+
+Tracks government, tax, identity, renewal, and compliance-related obligations. It can organize records and prepare drafts, but filing or submitting forms requires explicit authority and approval.
+
 ## Safety Boundaries
 
-- AI may prepare actions, but humans approve financial, legal, filing, or irreversible actions.
+- AI may prepare actions, but humans approve financial, legal, filing, booking, renewal, cancellation, external-send, or irreversible actions unless a narrow trusted routine delegation exists.
 - AI output is draft data until reviewed, accepted, or validated by deterministic rules.
 - Low-confidence or conflicting values must be surfaced instead of silently accepted.
 - Prompts and outputs should avoid storing unnecessary personal data.
 - Assistant answers should be grounded in Luna records and documents.
 - Every automated relationship or reminder should retain provenance where possible.
+- Specialist agents remain internal implementation details; the product surface is Luna.
