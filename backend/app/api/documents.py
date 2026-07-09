@@ -21,6 +21,8 @@ from app.services.cabinet import (
 )
 from app.services.document_text import extract_pdf_text
 from app.services.audit import record_audit_event
+from app.models.work import Capability, WorkOrderCreate
+from app.services.work import mark_work_executed, prepare_user_approved_work
 from app.storage.documents import store_uploaded_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -384,6 +386,29 @@ def plan_document_cabinet(document_id: str) -> DocumentCabinetPlan:
                     "reasons": [str(reason) for reason in plan["reasons"]],
                 },
             )
+            work_order = prepare_user_approved_work(
+                cursor,
+                workspace_id=workspace_id,
+                request=WorkOrderCreate(
+                    work_type="document.cabinet_plan",
+                    title="Prepare cabinet filing plan",
+                    capability_required=Capability.write,
+                    subject_entity_type="document",
+                    subject_entity_id=document_id,
+                    source_document_id=document_id,
+                    evidence={
+                        "suggested_cabinet_path": str(plan["suggested_cabinet_path"]),
+                        "reasons": [str(reason) for reason in plan["reasons"]],
+                    },
+                ),
+                approval_reason="Luna prepared a cabinet path suggestion for review.",
+            )
+            mark_work_executed(
+                cursor,
+                workspace_id=workspace_id,
+                work_order_id=work_order.id,
+                result={"cabinet_status": str(plan["cabinet_status"])},
+            )
 
     return DocumentCabinetPlan(
         document_id=str(plan["document_id"]),
@@ -430,6 +455,29 @@ def confirm_document_cabinet(
                     "user_supplied_path": request.cabinet_path is not None,
                 },
             )
+            work_order = prepare_user_approved_work(
+                cursor,
+                workspace_id=workspace_id,
+                request=WorkOrderCreate(
+                    work_type="document.cabinet_confirm",
+                    title="Confirm cabinet filing path",
+                    capability_required=Capability.write,
+                    subject_entity_type="document",
+                    subject_entity_id=document_id,
+                    source_document_id=document_id,
+                    evidence={
+                        "confirmed_cabinet_path": document.confirmed_cabinet_path,
+                        "user_supplied_path": request.cabinet_path is not None,
+                    },
+                ),
+                approval_reason="Confirming a cabinet path approves Luna's filing plan.",
+            )
+            mark_work_executed(
+                cursor,
+                workspace_id=workspace_id,
+                work_order_id=work_order.id,
+                result={"cabinet_status": document.cabinet_status},
+            )
 
     return DocumentCabinetConfirmResponse(document=document)
 
@@ -468,6 +516,33 @@ def file_document_cabinet(
                 metadata={
                     "mode": result["mode"],
                     "source_path": result["source_path"],
+                    "filed_path": result["filed_path"],
+                },
+            )
+            work_order = prepare_user_approved_work(
+                cursor,
+                workspace_id=workspace_id,
+                request=WorkOrderCreate(
+                    work_type="document.cabinet_file",
+                    title="File document in household cabinet",
+                    capability_required=Capability.write,
+                    subject_entity_type="document",
+                    subject_entity_id=document_id,
+                    source_document_id=document_id,
+                    evidence={
+                        "mode": result["mode"],
+                        "source_path": result["source_path"],
+                        "filed_path": result["filed_path"],
+                    },
+                ),
+                approval_reason="Filing a document changes the household cabinet.",
+            )
+            mark_work_executed(
+                cursor,
+                workspace_id=workspace_id,
+                work_order_id=work_order.id,
+                result={
+                    "mode": result["mode"],
                     "filed_path": result["filed_path"],
                 },
             )

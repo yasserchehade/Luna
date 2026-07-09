@@ -18,6 +18,13 @@ from app.services.audit import record_audit_event
 from app.services.cabinet import save_document_cabinet_plan
 from app.services.extraction import get_extractor
 from app.services.supplier_profiles import record_supplier_template_match
+from app.models.work import Capability, HouseholdRole, WorkOrderCreate, WorkOrderStatus
+from app.services.work import (
+    create_work_order,
+    mark_work_executed,
+    prepare_user_approved_work,
+    request_approval,
+)
 
 router = APIRouter(prefix="/bills", tags=["bills"])
 
@@ -355,6 +362,54 @@ def ingest_bill(request: BillIngestRequest) -> BillIngestResponse:
                     ),
                 )
 
+            work_order = create_work_order(
+                cursor,
+                workspace_id=document["workspace_id"],
+                request=WorkOrderCreate(
+                    work_type=(
+                        "bill.review_extraction"
+                        if review_reasons
+                        else "bill.record_obligation"
+                    ),
+                    title=(
+                        f"Review {row['supplier']} bill"
+                        if review_reasons
+                        else f"Record {row['supplier']} bill"
+                    ),
+                    description=" ".join(review_reasons) if review_reasons else None,
+                    status=(
+                        WorkOrderStatus.approval_requested
+                        if review_reasons
+                        else WorkOrderStatus.prepared
+                    ),
+                    capability_required=Capability.write,
+                    subject_entity_type="bill",
+                    subject_entity_id=str(row["id"]),
+                    source_document_id=request.document_id,
+                    source_bill_id=str(row["id"]),
+                    evidence={
+                        "supplier": row["supplier"],
+                        "review_reasons": review_reasons,
+                        "extraction_confidence": (
+                            float(row["extraction_confidence"])
+                            if row["extraction_confidence"] is not None
+                            else None
+                        ),
+                    },
+                ),
+            )
+            if review_reasons:
+                request_approval(
+                    cursor,
+                    workspace_id=document["workspace_id"],
+                    work_order_id=work_order.id,
+                    requested_approver_role=HouseholdRole.owner,
+                    reason=(
+                        "Luna needs confirmation before treating this extracted bill "
+                        "as trusted."
+                    ),
+                )
+
     bill = _bill_from_row(row)
     cabinet_plan = save_document_cabinet_plan(request.document_id)
     extraction_with_cabinet = {
@@ -507,6 +562,33 @@ def confirm_bill(bill_id: str) -> BillActionResponse:
                 entity_id=row["id"],
                 metadata={"supplier": row["supplier"], "status": row["status"]},
             )
+            work_order = prepare_user_approved_work(
+                cursor,
+                workspace_id=row["workspace_id"],
+                request=WorkOrderCreate(
+                    work_type="bill.confirm",
+                    title=f"Confirm {row['supplier']} bill",
+                    capability_required=Capability.write,
+                    subject_entity_type="bill",
+                    subject_entity_id=bill_id,
+                    source_document_id=str(row["document_id"]) if row["document_id"] else None,
+                    source_bill_id=bill_id,
+                    evidence={
+                        "supplier": row["supplier"],
+                        "status": row["status"],
+                    },
+                ),
+                approval_reason=(
+                    "Confirming extracted bill details changes Luna's trusted "
+                    "household records."
+                ),
+            )
+            mark_work_executed(
+                cursor,
+                workspace_id=row["workspace_id"],
+                work_order_id=work_order.id,
+                result={"bill_status": row["status"]},
+            )
 
             cursor.execute(
                 """
@@ -572,6 +654,32 @@ def _set_bill_status(bill_id: str, bill_status: BillStatus) -> BillActionRespons
                 entity_type="bill",
                 entity_id=row["id"],
                 metadata={"supplier": row["supplier"], "status": row["status"]},
+            )
+            work_order = prepare_user_approved_work(
+                cursor,
+                workspace_id=row["workspace_id"],
+                request=WorkOrderCreate(
+                    work_type=f"bill.{bill_status.value}",
+                    title=f"Mark {row['supplier']} bill as {bill_status.value}",
+                    capability_required=Capability.write,
+                    subject_entity_type="bill",
+                    subject_entity_id=bill_id,
+                    source_document_id=str(row["document_id"]) if row["document_id"] else None,
+                    source_bill_id=bill_id,
+                    evidence={
+                        "supplier": row["supplier"],
+                        "target_status": bill_status.value,
+                    },
+                ),
+                approval_reason=(
+                    "Updating bill status changes Luna's household obligation records."
+                ),
+            )
+            mark_work_executed(
+                cursor,
+                workspace_id=row["workspace_id"],
+                work_order_id=work_order.id,
+                result={"bill_status": row["status"]},
             )
 
             if bill_status in {BillStatus.unpaid, BillStatus.paid, BillStatus.archived}:

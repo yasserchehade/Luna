@@ -34,6 +34,8 @@ from app.services.graph_suggestions import (
     list_pending_graph_suggestions,
     reject_graph_suggestion,
 )
+from app.models.work import Capability, WorkOrderCreate
+from app.services.work import mark_work_executed, prepare_user_approved_work
 
 router = APIRouter(prefix="/household", tags=["household"])
 
@@ -540,65 +542,7 @@ def household_graph() -> HouseholdGraph:
             )
             relationship_rows = cursor.fetchall()
 
-            document_ids = {
-                str(row[key])
-                for row in relationship_rows
-                for key in ("source_entity_id", "target_entity_id")
-                if row[f"{key.split('_')[0]}_entity_type"] == "document"
-            }
-            document_rows = []
-            if document_ids:
-                cursor.execute(
-                    """
-                    SELECT id, original_filename
-                    FROM documents
-                    WHERE workspace_id = %s
-                        AND id = ANY(%s::uuid[])
-                    """,
-                    (workspace_id, list(document_ids)),
-                )
-                document_rows = cursor.fetchall()
-
-            bill_ids = {
-                str(row[key])
-                for row in relationship_rows
-                for key in ("source_entity_id", "target_entity_id")
-                if row[f"{key.split('_')[0]}_entity_type"] == "bill"
-            }
-            bill_rows = []
-            if bill_ids:
-                cursor.execute(
-                    """
-                    SELECT id, supplier, invoice_number
-                    FROM bills
-                    WHERE workspace_id = %s
-                        AND id = ANY(%s::uuid[])
-                    """,
-                    (workspace_id, list(bill_ids)),
-                )
-                bill_rows = cursor.fetchall()
-
     nodes = [_graph_node_from_entity(row) for row in entity_rows]
-    nodes.extend(
-        HouseholdGraphNode(
-            id=str(row["id"]),
-            node_type="document",
-            display_name=row["original_filename"],
-        )
-        for row in document_rows
-    )
-    nodes.extend(
-        HouseholdGraphNode(
-            id=str(row["id"]),
-            node_type="bill",
-            display_name=(
-                f"{row['supplier']} {row['invoice_number']}"
-                if row["invoice_number"]
-                else row["supplier"]
-            ),
-        )
-        for row in bill_rows
-    )
 
     return HouseholdGraph(
         nodes=nodes,
@@ -919,6 +863,31 @@ def accept_suggestion(suggestion_id: str) -> GraphSuggestionActionResponse:
                     workspace_id=workspace_id,
                     suggestion_id=suggestion_id,
                 )
+                work_order = prepare_user_approved_work(
+                    cursor,
+                    workspace_id=workspace_id,
+                    request=WorkOrderCreate(
+                        work_type="graph_suggestion.accept",
+                        title="Accept Luna household graph suggestion",
+                        capability_required=Capability.write,
+                        subject_entity_type="graph_suggestion",
+                        subject_entity_id=suggestion_id,
+                        source_document_id=suggestion.source_document_id,
+                        source_bill_id=suggestion.source_bill_id,
+                        evidence={
+                            "suggested_action": suggestion.suggested_action.value,
+                            "confidence": suggestion.confidence,
+                            "reasoning": suggestion.reasoning,
+                        },
+                    ),
+                    approval_reason="Accepting this suggestion changes Luna's household graph.",
+                )
+                mark_work_executed(
+                    cursor,
+                    workspace_id=workspace_id,
+                    work_order_id=work_order.id,
+                    result={"suggestion_status": suggestion.status.value},
+                )
     except LookupError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -941,6 +910,31 @@ def reject_suggestion(suggestion_id: str) -> GraphSuggestionActionResponse:
                     cursor,
                     workspace_id=workspace_id,
                     suggestion_id=suggestion_id,
+                )
+                work_order = prepare_user_approved_work(
+                    cursor,
+                    workspace_id=workspace_id,
+                    request=WorkOrderCreate(
+                        work_type="graph_suggestion.reject",
+                        title="Reject Luna household graph suggestion",
+                        capability_required=Capability.write,
+                        subject_entity_type="graph_suggestion",
+                        subject_entity_id=suggestion_id,
+                        source_document_id=suggestion.source_document_id,
+                        source_bill_id=suggestion.source_bill_id,
+                        evidence={
+                            "suggested_action": suggestion.suggested_action.value,
+                            "confidence": suggestion.confidence,
+                            "reasoning": suggestion.reasoning,
+                        },
+                    ),
+                    approval_reason="Rejecting this suggestion records a household graph decision.",
+                )
+                mark_work_executed(
+                    cursor,
+                    workspace_id=workspace_id,
+                    work_order_id=work_order.id,
+                    result={"suggestion_status": suggestion.status.value},
                 )
     except LookupError as error:
         raise HTTPException(
