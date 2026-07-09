@@ -185,6 +185,92 @@ CREATE TABLE IF NOT EXISTS reminders (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS authority_policies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    work_type TEXT NOT NULL,
+    capability TEXT NOT NULL CHECK (capability IN ('read', 'write', 'execute')),
+    decision TEXT NOT NULL DEFAULT 'approval_required' CHECK (
+        decision IN ('allowed', 'approval_required', 'blocked', 'escalate')
+    ),
+    approver_role TEXT CHECK (approver_role IN ('owner', 'admin', 'member', 'viewer')),
+    spending_limit NUMERIC(12, 2),
+    escalation_rule TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, work_type, capability)
+);
+
+CREATE TABLE IF NOT EXISTS connection_scopes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    connection_name TEXT NOT NULL,
+    capability TEXT NOT NULL CHECK (capability IN ('read', 'write', 'execute')),
+    granted_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL DEFAULT 'planned' CHECK (
+        status IN ('planned', 'connected', 'disabled', 'revoked', 'error')
+    ),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, provider, connection_name, capability)
+);
+
+CREATE TABLE IF NOT EXISTS work_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    work_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'prepared' CHECK (
+        status IN (
+            'observed',
+            'prepared',
+            'proposed',
+            'approval_requested',
+            'approved',
+            'executed',
+            'escalated',
+            'rejected',
+            'dismissed'
+        )
+    ),
+    capability_required TEXT NOT NULL DEFAULT 'write' CHECK (
+        capability_required IN ('read', 'write', 'execute')
+    ),
+    subject_entity_type TEXT,
+    subject_entity_id UUID,
+    source_document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    source_bill_id UUID REFERENCES bills(id) ON DELETE SET NULL,
+    evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by TEXT NOT NULL DEFAULT 'luna',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    work_order_id UUID NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        status IN ('pending', 'approved', 'rejected', 'dismissed', 'escalated')
+    ),
+    requested_approver_role TEXT CHECK (
+        requested_approver_role IN ('owner', 'admin', 'member', 'viewer')
+    ),
+    reason TEXT NOT NULL,
+    decision_reason TEXT,
+    decided_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    decided_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE bills
     ADD COLUMN IF NOT EXISTS supplier_entity_id UUID;
 
@@ -313,6 +399,23 @@ CREATE INDEX IF NOT EXISTS idx_document_template_matches_document
     ON document_template_matches(document_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_status ON tasks(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_reminders_workspace_status ON reminders(workspace_id, status, remind_at);
+CREATE INDEX IF NOT EXISTS idx_authority_policies_workspace_work_type
+    ON authority_policies(workspace_id, work_type, capability)
+    WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_connection_scopes_workspace_provider
+    ON connection_scopes(workspace_id, provider, status);
+CREATE INDEX IF NOT EXISTS idx_work_orders_workspace_status
+    ON work_orders(workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_orders_subject
+    ON work_orders(workspace_id, subject_entity_type, subject_entity_id);
+CREATE INDEX IF NOT EXISTS idx_work_orders_document
+    ON work_orders(workspace_id, source_document_id);
+CREATE INDEX IF NOT EXISTS idx_work_orders_bill
+    ON work_orders(workspace_id, source_bill_id);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_workspace_status
+    ON approval_requests(workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_work_order
+    ON approval_requests(work_order_id);
 CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_created
     ON audit_events(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_events_entity
