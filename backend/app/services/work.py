@@ -326,6 +326,30 @@ def reject_work_order(
     return approval
 
 
+def dismiss_work_order(
+    cursor: Cursor[dict[str, Any]],
+    *,
+    workspace_id: object,
+    work_order_id: str,
+    reason: str | None = None,
+) -> ApprovalRequest | None:
+    approval = _decide_latest_approval(
+        cursor,
+        workspace_id=workspace_id,
+        work_order_id=work_order_id,
+        status=ApprovalRequestStatus.dismissed,
+        reason=reason,
+    )
+    _set_work_order_status(
+        cursor,
+        workspace_id=workspace_id,
+        work_order_id=work_order_id,
+        status=WorkOrderStatus.dismissed,
+        result={"reason": reason} if reason else {},
+    )
+    return approval
+
+
 def mark_work_executed(
     cursor: Cursor[dict[str, Any]],
     *,

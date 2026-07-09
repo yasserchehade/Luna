@@ -3,6 +3,7 @@ import { CabinetActions } from "../components/CabinetActions";
 import { CreateMenu } from "../components/CreateMenu";
 import { GraphLinkActions } from "../components/GraphLinkActions";
 import { StructureEditor } from "../components/StructureEditor";
+import { ApprovalActions } from "../components/ApprovalActions";
 
 type Bill = {
   id: string;
@@ -497,6 +498,7 @@ export default async function DashboardPage({
                     <div key={approval.id} className="taskRow">
                       <strong>{approval.reason}</strong>
                       <span>{approval.requested_approver_role ?? "authorised household member"}</span>
+                      <ApprovalActions approvalId={approval.id} status={approval.status} />
                     </div>
                   ))
                 )}
@@ -732,6 +734,7 @@ export default async function DashboardPage({
                 <th>Status</th>
                 <th>Approver</th>
                 <th>Work order</th>
+                <th>Decision</th>
               </tr>
             </thead>
             <tbody>
@@ -745,6 +748,9 @@ export default async function DashboardPage({
                   </td>
                   <td>{approval.requested_approver_role ?? "Any authorised member"}</td>
                   <td><code>{approval.work_order_id}</code></td>
+                  <td>
+                    <ApprovalActions approvalId={approval.id} status={approval.status} />
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -1417,6 +1417,39 @@ h2 {
   padding: 6px 8px;
 }
 
+.inlineActionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.inlineActionGroup button {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.inlineActionGroup button:hover {
+  background: var(--accent-soft);
+}
+
+.inlineActionGroup button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mutedActionText {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .reminderPill {
   border-radius: 999px;
   display: inline-block;

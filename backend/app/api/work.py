@@ -11,7 +11,7 @@ from app.models.work import (
     WorkOrder,
     WorkOrderStatus,
 )
-from app.services.work import approve_work_order, reject_work_order
+from app.services.work import approve_work_order, dismiss_work_order, reject_work_order
 
 router = APIRouter(prefix="/work", tags=["work"])
 
@@ -140,6 +140,21 @@ def reject_request(
     )
 
 
+@router.post(
+    "/approvals/{approval_id}/dismiss",
+    response_model=ApprovalDecisionResponse,
+)
+def dismiss_request(
+    approval_id: str,
+    request: ApprovalDecisionRequest | None = None,
+) -> ApprovalDecisionResponse:
+    return _decide_approval(
+        approval_id,
+        decision=ApprovalRequestStatus.dismissed,
+        reason=request.reason if request else None,
+    )
+
+
 def _decide_approval(
     approval_id: str,
     *,
@@ -172,8 +187,15 @@ def _decide_approval(
                     work_order_id=str(approval_row["work_order_id"]),
                     reason=reason,
                 )
-            else:
+            elif decision == ApprovalRequestStatus.rejected:
                 approval = reject_work_order(
+                    cursor,
+                    workspace_id=workspace_id,
+                    work_order_id=str(approval_row["work_order_id"]),
+                    reason=reason,
+                )
+            else:
+                approval = dismiss_work_order(
                     cursor,
                     workspace_id=workspace_id,
                     work_order_id=str(approval_row["work_order_id"]),
