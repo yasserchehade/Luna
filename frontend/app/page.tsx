@@ -106,46 +106,68 @@ type KnowledgeAnswer = {
   suggested_next_actions: string[];
 };
 
-type ActiveTab = "dashboard" | "cabinet" | "bills" | "structure" | "assistant" | "audit" | "settings";
+type ApprovalRequest = {
+  id: string;
+  work_order_id: string;
+  status: "pending" | "approved" | "rejected" | "dismissed" | "escalated";
+  requested_approver_role?: "owner" | "admin" | "member" | "viewer" | null;
+  reason: string;
+  decision_reason?: string | null;
+};
+
+type ActiveTab =
+  | "dashboard"
+  | "cabinet"
+  | "bills"
+  | "structure"
+  | "approvals"
+  | "assistant"
+  | "audit"
+  | "settings";
 
 const NAV_ITEMS: { href: string; icon: string; label: string; tab: ActiveTab }[] = [
-  { href: "/", icon: "DB", label: "Dashboard", tab: "dashboard" },
-  { href: "/?tab=cabinet", icon: "CB", label: "Cabinet", tab: "cabinet" },
-  { href: "/?tab=bills", icon: "BI", label: "Bills", tab: "bills" },
-  { href: "/?tab=structure", icon: "NV", label: "Navigator", tab: "structure" },
-  { href: "/?tab=assistant", icon: "AI", label: "Assistant", tab: "assistant" },
+  { href: "/", icon: "WB", label: "Workbench", tab: "dashboard" },
+  { href: "/?tab=cabinet", icon: "RC", label: "Records", tab: "cabinet" },
+  { href: "/?tab=bills", icon: "OB", label: "Obligations", tab: "bills" },
+  { href: "/?tab=structure", icon: "HH", label: "Household", tab: "structure" },
+  { href: "/?tab=approvals", icon: "AP", label: "Approvals", tab: "approvals" },
+  { href: "/?tab=assistant", icon: "LN", label: "Luna", tab: "assistant" },
   { href: "/?tab=audit", icon: "AU", label: "Audit Log", tab: "audit" },
   { href: "/?tab=settings", icon: "SE", label: "Settings", tab: "settings" },
 ];
 
 const PAGE_META: Record<ActiveTab, { title: string; subtitle: string }> = {
   dashboard: {
-    title: "Household dashboard",
-    subtitle: "The most relevant tasks, bills, and reminders for your household.",
+    title: "Luna workbench",
+    subtitle: "Prepared work, approvals, obligations, and reminders needing household attention.",
   },
   cabinet: {
-    title: "Household cabinet",
-    subtitle: "A searchable document drawer organised by Luna.",
+    title: "Household records",
+    subtitle: "A searchable cabinet of source documents Luna organizes and understands.",
   },
   bills: {
-    title: "Bills and invoices",
-    subtitle: "Confirm Luna's understanding of suppliers, amounts, due dates, and household links.",
+    title: "Household obligations",
+    subtitle: "Bills, invoices, due dates, and payable work Luna has prepared.",
   },
   structure: {
-    title: "Household Navigator",
-    subtitle: "People, properties, vehicles, suppliers, policies, and documents in one map.",
+    title: "Household map",
+    subtitle: "Members, properties, vehicles, suppliers, policies, accounts, and relationships.",
+  },
+  approvals: {
+    title: "Approvals",
+    subtitle: "Work Luna has prepared and is waiting for an authorised decision.",
   },
   assistant: {
-    title: "Assistant",
-    subtitle: "Ask Luna questions grounded in your household records.",
+    title: "Luna",
+    subtitle: "Ask Luna questions grounded in your household records and work queue.",
   },
   audit: {
     title: "Audit log",
-    subtitle: "A future view of important household changes and assistant actions.",
+    subtitle: "Important household changes, approval decisions, and Luna work history.",
   },
   settings: {
     title: "Settings",
-    subtitle: "A future home for household preferences and local storage options.",
+    subtitle: "A future home for authority, storage, connections, and household preferences.",
   },
 };
 
@@ -266,12 +288,27 @@ async function askKnowledge(question: string): Promise<KnowledgeAnswer | null> {
   }
 }
 
+async function getApprovalRequests(): Promise<ApprovalRequest[]> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/work/approvals`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return [];
+    }
+    return response.json();
+  } catch {
+    return [];
+  }
+}
+
 function normalizeTab(tab?: string | string[]): ActiveTab {
   const value = Array.isArray(tab) ? tab[0] : tab;
   if (
     value === "cabinet" ||
     value === "bills" ||
     value === "structure" ||
+    value === "approvals" ||
     value === "assistant" ||
     value === "audit" ||
     value === "settings"
@@ -339,12 +376,13 @@ export default async function DashboardPage({
       : navigatorModeParam === "link"
         ? "createRelationship"
         : undefined;
-  const [bills, household, householdGraph, documents, graphSuggestions] = await Promise.all([
+  const [bills, household, householdGraph, documents, graphSuggestions, approvalRequests] = await Promise.all([
     getBills(),
     getHouseholdSummary(),
     getHouseholdGraph(),
     getDocuments(),
     getGraphSuggestions(),
+    getApprovalRequests(),
   ]);
   const searchResults =
     activeTab === "cabinet" && cabinetQuery.trim().length >= 2
@@ -364,6 +402,7 @@ export default async function DashboardPage({
   const overdue = bills.filter((bill) => bill.status === "overdue");
   const paid = bills.filter((bill) => bill.status === "paid");
   const needsReview = bills.filter((bill) => bill.review_status === "needs_review");
+  const pendingApprovals = approvalRequests.filter((approval) => approval.status === "pending");
   const cabinetSuggestions = documents.filter(
     (document) => document.cabinet_status === "suggested",
   );
@@ -382,7 +421,7 @@ export default async function DashboardPage({
           <span className="brandMark">L</span>
           <div>
             <strong>Luna</strong>
-            <span>Household OS</span>
+            <span>AI household employee</span>
           </div>
         </div>
 
@@ -417,7 +456,7 @@ export default async function DashboardPage({
           </div>
           <div className="pageHeaderActions">
             <a className="assistantButton" href="/?tab=assistant">
-              Assistant
+              Ask Luna
             </a>
             <CreateMenu />
           </div>
@@ -425,7 +464,7 @@ export default async function DashboardPage({
 
       {activeTab === "dashboard" ? (
         <>
-          <section className="metrics" aria-label="Bill status summary">
+          <section className="metrics" aria-label="Luna workbench summary">
             <div>
               <span>Unpaid</span>
               <strong>{unpaid.length}</strong>
@@ -435,16 +474,35 @@ export default async function DashboardPage({
               <strong>{overdue.length}</strong>
             </div>
             <div>
-              <span>Needs review</span>
-              <strong>{needsReview.length}</strong>
+              <span>Needs approval</span>
+              <strong>{pendingApprovals.length}</strong>
             </div>
             <div>
-              <span>Paid</span>
-              <strong>{paid.length}</strong>
+              <span>Needs review</span>
+              <strong>{needsReview.length}</strong>
             </div>
           </section>
 
           <section className="operationalGrid" aria-label="Household intelligence summary">
+            <div className="panel">
+              <div className="panelHeader">
+                <h2>Needs approval</h2>
+                <span>{pendingApprovals.length} requests</span>
+              </div>
+              <div className="taskList">
+                {pendingApprovals.length === 0 ? (
+                  <p className="emptyState">Approval requests will appear when Luna needs authority to continue.</p>
+                ) : (
+                  pendingApprovals.slice(0, 5).map((approval) => (
+                    <div key={approval.id} className="taskRow">
+                      <strong>{approval.reason}</strong>
+                      <span>{approval.requested_approver_role ?? "authorised household member"}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
             <div className="panel">
               <div className="panelHeader">
                 <h2>Needs attention</h2>
@@ -493,7 +551,7 @@ export default async function DashboardPage({
         <>
           <section className="tableWrap">
             <div className="tableHeader">
-              <h2>Bills and invoices</h2>
+              <h2>Household obligations</h2>
               <span>{bills.length} records</span>
             </div>
             <table>
@@ -505,7 +563,7 @@ export default async function DashboardPage({
                   <th>Category</th>
                   <th>Classification</th>
                   <th>Supplier entity</th>
-                  <th>Confirm Luna</th>
+                  <th>Luna confidence</th>
                   <th>Status</th>
                   <th>Graph</th>
                   <th>Actions</th>
@@ -590,7 +648,7 @@ export default async function DashboardPage({
 
           <section className="tableWrap">
             <div className="tableHeader">
-              <h2>Household cabinet</h2>
+              <h2>Household records</h2>
               <span>{documents.length} records</span>
             </div>
             <form className="searchForm" action="/" aria-label="Search cabinet">
@@ -659,6 +717,42 @@ export default async function DashboardPage({
           initialMode={navigatorInitialMode}
           suggestions={graphSuggestions}
         />
+      ) : null}
+
+      {activeTab === "approvals" ? (
+        <section className="tableWrap">
+          <div className="tableHeader">
+            <h2>Approval requests</h2>
+            <span>{approvalRequests.length} records</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Request</th>
+                <th>Status</th>
+                <th>Approver</th>
+                <th>Work order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {approvalRequests.map((approval) => (
+                <tr key={approval.id}>
+                  <td>{approval.reason}</td>
+                  <td>
+                    <span className={`status review-${approval.status}`}>
+                      {approval.status.replaceAll("_", " ")}
+                    </span>
+                  </td>
+                  <td>{approval.requested_approver_role ?? "Any authorised member"}</td>
+                  <td><code>{approval.work_order_id}</code></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {approvalRequests.length === 0 ? (
+            <p className="emptyState">Luna has no approval requests yet.</p>
+          ) : null}
+        </section>
       ) : null}
 
       {activeTab === "assistant" ? (
@@ -734,8 +828,8 @@ export default async function DashboardPage({
         <section className="placeholderPanel">
           <strong>Audit log is coming into focus.</strong>
           <span>
-            Luna already records key household events in the backend. This view will surface
-            those events as a readable timeline once the Phase 2 graph workflow settles.
+            Luna already records key household events, work orders, and approval decisions
+            in the backend. This view will become the household work history.
           </span>
         </section>
       ) : null}

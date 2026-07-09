@@ -14,12 +14,12 @@ export function CreateMenu() {
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
-        + Create
+        + Give Luna work
       </button>
       {isOpen ? (
         <div className="createMenuPanel" role="menu">
           <div className="createMenuSection">
-            <strong>Upload document or bill</strong>
+            <strong>Upload household record</strong>
             <UploadBillForm compact />
           </div>
           <a href="/?tab=structure&mode=add" role="menuitem">
@@ -29,7 +29,7 @@ export function CreateMenu() {
             Link items
           </a>
           <a href="/?tab=assistant" role="menuitem">
-            Ask Assistant
+            Ask Luna
           </a>
         </div>
       ) : null}

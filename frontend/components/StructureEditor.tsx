@@ -17,6 +17,7 @@ type EntityRelationship = {
   relationship_type: string;
   target_entity_type: string;
   target_entity_id: string;
+  provenance_document_id?: string | null;
 };
 
 type HouseholdGraph = {
@@ -69,6 +70,7 @@ const ENTITY_TYPE_PRESETS = [
   "vehicle",
   "business",
   "supplier",
+  "financial_account",
   "insurance_policy",
   "utility_account",
   "subscription",
@@ -83,9 +85,10 @@ const TYPE_ORDER = new Map(
     "utility_account",
     "insurance_policy",
     "supplier",
+    "financial_account",
+    "bank_account",
+    "account",
     "subscription",
-    "document",
-    "bill",
   ].map((type, index) => [type, index]),
 );
 const GROUPS = [
@@ -93,10 +96,11 @@ const GROUPS = [
   { id: "properties", label: "Properties", types: ["property"] },
   { id: "vehicles", label: "Vehicles", types: ["vehicle"] },
   { id: "businesses", label: "Businesses", types: ["business"] },
-  { id: "utilities", label: "Utilities", types: ["utility_account", "account"] },
+  { id: "utilities", label: "Utilities", types: ["utility_account"] },
   { id: "insurance", label: "Insurance", types: ["insurance_policy"] },
   { id: "suppliers", label: "Suppliers", types: ["supplier"] },
-  { id: "documents", label: "Documents", types: ["document", "bill"] },
+  { id: "financial_accounts", label: "Financial Accounts", types: ["financial_account", "bank_account", "account"] },
+  { id: "subscriptions", label: "Subscriptions", types: ["subscription"] },
 ];
 const DETAIL_FIELDS: Record<string, DetailField[]> = {
   property: [
@@ -144,6 +148,26 @@ const DETAIL_FIELDS: Record<string, DetailField[]> = {
   utility_account: [
     { key: "account_number", label: "Account number" },
     { key: "service_type", label: "Service type" },
+    { key: "notes", label: "Notes" },
+  ],
+  financial_account: [
+    { key: "account_number", label: "Account number" },
+    { key: "institution", label: "Institution" },
+    { key: "notes", label: "Notes" },
+  ],
+  bank_account: [
+    { key: "account_number", label: "Account number" },
+    { key: "institution", label: "Institution" },
+    { key: "notes", label: "Notes" },
+  ],
+  account: [
+    { key: "account_number", label: "Account number" },
+    { key: "institution", label: "Institution" },
+    { key: "notes", label: "Notes" },
+  ],
+  subscription: [
+    { key: "account_number", label: "Account number" },
+    { key: "renewal_date", label: "Renewal date" },
     { key: "notes", label: "Notes" },
   ],
 };
@@ -194,7 +218,13 @@ function nameLabelFor(type: string) {
   if (type === "supplier") return "Company name";
   if (type === "insurance_policy") return "Policy name";
   if (type === "utility_account") return "Account name";
+  if (type === "financial_account" || type === "bank_account" || type === "account") return "Account name";
+  if (type === "subscription") return "Subscription name";
   return "Name";
+}
+
+function isEvidenceType(type: string) {
+  return type === "document" || type === "bill";
 }
 
 function detailsFromForm(formData: FormData, type: string) {
@@ -375,29 +405,50 @@ export function StructureEditor({ graph, initialMode, suggestions }: StructureEd
     if (!selectedNodeId) return new Set<string>();
     const ids = new Set<string>([selectedNodeId]);
     graph.relationships.forEach((relationship) => {
-      if (relationship.source_entity_id === selectedNodeId) ids.add(relationship.target_entity_id);
-      if (relationship.target_entity_id === selectedNodeId) ids.add(relationship.source_entity_id);
+      if (
+        relationship.source_entity_id === selectedNodeId &&
+        nodesById.has(relationship.target_entity_id)
+      ) {
+        ids.add(relationship.target_entity_id);
+      }
+      if (
+        relationship.target_entity_id === selectedNodeId &&
+        nodesById.has(relationship.source_entity_id)
+      ) {
+        ids.add(relationship.source_entity_id);
+      }
     });
     return ids;
-  }, [graph.relationships, selectedNodeId]);
+  }, [graph.relationships, nodesById, selectedNodeId]);
   const selectedRelationships = useMemo(() => {
     if (!selectedNodeId) return [];
     return graph.relationships.filter(
       (relationship) =>
-        relationship.source_entity_id === selectedNodeId ||
-        relationship.target_entity_id === selectedNodeId,
+        nodesById.has(relationship.source_entity_id) &&
+        nodesById.has(relationship.target_entity_id) &&
+        (relationship.source_entity_id === selectedNodeId ||
+          relationship.target_entity_id === selectedNodeId),
     );
+  }, [graph.relationships, nodesById, selectedNodeId]);
+  const supportingDocumentCount = useMemo(() => {
+    if (!selectedNodeId) return 0;
+    const evidenceIds = new Set<string>();
+    graph.relationships.forEach((relationship) => {
+      const sourceMatches = relationship.source_entity_id === selectedNodeId;
+      const targetMatches = relationship.target_entity_id === selectedNodeId;
+      if (!sourceMatches && !targetMatches) return;
+      if (relationship.provenance_document_id) {
+        evidenceIds.add(relationship.provenance_document_id);
+      }
+      if (sourceMatches && isEvidenceType(relationship.target_entity_type)) {
+        evidenceIds.add(relationship.target_entity_id);
+      }
+      if (targetMatches && isEvidenceType(relationship.source_entity_type)) {
+        evidenceIds.add(relationship.source_entity_id);
+      }
+    });
+    return evidenceIds.size;
   }, [graph.relationships, selectedNodeId]);
-  const linkedRecords = selectedRelationships
-    .map((relationship) =>
-      relationship.source_entity_id === selectedNodeId
-        ? nodesById.get(relationship.target_entity_id)
-        : nodesById.get(relationship.source_entity_id),
-    )
-    .filter(
-      (node): node is HouseholdGraphNode =>
-        !!node && (node.node_type === "document" || node.node_type === "bill"),
-    );
   const visibleDetails = selectedNode?.metadata
     ? Object.entries(selectedNode.metadata).filter(([key]) => !HIDDEN_DETAIL_KEYS.has(key))
     : [];
@@ -663,11 +714,11 @@ export function StructureEditor({ graph, initialMode, suggestions }: StructureEd
   }
 
   return (
-    <section className="structureWorkspace" aria-label="Household navigator">
+    <section className="structureWorkspace" aria-label="Household map">
       <div className="structureActionBar">
         <div>
-          <h2>Household navigator</h2>
-          <span>{graph.nodes.length} items Luna knows about</span>
+          <h2>Household map</h2>
+          <span>{graph.nodes.length} household items in Luna's memory</span>
         </div>
         <div className="structureToolbar">
           <button type="button" onClick={() => setMode("createEntity")}>
@@ -794,7 +845,7 @@ export function StructureEditor({ graph, initialMode, suggestions }: StructureEd
         <div className="treeCanvas" aria-label="Household map" ref={canvasRef}>
           {graph.nodes.length === 0 ? (
             <div className="treeEmptyState">
-              <strong>Add your first item to start building your Household Navigator.</strong>
+              <strong>Add your first item to start building the household map.</strong>
               <span>Luna can also find people, properties, vehicles, suppliers, and policies from documents you upload.</span>
             </div>
           ) : visibleGraph.nodes.length === 0 ? (
@@ -859,10 +910,10 @@ export function StructureEditor({ graph, initialMode, suggestions }: StructureEd
         </div>
 
         <aside className="entityDetailsPanel" aria-label="Household item details">
-          <section className="suggestionsPanel" aria-label="Luna found">
+          <section className="suggestionsPanel" aria-label="Luna prepared suggestions">
             <div className="suggestionsHeader">
               <div>
-                <h3>Luna found</h3>
+                <h3>Luna prepared</h3>
                 <span>{suggestions.length} awaiting confirmation</span>
               </div>
             </div>
@@ -1016,14 +1067,15 @@ export function StructureEditor({ graph, initialMode, suggestions }: StructureEd
               </section>
 
               <section className="detailSection">
-                <h3>Documents and bills</h3>
-                {linkedRecords.length === 0 ? (
-                  <p>No linked documents or bills yet.</p>
+                <h3>Supporting records</h3>
+                {supportingDocumentCount === 0 ? (
+                  <p>No linked records yet.</p>
                 ) : (
                   <div className="linkedRecordList">
-                    {linkedRecords.map((record) => (
-                      <span key={record.id}>{record.display_name} ({titleCase(record.node_type)})</span>
-                    ))}
+                    <span>
+                      {supportingDocumentCount} supporting document
+                      {supportingDocumentCount === 1 ? "" : "s"} connected through evidence.
+                    </span>
                   </div>
                 )}
               </section>
