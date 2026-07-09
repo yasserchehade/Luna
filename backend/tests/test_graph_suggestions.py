@@ -26,6 +26,7 @@ class SuggestionState:
     suggestions: list[dict[str, Any]] = field(default_factory=list)
     relationships: list[dict[str, Any]] = field(default_factory=list)
     audit_events: list[dict[str, Any]] = field(default_factory=list)
+    work_orders: list[dict[str, Any]] = field(default_factory=list)
 
 
 class FakeConnection:
@@ -232,6 +233,58 @@ class FakeCursor:
             self._next_one = suggestion
             return
 
+        if normalized.startswith("insert into work_orders"):
+            (
+                workspace_id,
+                work_type,
+                title,
+                description,
+                status,
+                capability_required,
+                subject_entity_type,
+                subject_entity_id,
+                source_document_id,
+                source_bill_id,
+                evidence,
+            ) = params
+            work_order = {
+                "id": f"70000000-0000-0000-0000-00000000000{len(self.state.work_orders) + 1}",
+                "workspace_id": workspace_id,
+                "work_type": work_type,
+                "title": title,
+                "description": description,
+                "status": status,
+                "capability_required": capability_required,
+                "subject_entity_type": subject_entity_type,
+                "subject_entity_id": subject_entity_id,
+                "source_document_id": source_document_id,
+                "source_bill_id": source_bill_id,
+                "evidence": json_value(evidence),
+                "result": {},
+            }
+            self.state.work_orders.append(work_order)
+            self._next_one = work_order
+            return
+
+        if "from authority_policies" in normalized:
+            self._next_one = None
+            return
+
+        if normalized.startswith("update work_orders"):
+            status, result, workspace_id, work_order_id = params
+            work_order = next(
+                order
+                for order in self.state.work_orders
+                if order["workspace_id"] == workspace_id and order["id"] == work_order_id
+            )
+            work_order["status"] = status
+            work_order["result"] = {
+                **work_order["result"],
+                **json_value(result),
+            }
+            self._next_one = work_order
+            return
+
         raise AssertionError(f"Unexpected SQL: {sql}")
 
     def fetchone(self) -> dict[str, Any] | None:
@@ -306,7 +359,13 @@ def test_graph_suggestions_are_generated_and_rejections_are_not_recreated(monkey
 
     assert rejected.suggestion.status == "rejected"
     assert rejected.suggestion.id not in {suggestion.id for suggestion in after_rejection.suggestions}
-    assert [event["event_type"] for event in state.audit_events] == ["graph_suggestion.rejected"]
+    assert [event["event_type"] for event in state.audit_events] == [
+        "graph_suggestion.rejected",
+        "work_order.created",
+        "authority.evaluated",
+        "work_order.executed",
+    ]
+    assert state.work_orders[0]["work_type"] == "graph_suggestion.reject"
 
 
 def test_accepting_graph_suggestion_updates_graph_and_records_audit(monkeypatch: Any) -> None:
@@ -337,4 +396,8 @@ def test_accepting_graph_suggestion_updates_graph_and_records_audit(monkeypatch:
     assert [event["event_type"] for event in state.audit_events] == [
         "relationship.created",
         "graph_suggestion.accepted",
+        "work_order.created",
+        "authority.evaluated",
+        "work_order.executed",
     ]
+    assert state.work_orders[0]["work_type"] == "graph_suggestion.accept"

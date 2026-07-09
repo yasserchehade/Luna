@@ -312,7 +312,7 @@ def test_household_graph_only_returns_active_workspace_records(monkeypatch: Any)
 
     assert SOURCE_ENTITY_ID in node_ids
     assert TARGET_ENTITY_ID in node_ids
-    assert DOCUMENT_ID in node_ids
+    assert DOCUMENT_ID not in node_ids
     assert OTHER_ENTITY_ID not in node_ids
     assert OTHER_DOCUMENT_ID not in node_ids
     assert relationship_ids == {RELATIONSHIP_ID}
