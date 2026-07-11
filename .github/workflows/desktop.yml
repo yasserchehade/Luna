@@ -1,0 +1,44 @@
+name: Desktop foundation
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/desktop.yml"
+
+jobs:
+  verify-desktop:
+    name: Verify on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter luna-desktop test
+      - run: pnpm --filter luna-desktop typecheck
+      - run: pnpm --filter luna-desktop build:e2e
+      - run: pnpm --filter luna-desktop test:e2e
+      - run: pnpm --filter luna-desktop tauri build --no-bundle

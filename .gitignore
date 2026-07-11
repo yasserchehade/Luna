@@ -10,9 +10,13 @@ venv/
 # Node
 node_modules/
 .next/
+dist/
 out/
 *.tsbuildinfo
 npm-debug.log*
+
+# Rust / Tauri
+target/
 
 # Environment files
 .env

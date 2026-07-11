@@ -1,5 +1,12 @@
 packages:
+  - desktop
   - frontend
 
+overrides:
+  "@wdio/native-utils": 2.5.0
+
 allowBuilds:
+  edgedriver: false
+  esbuild: true
+  geckodriver: false
   sharp: true
