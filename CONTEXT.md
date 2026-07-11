@@ -1,0 +1,184 @@
+# Luna Household Administration
+
+Luna is the domain of a permissioned AI household employee that learns how a household handles administrative records while leaving people in control of privacy, authority and consequential decisions.
+
+## Household identity and authority
+
+**Luna**:
+The AI household employee hired to organise household administration within granted authority.
+_Avoid_: Assistant, bot, generic agent
+
+**Household**:
+The employer organisation that contains members, shared context, authority and a user-owned cabinet.
+_Avoid_: Workspace, tenant, account
+
+**Household Organiser**:
+The adult member who creates and administers the household, its membership and shared defaults without automatically owning another adult's private information.
+_Avoid_: Owner, admin, subscriber
+
+**Household Member**:
+A person represented within a household who may hold documents, context, access and delegated responsibilities.
+_Avoid_: User
+
+**Adult Member**:
+A household member who controls access to their private space and may grant authority to others.
+
+**Dependent Member**:
+A household member whose private administration is managed by a verified guardian until the applicable transition to independent control.
+_Avoid_: Child account
+
+**Guardian**:
+An adult member authorised to manage a dependent member's documents and administration.
+_Avoid_: Parent, unless describing the relationship rather than authority
+
+**Delegate**:
+A household member who receives authority from another member for a defined scope.
+
+**Authority Grant**:
+An explicit assignment of allowed control over a subject such as a person, property, account, document category or action.
+_Avoid_: Authority transfer, permission level
+
+**Private Space**:
+The records and conversations controlled by one adult member and inaccessible to other members without an authority grant.
+
+**Shared Space**:
+Records and conversations intentionally available to authorised household members.
+_Avoid_: Public space
+
+**Trusted Device**:
+A device enrolled into the household's cryptographic trust and permitted to process protected Luna state.
+_Avoid_: Logged-in device
+
+**Recovery Key**:
+The offline household secret that can enrol a replacement trusted device and recover encrypted Luna memory independently of account-password recovery.
+
+## Cabinet and documents
+
+**Desk**:
+The working environment the household grants Luna, consisting of trusted device access and a configured cabinet.
+_Avoid_: Workspace
+
+**Cabinet**:
+The user-owned, human-readable folder structure containing the household's filed original documents.
+_Avoid_: Vault, blob store, document database
+
+**Cabinet Preset**:
+A proposed initial cabinet structure that the household may customise before any folders are created.
+_Avoid_: Fixed taxonomy
+
+**Document Arrival**:
+One occurrence of a file entering Luna through attachment, upload, email or another intake channel.
+_Avoid_: Upload
+
+**Document**:
+The logical household record that connects one or more arrivals or versions to household context and filing decisions.
+_Avoid_: File
+
+**Original**:
+The exact received bytes of a document version, preserved without content modification.
+_Avoid_: Source copy
+
+**Document Version**:
+A distinct original that updates, corrects or supersedes another original without erasing it.
+_Avoid_: Duplicate
+
+**Exact Duplicate**:
+A document arrival whose bytes match an existing original.
+
+**Possible Duplicate**:
+A document arrival that appears to represent the same logical document but does not have identical bytes.
+_Avoid_: Duplicate, when identity is not proven
+
+**Service Provider**:
+An external organisation that supplies a household service or issues a household document.
+_Avoid_: Supplier, vendor, provider
+
+**Addressee**:
+The person or organisation to whom a document is formally directed and therefore its default responsible party.
+_Avoid_: Owner
+
+**Household Context**:
+The confirmed relationship of a document to members, properties, accounts, providers and other household subjects.
+_Avoid_: Metadata, graph data
+
+**Cabinet Destination**:
+The confirmed human-readable folder and filename where an original belongs.
+_Avoid_: Cabinet path
+
+**Filing Decision**:
+A member's confirmed determination of a document's household context and cabinet destination.
+
+**Filing Rule**:
+A visible, editable rule learned from a filing decision that applies only to a declared combination of document type, service provider, addressee and household context.
+_Avoid_: Model memory, automation
+
+## Document work and attention
+
+**Document Handling**:
+The durable lifecycle of a document arrival from receipt through inspection, clarification, filing or a waiting state.
+_Avoid_: Task, job
+
+**Local Inspection**:
+The on-device examination of a document for type, text, checksum, duplicates and known household context without disclosing content externally.
+_Avoid_: AI analysis
+
+**Review Card**:
+The structured conversational view of Luna's current understanding, evidence, uncertainties and proposed filing decision for a document.
+_Avoid_: Form, approval request
+
+**Evidence**:
+The local or authorised external information supporting Luna's interpretation of a document field.
+
+**Confidence State**:
+The member-facing certainty label Confirmed, Looks right, Needs checking or Unknown.
+_Avoid_: Confidence percentage
+
+**Member Direction**:
+An authorised member's answer or correction that resolves uncertainty and may teach Luna a scoped rule.
+_Avoid_: Approval, when no consequential action is being authorised
+
+**To-do Item**:
+An unresolved action that requires a specific household member's attention and links back to its originating conversation and subject.
+_Avoid_: Task, incoming item, work order
+
+**History**:
+The member-facing account of what Luna did, what people decided and which safe reversals remain available.
+_Avoid_: Activity feed, audit log
+
+**Audit Event**:
+An immutable fact recording a consequential Luna or member action, its authority, subject and outcome.
+_Avoid_: Log entry
+
+## Conversation and briefing
+
+**Conversation**:
+A member-controlled dialogue with Luna that may contain document attachments, review cards and linked to-do items without owning their durable records.
+_Avoid_: Thread, chat session
+
+**Brief**:
+A scheduled, dated conversation in which Luna summarises relevant changes, routine work and items needing attention.
+_Avoid_: Dashboard, digest
+
+## Intelligence and consent
+
+**Intelligence Provider**:
+An external or local reasoning engine used by Luna without owning Luna's household memory, authority or tools.
+_Avoid_: AI, model provider, provider
+
+**Cloud Assistance**:
+Permission-gated use of an external intelligence provider when local inspection cannot safely provide enough understanding.
+_Avoid_: Cloud processing
+
+**Consent Grant**:
+An explicit, revocable permission for a named intelligence provider to receive document content once or within a clearly described future scope.
+_Avoid_: Do not ask again, global consent
+
+**Luna-managed Intelligence**:
+Cloud assistance supplied and supported as part of Luna using a tested intelligence provider.
+
+**Bring-your-own Intelligence**:
+Cloud assistance billed to and configured by the member through a supported provider API.
+_Avoid_: Connect ChatGPT, connect Claude
+
+**Local-only Intelligence**:
+The policy that restricts Luna to deterministic local processing and any approved on-device model.
