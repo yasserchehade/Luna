@@ -4,6 +4,14 @@ Luna is the domain of a permissioned AI household employee that learns how a hou
 
 ## Household identity and authority
 
+**Luna Account**:
+The minimal service-side identity that coordinates a person's Household membership and Trusted Device enrolment without granting access to cabinet contents or decryption keys.
+_Avoid_: Household account, cabinet account
+
+**External Identity**:
+An authentication provider's login record mapped to a Luna Account without becoming the person's Household identity.
+_Avoid_: Provider user, Supabase user
+
 **Luna**:
 The AI household employee hired to organise household administration within granted authority.
 _Avoid_: Assistant, bot, generic agent

@@ -1,7 +1,10 @@
 import { expect } from "@wdio/globals";
+import { onboardTestHousehold } from "./onboardTestHousehold";
 
 describe("Luna conversation desk", () => {
   it("accepts work and shows it in Conversation", async () => {
+    await onboardTestHousehold();
+
     for (const destination of ["Luna", "To do", "Cabinet", "History", "Options"]) {
       await expect($(`button[aria-label='${destination}']`)).toBeDisplayed();
     }
