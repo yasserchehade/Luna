@@ -1,0 +1,27 @@
+[package]
+name = "luna-desktop"
+version = "0.1.0"
+description = "Luna household administration desktop"
+authors = ["Luna contributors"]
+edition = "2021"
+
+[lib]
+name = "luna_core"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-wdio = { version = "1", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

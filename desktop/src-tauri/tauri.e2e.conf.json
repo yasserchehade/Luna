@@ -1,0 +1,21 @@
+{
+  "build": {
+    "beforeBuildCommand": "pnpm typecheck && pnpm exec vite build --mode e2e"
+  },
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "e2e",
+          "description": "Test-only permissions for Luna's installed-application seam",
+          "windows": ["main"],
+          "permissions": [
+            "wdio:default",
+            "wdio-webdriver:default"
+          ]
+        }
+      ]
+    }
+  }
+}
