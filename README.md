@@ -31,4 +31,18 @@ pnpm --filter luna-desktop test:e2e
 
 Windows development requires Rust and the Visual Studio C++ build workload. macOS development requires Rust and Xcode command-line tools.
 
+### Local account service
+
+Luna's beta account boundary uses Supabase Auth and PostgreSQL. Docker Desktop must be running for local account development.
+
+```powershell
+pnpm --filter luna-desktop supabase:start
+pnpm --filter luna-desktop supabase:lint
+pnpm --filter luna-desktop test:account-contract
+```
+
+Copy `desktop/.env.example` to `desktop/.env.local`, then use the local `API_URL` and `PUBLISHABLE_KEY` reported by `pnpm --filter luna-desktop exec supabase status --output json --workdir ..`. The publishable key is intended for the desktop client; secret and service-role keys must never be added to a Vite environment file.
+
+Stop the local account service with `pnpm --filter luna-desktop supabase:stop`.
+
 The abandoned pre-clean-sheet implementation is preserved under `scrapped-designs/pre-clean-sheet-luna/` and is not the foundation for new production code.

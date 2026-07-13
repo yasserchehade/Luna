@@ -1,9 +1,17 @@
 import { FormEvent, useState } from "react";
 import "./App.css";
+import type { AccountService, HouseholdSession } from "./account/accountService";
+import { AccountFlow } from "./account/AccountFlow";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
 
-export default function App() {
+type AppProps = {
+  accountService: AccountService;
+};
+
+export default function App({ accountService }: AppProps) {
+  const [session, setSession] = useState<HouseholdSession | null>(null);
+  const [accountEntry, setAccountEntry] = useState<"registration" | "signIn">("registration");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<string[]>([]);
 
@@ -14,6 +22,27 @@ export default function App() {
     setMessages((current) => [...current, message]);
     setDraft("");
   };
+
+  const signOut = async () => {
+    await accountService.signOut();
+    setAccountEntry("signIn");
+    setSession(null);
+  };
+
+  if (!session) {
+    return <AccountFlow
+      accountService={accountService}
+      initialStep={accountEntry}
+      onAuthenticated={setSession}
+    />;
+  }
+
+  const initials = session.organiserName
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
     <div className="luna-shell">
@@ -34,7 +63,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="member"><span>YC</span><div><strong>Yasser</strong><small>Household organiser</small></div></div>
+        <div className="member"><span>{initials}</span><div><strong>{session.organiserName}</strong><small>Household Organiser</small></div><button type="button" onClick={signOut}>Sign out</button></div>
       </aside>
 
       <main className="conversation">
@@ -60,6 +89,7 @@ export default function App() {
 
       <aside className="context-panel">
         <header>Household context</header>
+        <div><small>Household</small><strong>{session.householdName}</strong></div>
         <div><small>Desk status</small><strong>Ready</strong><p>Your cabinet will appear here after onboarding.</p></div>
         <div className="privacy"><small>Processing</small><strong>Local by default</strong><p>Luna will ask before using Cloud Assistance.</p></div>
       </aside>
