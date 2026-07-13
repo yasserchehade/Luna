@@ -15,7 +15,8 @@ test("a verified Luna Account returns to the same Household after signing in aga
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
   assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
 
-  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  const sessionStorage = memorySessionStorage();
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey, sessionStorage);
   const email = `sam.${crypto.randomUUID()}@example.com`;
   const password = "correct-horse-battery-staple-7";
 
@@ -53,7 +54,21 @@ test("a verified Luna Account returns to the same Household after signing in aga
     keyEpoch: 1,
   });
 
+  const restartedAccountService = new SupabaseAccountService(
+    supabaseUrl,
+    publishableKey,
+    sessionStorage,
+  );
+  assert.deepEqual(await restartedAccountService.restoreSession(), created);
+  assert.equal(await restartedAccountService.getAuthenticatorStatus(), "verified");
+
   await accountService.signOut();
+  const signedOutAccountService = new SupabaseAccountService(
+    supabaseUrl,
+    publishableKey,
+    sessionStorage,
+  );
+  assert.equal(await signedOutAccountService.restoreSession(), null);
   const returned = await accountService.signIn(email, password);
   assert.equal(await accountService.getAuthenticatorStatus(), "challengeRequired");
   await accountService.verifyAuthenticatorChallenge(totp.generate());
@@ -262,6 +277,21 @@ test("a verified Luna Account returns to the same Household after signing in aga
   );
   await accountService.requestPasswordReset(`missing.${crypto.randomUUID()}@example.com`);
 });
+
+function memorySessionStorage() {
+  const entries = new Map<string, string>();
+  return {
+    getItem(key: string) {
+      return entries.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      entries.set(key, value);
+    },
+    removeItem(key: string) {
+      entries.delete(key);
+    },
+  };
+}
 
 async function readLatestEmailCode(email: string): Promise<string> {
   const response = await fetch(`http://127.0.0.1:54324/api/v1/search?query=to:${encodeURIComponent(email)}`);

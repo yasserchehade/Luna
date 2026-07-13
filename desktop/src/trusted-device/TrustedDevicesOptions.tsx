@@ -4,10 +4,12 @@ import type { TrustedDeviceService } from "./trustedDeviceService";
 
 export function TrustedDevicesOptions({
   accountService,
+  onSignOut,
   session,
   trustedDeviceService,
 }: {
   accountService: AccountService;
+  onSignOut: () => void | Promise<void>;
   session: HouseholdSession;
   trustedDeviceService: TrustedDeviceService;
 }) {
@@ -102,6 +104,11 @@ export function TrustedDevicesOptions({
           <button type="button" disabled={isSubmitting} onClick={() => setTarget(null)}>Cancel</button>
         </form>
       </section>}
+      <section className="account-session-card">
+        <h2>Account session</h2>
+        <p>Lock Luna for everyday privacy. Sign out only when you want to remove this account session from the device; your next visit will require full account authentication.</p>
+        <button type="button" onClick={onSignOut}>Sign out on this device</button>
+      </section>
     </section>
   </main>;
 }

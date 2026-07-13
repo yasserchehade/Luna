@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type {
+  AccountSessionStorage,
   AccountService,
   HouseholdId,
   HouseholdSession,
@@ -30,17 +31,23 @@ type TrustedDeviceRow = {
 };
 
 const accountExistsCodes = new Set(["email_exists", "user_already_exists"]);
+const householdSessionStorageKey = "luna-household-session";
 
 export class SupabaseAccountService implements AccountService {
   private readonly client: SupabaseClient;
 
-  constructor(url: string, publishableKey: string) {
+  constructor(
+    url: string,
+    publishableKey: string,
+    private readonly sessionStorage?: AccountSessionStorage,
+  ) {
     this.client = createClient(url, publishableKey, {
       auth: {
         autoRefreshToken: true,
         detectSessionInUrl: false,
         flowType: "pkce",
-        persistSession: false,
+        persistSession: sessionStorage !== undefined,
+        storage: sessionStorage,
       },
     });
   }
@@ -64,7 +71,7 @@ export class SupabaseAccountService implements AccountService {
   async createHousehold(name: string): Promise<HouseholdSession> {
     const { data, error } = await this.client.rpc("create_household", { requested_name: name });
     if (error) throw error;
-    return mapHousehold(singleRow(data));
+    return this.rememberHousehold(mapHousehold(singleRow(data)));
   }
 
   async requestPasswordReset(email: string): Promise<void> {
@@ -223,12 +230,40 @@ export class SupabaseAccountService implements AccountService {
 
     const { data, error: householdError } = await this.client.rpc("current_household");
     if (householdError) throw householdError;
-    return mapHousehold(singleRow(data));
+    return this.rememberHousehold(mapHousehold(singleRow(data)));
+  }
+
+  async restoreSession(): Promise<HouseholdSession | null> {
+    const session = await this.client.auth.getSession();
+    if (session.error || !session.data.session) return null;
+    if (await this.getAuthenticatorStatus() !== "verified") return null;
+    const cachedHousehold = await this.readRememberedHousehold();
+    if (cachedHousehold) return cachedHousehold;
+    const { data, error } = await this.client.rpc("current_household");
+    if (error) return null;
+    return this.rememberHousehold(mapHousehold(singleRow(data)));
   }
 
   async signOut(): Promise<void> {
     const { error } = await this.client.auth.signOut({ scope: "local" });
     if (error) throw error;
+    await this.sessionStorage?.removeItem(householdSessionStorageKey);
+  }
+
+  private async rememberHousehold(session: HouseholdSession): Promise<HouseholdSession> {
+    await this.sessionStorage?.setItem(householdSessionStorageKey, JSON.stringify(session));
+    return session;
+  }
+
+  private async readRememberedHousehold(): Promise<HouseholdSession | null> {
+    const stored = await this.sessionStorage?.getItem(householdSessionStorageKey);
+    if (!stored) return null;
+    try {
+      return mapHouseholdSession(JSON.parse(stored));
+    } catch {
+      await this.sessionStorage?.removeItem(householdSessionStorageKey);
+      return null;
+    }
   }
 }
 
@@ -253,6 +288,19 @@ function mapHousehold(row: HouseholdRow): HouseholdSession {
     householdId: row.household_id as HouseholdId,
     householdName: row.household_name,
   };
+}
+
+function mapHouseholdSession(value: unknown): HouseholdSession {
+  if (!value || typeof value !== "object") {
+    throw new Error("The stored Luna Household session is invalid.");
+  }
+  const session = value as Record<string, unknown>;
+  if (!["accountId", "organiserName", "email", "householdId", "householdName"].every(
+    (field) => typeof session[field] === "string" && session[field] !== "",
+  )) {
+    throw new Error("The stored Luna Household session is invalid.");
+  }
+  return session as HouseholdSession;
 }
 
 function singleTrustedDeviceRow(data: unknown): TrustedDeviceRow {

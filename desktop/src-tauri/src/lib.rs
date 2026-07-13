@@ -1,6 +1,8 @@
+mod account_session;
 mod settings;
 mod trusted_device;
 
+pub use account_session::{AccountSessionError, AccountSessionStore};
 pub use settings::SettingsStore;
 pub use trusted_device::{
     CredentialVault, FirstDeviceEnrollment, HouseholdKeyRotation, OsCredentialVault,
@@ -20,8 +22,12 @@ use std::{
 
 #[cfg(not(feature = "e2e"))]
 type DeviceManager = TrustedDeviceManager<OsCredentialVault>;
+#[cfg(not(feature = "e2e"))]
+type AccountSessionManager = AccountSessionStore<OsCredentialVault>;
 #[cfg(feature = "e2e")]
 type DeviceManager = TrustedDeviceManager<E2eCredentialVault>;
+#[cfg(feature = "e2e")]
+type AccountSessionManager = AccountSessionStore<E2eCredentialVault>;
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -88,6 +94,31 @@ struct HouseholdKeyRotationResponse {
     device_envelopes: Vec<RotatedDeviceEnvelopeResponse>,
     recovery_envelope: String,
     recovery_authorization_signature: String,
+}
+
+#[tauri::command]
+fn get_account_session_item(
+    store: State<'_, AccountSessionManager>,
+    key: String,
+) -> Result<Option<String>, String> {
+    store.get(&key).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_account_session_item(
+    store: State<'_, AccountSessionManager>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    store.set(&key, &value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_account_session_item(
+    store: State<'_, AccountSessionManager>,
+    key: String,
+) -> Result<(), String> {
+    store.remove(&key).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -365,14 +396,23 @@ pub fn run() {
         app.manage(TrustedDeviceManager::new(OsCredentialVault::new(
             "app.luna.household",
         )));
+        #[cfg(not(feature = "e2e"))]
+        app.manage(AccountSessionStore::new(OsCredentialVault::new(
+            "app.luna.account",
+        )));
         #[cfg(feature = "e2e")]
         app.manage(TrustedDeviceManager::new(E2eCredentialVault::default()));
+        #[cfg(feature = "e2e")]
+        app.manage(AccountSessionStore::new(E2eCredentialVault::default()));
         Ok(())
     });
 
     let builder = builder.invoke_handler(tauri::generate_handler![
         get_setting,
         set_setting,
+        get_account_session_item,
+        set_account_session_item,
+        remove_account_session_item,
         is_current_device_trusted,
         is_current_device_unlocked,
         current_device_public_key,

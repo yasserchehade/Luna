@@ -15,6 +15,8 @@ let passwordResetRequestPending = false;
 let recoveryCodeAvailable = false;
 let authenticatorEnrolled = false;
 let authenticatorVerified = false;
+let coordinationAvailable = true;
+let failNextSignOut = false;
 let recoveryEnvelope = "";
 let trustedDevices: TrustedDeviceRecord[] = [];
 const trustedDeviceEnvelopes = new Map<string, string>();
@@ -26,6 +28,12 @@ type E2eRemoteRotation = {
 };
 
 export const e2eAccountTestControl = {
+  setCoordinationAvailable(available: boolean) {
+    coordinationAvailable = available;
+  },
+  failNextAccountSignOut() {
+    failNextSignOut = true;
+  },
   currentRecovery() {
     return {
       recoveryEnvelope,
@@ -162,6 +170,7 @@ export const e2eAccountService: AccountService = {
     return trustedDevices.map((device) => ({ ...device }));
   },
   async getTrustedDeviceKeyCoordination(publicKey) {
+    if (!coordinationAvailable) throw new Error("Trusted Device coordination is offline.");
     const device = trustedDevices.find((candidate) => candidate.publicKey === publicKey);
     if (!device) throw new Error("Trusted Device not found.");
     const keyEnvelope = trustedDeviceEnvelopes.get(device.publicKey);
@@ -196,6 +205,9 @@ export const e2eAccountService: AccountService = {
     });
     return trustedDevices.map((device) => ({ ...device }));
   },
+  async restoreSession() {
+    return authenticatorVerified ? householdSession ?? null : null;
+  },
   async signIn(email, password) {
     if (!registration || !householdSession || registration.email !== email || currentPassword !== password) {
       throw new Error("Invalid credentials.");
@@ -203,6 +215,10 @@ export const e2eAccountService: AccountService = {
     return householdSession;
   },
   async signOut() {
+    if (failNextSignOut) {
+      failNextSignOut = false;
+      throw new Error("The account session vault is unavailable.");
+    }
     authenticatorVerified = false;
   },
 };

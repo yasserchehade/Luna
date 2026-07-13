@@ -9,9 +9,11 @@ let trustedDeviceService = tauriTrustedDeviceService;
 
 if (import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
   const { SupabaseAccountService } = await import("./account/supabaseAccountService");
+  const { tauriAccountSessionStorage } = await import("./account/tauriAccountSessionStorage");
   accountService = new SupabaseAccountService(
     import.meta.env.VITE_SUPABASE_URL,
     import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    tauriAccountSessionStorage,
   );
 }
 

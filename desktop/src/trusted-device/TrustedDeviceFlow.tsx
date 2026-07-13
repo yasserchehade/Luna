@@ -200,10 +200,12 @@ function TrustError({ message }: { message: string }) {
 export function TrustedDeviceUnlock({
   session,
   trustedDeviceService,
+  onSignOut,
   onUnlocked,
 }: {
   session: HouseholdSession;
   trustedDeviceService: TrustedDeviceService;
+  onSignOut: () => Promise<void> | void;
   onUnlocked: () => Promise<void> | void;
 }) {
   const [error, setError] = useState("");
@@ -216,7 +218,7 @@ export function TrustedDeviceUnlock({
     setError("");
     void trustedDeviceService.unlockDevice(session.householdId, String(form.get("pin")))
       .then(() => onUnlocked())
-      .catch(() => setError("That device PIN did not work. Try again."))
+      .catch(() => setError("Luna could not unlock this device. Check the PIN and connection, then try again."))
       .finally(() => setIsSubmitting(false));
   };
   return <TrustCard title="Unlock this trusted device" description="Enter this device's local PIN before Luna opens Household memory.">
@@ -226,5 +228,6 @@ export function TrustedDeviceUnlock({
       <TrustError message={error} />
       <button type="submit" disabled={isSubmitting}>Unlock Luna</button>
     </form>
+    <button type="button" disabled={isSubmitting} onClick={onSignOut}>Sign out on this device</button>
   </TrustCard>;
 }

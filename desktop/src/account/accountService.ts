@@ -76,6 +76,12 @@ export type HouseholdSession = {
   householdName: string;
 };
 
+export type AccountSessionStorage = {
+  getItem(key: string): string | null | Promise<string | null>;
+  setItem(key: string, value: string): void | Promise<void>;
+  removeItem(key: string): void | Promise<void>;
+};
+
 export interface AccountService {
   register(request: RegisterAccountRequest): Promise<VerificationRequested>;
   verifyEmail(email: string, code: string): Promise<void>;
@@ -92,6 +98,7 @@ export interface AccountService {
   listTrustedDevices(): Promise<TrustedDeviceRecord[]>;
   getTrustedDeviceKeyCoordination(publicKey: string): Promise<TrustedDeviceKeyCoordination>;
   revokeTrustedDevice(request: RevokeTrustedDeviceRequest): Promise<TrustedDeviceRecord[]>;
+  restoreSession(): Promise<HouseholdSession | null>;
   signIn(email: string, password: string): Promise<HouseholdSession>;
   signOut(): Promise<void>;
 }
@@ -141,6 +148,9 @@ export const unavailableAccountService: AccountService = {
   },
   async revokeTrustedDevice() {
     throw new Error("Trusted Device revocation is not configured.");
+  },
+  async restoreSession() {
+    return null;
   },
   async signIn() {
     throw new Error("The Luna account service is not configured.");

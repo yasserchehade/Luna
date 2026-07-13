@@ -50,22 +50,27 @@ describe("Luna account access", () => {
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
     await expect($(`strong=${testHousehold.organiserName}`)).toBeDisplayed();
 
-    await $("button=Sign out").click();
-    await expect($("h1=Sign in to Luna")).toBeDisplayed();
-
-    await $("#sign-in-email").setValue(testHousehold.email);
-    await $("#sign-in-password").setValue(testHousehold.password);
-    await $("button=Sign in").click();
-
-    await expect($("h1=Verify your identity")).toBeDisplayed();
-    await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
-    await $("button=Continue to Luna").click();
-
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };
+      }).__LUNA_E2E_ACCOUNT__.setCoordinationAvailable(false);
+    });
+    await $("button=Lock Luna").click();
     await expect($("h1=Unlock this trusted device")).toBeDisplayed();
+    await expect($("#sign-in-email")).not.toBeExisting();
+    await expect($("#sign-in-authenticator-code")).not.toBeExisting();
     await $("#device-unlock-pin").setValue(testHousehold.devicePin);
     await $("button=Unlock Luna").click();
 
     await expect($("h1=New conversation")).toBeDisplayed();
+    await expect($("[role='status']")).toHaveText(expect.stringContaining("working offline"));
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };
+      }).__LUNA_E2E_ACCOUNT__.setCoordinationAvailable(true);
+      window.dispatchEvent(new Event("online"));
+    });
+    await expect($("[role='status']")).not.toBeExisting();
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
 
     const recoveryCoordination = await browser.execute(() => {
@@ -108,20 +113,29 @@ describe("Luna account access", () => {
       deviceEnvelopes: remoteRotation.deviceEnvelopes,
     });
 
-    await $("button=Sign out").click();
-    await $("#sign-in-email").setValue(testHousehold.email);
-    await $("#sign-in-password").setValue(testHousehold.password);
-    await $("button=Sign in").click();
-    await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
-    await $("button=Continue to Luna").click();
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };
+      }).__LUNA_E2E_ACCOUNT__.setCoordinationAvailable(false);
+    });
+    await $("button=Lock Luna").click();
     await expect($("h1=Unlock this trusted device")).toBeDisplayed();
     await $("#device-unlock-pin").setValue(testHousehold.devicePin);
     await $("button=Unlock Luna").click();
     await expect($("h1=New conversation")).toBeDisplayed();
-    const retainedDeviceEpoch = await browser.tauri.execute(({ core }, householdId) => (
-      core.invoke("current_key_epoch", { householdId })
-    ), testHousehold.id) as number;
-    expect(retainedDeviceEpoch).toBe(2);
+    await expect($("[role='status']")).toHaveText(expect.stringContaining("working offline"));
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };
+      }).__LUNA_E2E_ACCOUNT__.setCoordinationAvailable(true);
+      window.dispatchEvent(new Event("online"));
+    });
+    await expect($("[role='status']")).not.toBeExisting();
+    await browser.waitUntil(async () => (
+      await browser.tauri.execute(({ core }, householdId) => (
+        core.invoke("current_key_epoch", { householdId })
+      ), testHousehold.id) as number
+    ) === 2, { timeout: 5_000, timeoutMsg: "the retained device did not apply its rotated key" });
     const protectedState = await browser.tauri.execute(({ core }, householdId) => (
       core.invoke("protect_household_state", {
         householdId,
@@ -133,7 +147,17 @@ describe("Luna account access", () => {
     ), { householdId: testHousehold.id, protected: protectedState }) as string;
     expect(openedState).toBe("state received after remote rotation");
 
-    await $("button=Sign out").click();
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { failNextAccountSignOut(): void };
+      }).__LUNA_E2E_ACCOUNT__.failNextAccountSignOut();
+    });
+    await $("button=Lock Luna").click();
+    await $("button=Sign out on this device").click();
+    await expect($("h1=Finish signing out")).toBeDisplayed();
+    await expect($(`strong=${testHousehold.name}`)).not.toBeExisting();
+    await $("button=Retry sign out").click();
+    await expect($("h1=Sign in to Luna")).toBeDisplayed();
     await $("#sign-in-email").setValue("unknown@example.com");
     await $("#sign-in-password").setValue("wrong-password-7");
     await $("button=Sign in").click();
@@ -192,7 +216,7 @@ describe("Luna account access", () => {
     await $("button=Revoke device").click();
     await expect($("[data-device-label='This device']")).toHaveText(expect.stringContaining("Revoked"));
 
-    await $("button=Sign out").click();
+    await $("button=Sign out on this device").click();
     await $("button=Forgot password?").click();
     await $("#recovery-email").setValue("unknown@example.com");
     await $("button=Send recovery code").click();
