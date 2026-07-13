@@ -1,7 +1,12 @@
-import { $ } from "@wdio/globals";
+import { $, browser } from "@wdio/globals";
 import { testHousehold } from "./testHousehold";
 
 export async function onboardTestHousehold() {
+  await browser.waitUntil(async () => (
+    await $("#organiser-name").isExisting()
+    || await $("#sign-in-email").isExisting()
+  ), { timeoutMsg: "Luna account entry did not become available" });
+
   if (await $("#organiser-name").isExisting()) {
     await registerTestHousehold();
     return;

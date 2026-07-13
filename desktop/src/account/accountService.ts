@@ -26,6 +26,8 @@ export interface AccountService {
   register(request: RegisterAccountRequest): Promise<VerificationRequested>;
   verifyEmail(email: string, code: string): Promise<void>;
   createHousehold(name: string): Promise<HouseholdSession>;
+  requestPasswordReset(email: string): Promise<void>;
+  resetPassword(email: string, code: string, newPassword: string): Promise<void>;
   signIn(email: string, password: string): Promise<HouseholdSession>;
   signOut(): Promise<void>;
 }
@@ -38,6 +40,12 @@ export const unavailableAccountService: AccountService = {
     throw new Error("The Luna account service is not configured.");
   },
   async createHousehold() {
+    throw new Error("The Luna account service is not configured.");
+  },
+  async requestPasswordReset() {
+    throw new Error("The Luna account service is not configured.");
+  },
+  async resetPassword() {
     throw new Error("The Luna account service is not configured.");
   },
   async signIn() {

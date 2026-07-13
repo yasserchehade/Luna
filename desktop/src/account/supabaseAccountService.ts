@@ -54,6 +54,23 @@ export class SupabaseAccountService implements AccountService {
     return mapHousehold(singleRow(data));
   }
 
+  async requestPasswordReset(email: string): Promise<void> {
+    const { error } = await this.client.auth.resetPasswordForEmail(email);
+    if (error) throw error;
+  }
+
+  async resetPassword(email: string, code: string, newPassword: string): Promise<void> {
+    const verification = await this.client.auth.verifyOtp({
+      email,
+      token: code,
+      type: "recovery",
+    });
+    if (verification.error) throw verification.error;
+
+    const update = await this.client.auth.updateUser({ password: newPassword });
+    if (update.error) throw update.error;
+  }
+
   async signIn(email: string, password: string): Promise<HouseholdSession> {
     const { error } = await this.client.auth.signInWithPassword({ email, password });
     if (error) throw error;
