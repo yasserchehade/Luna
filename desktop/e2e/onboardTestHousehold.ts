@@ -31,4 +31,13 @@ async function registerTestHousehold() {
   await $("button=Verify email").click();
   await $("#household-name").setValue(testHousehold.name);
   await $("button=Create Household").click();
+  await $("button=Set up authenticator").click();
+  await $("#authenticator-code").setValue(testHousehold.authenticatorCode);
+  await $("button=Verify authenticator").click();
+  const recoveryKey = await $("#recovery-key").getText();
+  await $("#recovery-key-confirmation").setValue(recoveryKey);
+  await $("button=Confirm Recovery Key").click();
+  await $("#device-pin").setValue(testHousehold.devicePin);
+  await $("#device-pin-confirmation").setValue(testHousehold.devicePin);
+  await $("button=Save device PIN").click();
 }

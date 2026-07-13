@@ -82,6 +82,8 @@ A Conversation owns member messages and references to durable domain subjects. I
 
 A Trusted Device controls one device identity and its participation in household cryptographic trust. Account access alone is insufficient to join this boundary.
 
+A Trusted Device must also be locally unlocked with its Device PIN for the current session. Recovery material remains pending until its service registration succeeds, and Device Revocation advances the Household key epoch for every retained device.
+
 ## Invariants
 
 1. **Originals are immutable.** Luna may rename or relocate an Original but never silently change its bytes.

@@ -1,4 +1,5 @@
-import { expect } from "@wdio/globals";
+import { browser, expect } from "@wdio/globals";
+import "@wdio/tauri-service";
 import { testHousehold } from "./testHousehold";
 
 describe("Luna account access", () => {
@@ -27,6 +28,24 @@ describe("Luna account access", () => {
     await $("#household-name").setValue(testHousehold.name);
     await $("button=Create Household").click();
 
+    await expect($("h1=Protect this trusted device")).toBeDisplayed();
+    await $("button=Set up authenticator").click();
+    await expect($("img[alt='Scan this QR code with your authenticator app']")).toBeDisplayed();
+    await expect($("#authenticator-secret")).toHaveText(testHousehold.authenticatorSecret);
+    await $("#authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Verify authenticator").click();
+
+    await expect($("h1=Save your Recovery Key")).toBeDisplayed();
+    const recoveryKey = await $("#recovery-key").getText();
+    expect(recoveryKey.split(/\s+/)).toHaveLength(24);
+    await $("#recovery-key-confirmation").setValue(recoveryKey);
+    await $("button=Confirm Recovery Key").click();
+
+    await expect($("h1=Create a device PIN")).toBeDisplayed();
+    await $("#device-pin").setValue(testHousehold.devicePin);
+    await $("#device-pin-confirmation").setValue(testHousehold.devicePin);
+    await $("button=Save device PIN").click();
+
     await expect($("h1=New conversation")).toBeDisplayed();
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
     await expect($(`strong=${testHousehold.organiserName}`)).toBeDisplayed();
@@ -38,8 +57,81 @@ describe("Luna account access", () => {
     await $("#sign-in-password").setValue(testHousehold.password);
     await $("button=Sign in").click();
 
+    await expect($("h1=Verify your identity")).toBeDisplayed();
+    await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Continue to Luna").click();
+
+    await expect($("h1=Unlock this trusted device")).toBeDisplayed();
+    await $("#device-unlock-pin").setValue(testHousehold.devicePin);
+    await $("button=Unlock Luna").click();
+
     await expect($("h1=New conversation")).toBeDisplayed();
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
+
+    const recoveryCoordination = await browser.execute(() => {
+      const control = (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: {
+          currentRecovery(): { recoveryEnvelope: string; keyEpoch: number };
+        };
+      }).__LUNA_E2E_ACCOUNT__;
+      return control.currentRecovery();
+    });
+    const currentDevicePublicKey = await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("current_device_public_key", { householdId })
+    ), testHousehold.id) as string;
+    const remoteRotation = await browser.tauri.execute(({ core }, request) => (
+      core.invoke("prepare_household_key_rotation", request)
+    ), {
+      householdId: testHousehold.id,
+      recoveryKey,
+      recoveryEnvelope: recoveryCoordination.recoveryEnvelope,
+      retainedDevicePublicKeys: [currentDevicePublicKey],
+      currentKeyEpoch: recoveryCoordination.keyEpoch,
+      revokedDeviceId: "00000000-0000-4000-8000-000000000099",
+    }) as {
+      deviceEnvelopes: Array<{ devicePublicKey: string; keyEnvelope: string }>;
+      recoveryEnvelope: string;
+    };
+    await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("discard_household_key_rotation", { householdId })
+    ), testHousehold.id);
+    await browser.execute((rotation) => {
+      const control = (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: {
+          simulateRemoteRotation(request: typeof rotation): void;
+        };
+      }).__LUNA_E2E_ACCOUNT__;
+      control.simulateRemoteRotation(rotation);
+    }, {
+      currentKeyEpoch: recoveryCoordination.keyEpoch,
+      recoveryEnvelope: remoteRotation.recoveryEnvelope,
+      deviceEnvelopes: remoteRotation.deviceEnvelopes,
+    });
+
+    await $("button=Sign out").click();
+    await $("#sign-in-email").setValue(testHousehold.email);
+    await $("#sign-in-password").setValue(testHousehold.password);
+    await $("button=Sign in").click();
+    await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Continue to Luna").click();
+    await expect($("h1=Unlock this trusted device")).toBeDisplayed();
+    await $("#device-unlock-pin").setValue(testHousehold.devicePin);
+    await $("button=Unlock Luna").click();
+    await expect($("h1=New conversation")).toBeDisplayed();
+    const retainedDeviceEpoch = await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("current_key_epoch", { householdId })
+    ), testHousehold.id) as number;
+    expect(retainedDeviceEpoch).toBe(2);
+    const protectedState = await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("protect_household_state", {
+        householdId,
+        plaintext: "state received after remote rotation",
+      })
+    ), testHousehold.id);
+    const openedState = await browser.tauri.execute(({ core }, request) => (
+      core.invoke("open_household_state", request)
+    ), { householdId: testHousehold.id, protected: protectedState }) as string;
+    expect(openedState).toBe("state received after remote rotation");
 
     await $("button=Sign out").click();
     await $("#sign-in-email").setValue("unknown@example.com");
@@ -64,14 +156,41 @@ describe("Luna account access", () => {
     await expect($(`p=We sent a recovery code to ${testHousehold.email}.`)).toBeDisplayed();
     await $("#recovery-code").setValue(testHousehold.recoveryCode);
     await $("#replacement-password").setValue(testHousehold.replacementPassword);
+    await $("#recovery-authenticator-code").setValue(testHousehold.authenticatorCode);
     await $("button=Set new password").click();
 
     await expect($("h1=Sign in to Luna")).toBeDisplayed();
     await expect($("[role='status']")).toHaveText("Your password has been changed. Sign in with your new password.");
+    await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("forget_current_device", { householdId })
+    ), testHousehold.id);
     await $("#sign-in-email").setValue(testHousehold.email);
     await $("#sign-in-password").setValue(testHousehold.replacementPassword);
     await $("button=Sign in").click();
+    await expect($("h1=Verify your identity")).toBeDisplayed();
+    await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Continue to Luna").click();
+
+    await expect($("h1=Recover this trusted device")).toBeDisplayed();
+    await $("button=Use Recovery Key").click();
+    await expect($("h1=Enter your Recovery Key")).toBeDisplayed();
+    await $("#replacement-recovery-key").setValue(recoveryKey);
+    await $("button=Recover trusted device").click();
+    await expect($("h1=Create a device PIN")).toBeDisplayed();
+    await $("#device-pin").setValue(testHousehold.replacementDevicePin);
+    await $("#device-pin-confirmation").setValue(testHousehold.replacementDevicePin);
+    await $("button=Save device PIN").click();
     await expect($("strong=Rivera Household")).toBeDisplayed();
+
+    await $("button[aria-label='Options']").click();
+    await expect($("h1=Trusted devices")).toBeDisplayed();
+    await expect($("[data-device-label='This device']")).toHaveText(expect.stringContaining("Active"));
+    await expect($("[data-device-label='Recovered device']")).toHaveText(expect.stringContaining("This device"));
+    await $("button[aria-label='Revoke This device']").click();
+    await expect($("h2=Confirm device revocation")).toBeDisplayed();
+    await $("#revocation-recovery-key").setValue(recoveryKey);
+    await $("button=Revoke device").click();
+    await expect($("[data-device-label='This device']")).toHaveText(expect.stringContaining("Revoked"));
 
     await $("button=Sign out").click();
     await $("button=Forgot password?").click();

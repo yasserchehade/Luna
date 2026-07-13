@@ -17,11 +17,20 @@ e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+age = "0.12"
+argon2 = "0.5"
+base64 = "0.22"
+bip39 = "2.2"
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2.2"
+getrandom = "0.3"
+keyring = "4.1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-wdio = { version = "1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+thiserror = "2"
 
 [dev-dependencies]
 tempfile = "3"

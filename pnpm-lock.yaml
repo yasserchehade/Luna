@@ -56,13 +56,16 @@ importers:
         version: 9.29.1
       '@wdio/tauri-plugin':
         specifier: ^1.0.0
-        version: 1.2.0(tsx@4.23.0)
+        version: 1.2.0(supports-color@8.1.1)(tsx@4.23.0)
       '@wdio/tauri-service':
         specifier: ^1.0.0
         version: 1.2.0(expect-webdriverio@5.7.0)(supports-color@8.1.1)(tsx@4.23.0)(webdriverio@9.29.1)
       '@wdio/types':
         specifier: ^9.0.0
         version: 9.29.1
+      otpauth:
+        specifier: ^9.5.1
+        version: 9.5.1
       supabase:
         specifier: ^2.109.1
         version: 2.109.1
@@ -748,6 +751,10 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
+    engines: {node: '>= 20.19.0'}
 
   '@nodable/entities@2.2.0':
     resolution: {integrity: sha512-9uGyhaQavEUMC8AIddIjau4NsnsXhou+j5sBAGojCM1oxmQpVKTWR/9JxABD6UAv12vpIms55fPZKFQEhG6uBg==}
@@ -2227,6 +2234,9 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
+  otpauth@9.5.1:
+    resolution: {integrity: sha512-fJmDAHc8wImfqqqOXIlBvT1dEKrZK0Cmb2VEgScpNTolCz0PHh6ExUZGv4sLtOsWNaHCQlD+rRqaPgnoxFoZjQ==}
+
   p-limit@3.1.0:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
     engines: {node: '>=10'}
@@ -3375,6 +3385,8 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
+  '@noble/hashes@2.2.0': {}
+
   '@nodable/entities@2.2.0': {}
 
   '@pkgjs/parseargs@0.11.0':
@@ -3832,7 +3844,7 @@ snapshots:
     dependencies:
       '@wdio/logger': 9.18.0
       '@wdio/native-types': 2.3.1
-      '@wdio/native-utils': 2.5.0(tsx@4.23.0)
+      '@wdio/native-utils': 2.5.0(supports-color@8.1.1)(tsx@4.23.0)
       debug: 4.4.3(supports-color@8.1.1)
       get-port: 7.2.0
       tslib: 2.8.1
@@ -3846,7 +3858,7 @@ snapshots:
 
   '@wdio/native-types@2.4.0': {}
 
-  '@wdio/native-utils@2.5.0(tsx@4.23.0)':
+  '@wdio/native-utils@2.5.0(supports-color@8.1.1)(tsx@4.23.0)':
     dependencies:
       '@wdio/logger': 9.18.0
       debug: 4.4.3(supports-color@8.1.1)
@@ -3919,12 +3931,12 @@ snapshots:
       easy-table: 1.2.0
       pretty-ms: 9.3.0
 
-  '@wdio/tauri-plugin@1.2.0(tsx@4.23.0)':
+  '@wdio/tauri-plugin@1.2.0(supports-color@8.1.1)(tsx@4.23.0)':
     dependencies:
       '@tauri-apps/api': 2.11.0
       '@tauri-apps/plugin-log': 2.8.0
       '@wdio/native-spy': 1.1.0
-      '@wdio/native-utils': 2.5.0(tsx@4.23.0)
+      '@wdio/native-utils': 2.5.0(supports-color@8.1.1)(tsx@4.23.0)
     transitivePeerDependencies:
       - supports-color
       - tsx
@@ -3936,7 +3948,7 @@ snapshots:
       '@wdio/native-core': 1.0.0(supports-color@8.1.1)(tsx@4.23.0)
       '@wdio/native-spy': 1.1.0
       '@wdio/native-types': 2.4.0
-      '@wdio/native-utils': 2.5.0(tsx@4.23.0)
+      '@wdio/native-utils': 2.5.0(supports-color@8.1.1)(tsx@4.23.0)
       '@wdio/spec-reporter': 9.27.1
       '@wdio/types': 9.27.1
       debug: 4.4.3(supports-color@8.1.1)
@@ -4956,6 +4968,10 @@ snapshots:
   once@1.4.0:
     dependencies:
       wrappy: 1.0.2
+
+  otpauth@9.5.1:
+    dependencies:
+      '@noble/hashes': 2.2.0
 
   p-limit@3.1.0:
     dependencies:
