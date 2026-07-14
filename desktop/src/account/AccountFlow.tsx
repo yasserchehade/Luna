@@ -83,6 +83,22 @@ export function AccountFlow({
     await onAuthenticated(step.session);
   }, "That authenticator code did not work. Check the current code and try again.");
 
+  const returnToSignIn = async () => {
+    if (submissionPending.current) return;
+    submissionPending.current = true;
+    setIsSubmitting(true);
+    setError("");
+    try {
+      await accountService.signOut();
+      setStep({ kind: "signIn" });
+    } catch {
+      setError("We could not safely return to sign in. Check your connection and try again.");
+    } finally {
+      submissionPending.current = false;
+      setIsSubmitting(false);
+    }
+  };
+
   const requestPasswordReset = submit(async (form) => {
     const email = String(form.get("email"));
     await accountService.requestPasswordReset(email);
@@ -175,6 +191,7 @@ export function AccountFlow({
         <AccountError message={error} />
         <button type="submit" disabled={isSubmitting}>Continue to Luna</button>
       </form>
+      <div className="account-switch"><button type="button" disabled={isSubmitting} onClick={returnToSignIn}>Back to sign in</button></div>
     </AccountCard>;
   }
 

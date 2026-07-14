@@ -192,6 +192,12 @@ describe("Luna account access", () => {
     await $("#sign-in-password").setValue(testHousehold.replacementPassword);
     await $("button=Sign in").click();
     await expect($("h1=Verify your identity")).toBeDisplayed();
+    await $("button=Back to sign in").click();
+    await expect($("h1=Sign in to Luna")).toBeDisplayed();
+    await $("#sign-in-email").setValue(testHousehold.email);
+    await $("#sign-in-password").setValue(testHousehold.replacementPassword);
+    await $("button=Sign in").click();
+    await expect($("h1=Verify your identity")).toBeDisplayed();
     await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
     await $("button=Continue to Luna").click();
 
