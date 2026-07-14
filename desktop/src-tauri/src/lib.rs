@@ -160,7 +160,7 @@ async fn select_cabinet_folder(_app: tauri::AppHandle) -> Result<Option<String>,
             std::fs::remove_dir_all(&folder).map_err(|error| error.to_string())?;
         }
         std::fs::create_dir(&folder).map_err(|error| error.to_string())?;
-        return Ok(Some(folder.to_string_lossy().into_owned()));
+        Ok(Some(folder.to_string_lossy().into_owned()))
     }
 
     #[cfg(not(feature = "e2e"))]
