@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { unavailableAccountService } from "./account/accountService";
 import { tauriTrustedDeviceService } from "./trusted-device/tauriTrustedDeviceService";
+import { tauriCabinetService } from "./cabinet/cabinetService";
 
 let accountService = unavailableAccountService;
 let trustedDeviceService = tauriTrustedDeviceService;
@@ -28,6 +29,10 @@ if (import.meta.env.MODE === "e2e") {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App accountService={accountService} trustedDeviceService={trustedDeviceService} />
+    <App
+      accountService={accountService}
+      cabinetService={tauriCabinetService}
+      trustedDeviceService={trustedDeviceService}
+    />
   </StrictMode>,
 );

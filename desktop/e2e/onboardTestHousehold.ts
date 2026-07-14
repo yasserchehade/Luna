@@ -9,6 +9,7 @@ export async function onboardTestHousehold() {
 
   if (await $("#organiser-name").isExisting()) {
     await registerTestHousehold();
+    await configureCabinetIfNeeded();
     return;
   }
 
@@ -16,10 +17,11 @@ export async function onboardTestHousehold() {
   await $("#sign-in-password").setValue(testHousehold.password);
   await $("button=Sign in").click();
 
-  if (!await $("button[aria-label='Luna']").isExisting()) {
+  if (await $("button=Create account").isExisting()) {
     await $("button=Create account").click();
     await registerTestHousehold();
   }
+  await configureCabinetIfNeeded();
 }
 
 async function registerTestHousehold() {
@@ -40,4 +42,15 @@ async function registerTestHousehold() {
   await $("#device-pin").setValue(testHousehold.devicePin);
   await $("#device-pin-confirmation").setValue(testHousehold.devicePin);
   await $("button=Save device PIN").click();
+}
+
+async function configureCabinetIfNeeded() {
+  await browser.waitUntil(async () => (
+    await $("h1=Give Luna a desk").isExisting()
+    || await $("button[aria-label='Luna']").isExisting()
+  ), { timeoutMsg: "Luna desk setup did not become available" });
+  if (!await $("h1=Give Luna a desk").isExisting()) return;
+  await $("button=Choose cabinet folder").click();
+  await $("button=Create cabinet").click();
+  await $("button[aria-label='Luna']").waitForDisplayed();
 }

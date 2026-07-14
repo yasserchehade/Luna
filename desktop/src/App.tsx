@@ -6,22 +6,28 @@ import { TrustedDeviceFlow, TrustedDeviceUnlock } from "./trusted-device/Trusted
 import type { TrustedDeviceService } from "./trusted-device/trustedDeviceService";
 import { synchronizeTrustedDevice } from "./trusted-device/trustedDeviceCoordinator";
 import { TrustedDevicesOptions } from "./trusted-device/TrustedDevicesOptions";
+import { CabinetSetup } from "./cabinet/CabinetSetup";
+import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
 type TrustedDeviceMode = "first" | "recovery";
 
 type AppProps = {
   accountService: AccountService;
+  cabinetService: CabinetService;
   trustedDeviceService: TrustedDeviceService;
 };
 
-export default function App({ accountService, trustedDeviceService }: AppProps) {
+export default function App({ accountService, cabinetService, trustedDeviceService }: AppProps) {
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [restoreAttempt, setRestoreAttempt] = useState(0);
   const [restoreFailed, setRestoreFailed] = useState(false);
   const [signOutFailed, setSignOutFailed] = useState(false);
   const [coordinationNotice, setCoordinationNotice] = useState("");
   const [session, setSession] = useState<HouseholdSession | null>(null);
+  const [cabinetValidation, setCabinetValidation] = useState<CabinetValidation | null>();
+  const [cabinetCheckFailed, setCabinetCheckFailed] = useState(false);
+  const [cabinetCheckAttempt, setCabinetCheckAttempt] = useState(0);
   const [pendingTrustedSession, setPendingTrustedSession] = useState<{
     session: HouseholdSession;
     mode: TrustedDeviceMode;
@@ -53,6 +59,8 @@ export default function App({ accountService, trustedDeviceService }: AppProps) 
     if (protectedSession) await trustedDeviceService.lockDevice(protectedSession.householdId);
     setAccountEntry("signIn");
     setSession(null);
+    setCabinetValidation(undefined);
+    setCabinetCheckFailed(false);
     setPendingUnlockSession(null);
     setPendingTrustedSession(null);
     setCoordinationNotice("");
@@ -140,6 +148,26 @@ export default function App({ accountService, trustedDeviceService }: AppProps) 
     };
   }, [coordinationNotice, session, synchronizeAfterUnlock]);
 
+  useEffect(() => {
+    if (!session) {
+      setCabinetValidation(undefined);
+      return;
+    }
+    let active = true;
+    setCabinetValidation(undefined);
+    setCabinetCheckFailed(false);
+    void cabinetService.validate(session.householdId)
+      .then((validation) => {
+        if (active) setCabinetValidation(validation);
+      })
+      .catch(() => {
+        if (active) setCabinetCheckFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [cabinetCheckAttempt, cabinetService, session?.householdId]);
+
   if (isRestoringSession) {
     return <main className="account-screen"><section className="account-card">
       <div className="account-brand"><span aria-hidden="true">L</span><strong>Luna</strong></div>
@@ -208,6 +236,34 @@ export default function App({ accountService, trustedDeviceService }: AppProps) 
     />;
   }
 
+  if (cabinetCheckFailed) {
+    return <main className="account-screen"><section className="account-card">
+      <div className="account-brand"><span aria-hidden="true">L</span><strong>Luna</strong></div>
+      <p className="eyebrow">Desk check</p>
+      <h1>Luna could not check the cabinet</h1>
+      <p>The remembered cabinet was not changed. Check the device and try again.</p>
+      <button type="button" onClick={() => setCabinetCheckAttempt((attempt) => attempt + 1)}>Check again</button>
+    </section></main>;
+  }
+
+  if (cabinetValidation === undefined) {
+    return <main className="account-screen"><section className="account-card">
+      <div className="account-brand"><span aria-hidden="true">L</span><strong>Luna</strong></div>
+      <p className="eyebrow">Desk check</p>
+      <h1>Checking Luna's desk</h1>
+      <p>Validating this Household's remembered cabinet.</p>
+    </section></main>;
+  }
+
+  if (!cabinetValidation || cabinetValidation.availability === "unavailable") {
+    return <CabinetSetup
+      cabinetService={cabinetService}
+      onConfigured={(configuration) => setCabinetValidation({ configuration, availability: "ready" })}
+      session={session}
+      unavailableRoot={cabinetValidation?.configuration.root}
+    />;
+  }
+
   const initials = session.organiserName
     .split(/\s+/)
     .map((part) => part[0])
@@ -243,7 +299,13 @@ export default function App({ accountService, trustedDeviceService }: AppProps) 
         onSignOut={() => signOut(session)}
         session={session}
         trustedDeviceService={trustedDeviceService}
-      /> : <main className="conversation">
+      /> : activeDestination === "Cabinet" ? <main className="conversation cabinet-view">
+        <header><div><small>Household cabinet</small><h1>Cabinet</h1></div><span>{cabinetValidation.configuration.storage === "cloudSynchronized" ? "Cloud-synchronised" : "On this device"}</span></header>
+        <section className="cabinet-summary">
+          <p><small>Location</small><strong>{cabinetValidation.configuration.root}</strong></p>
+          <div>{cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}</div>
+        </section>
+      </main> : <main className="conversation">
         <header><div><small>Today</small><h1>New conversation</h1></div><span>Private conversation</span></header>
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
         <section className="messages" aria-label="Conversation">
@@ -268,7 +330,7 @@ export default function App({ accountService, trustedDeviceService }: AppProps) 
       <aside className="context-panel">
         <header>Household context</header>
         <div><small>Household</small><strong>{session.householdName}</strong></div>
-        <div><small>Desk status</small><strong>Ready</strong><p>Your cabinet will appear here after onboarding.</p></div>
+        <div><small>Desk status</small><strong>Ready</strong><p>{cabinetValidation.configuration.root}</p></div>
         <div className="privacy"><small>Processing</small><strong>Local by default</strong><p>Luna will ask before using Cloud Assistance.</p></div>
       </aside>
     </div>

@@ -46,9 +46,33 @@ describe("Luna account access", () => {
     await $("#device-pin-confirmation").setValue(testHousehold.devicePin);
     await $("button=Save device PIN").click();
 
+    await expect($("h1=Give Luna a desk")).toBeDisplayed();
+    await expect($("button[aria-label='Cloud-synchronised storage']")).toHaveAttribute("aria-pressed", "true");
+    await $("button[aria-label='On this device']").click();
+    await expect($("button[aria-label='On this device']")).toHaveAttribute("aria-pressed", "true");
+    await $("button[aria-label='Cloud-synchronised storage']").click();
+    await $("button=Choose cabinet folder").click();
+    await expect($("h1=Review your cabinet")).toBeDisplayed();
+    await expect($$("input[name='cabinet-section']")).toBeElementsArrayOfSize(5);
+    await $("input[aria-label='Cabinet section 1']").setValue("Household bills");
+    await $("button[aria-label='Remove Identity']").click();
+    await $("input[aria-label='New cabinet section']").setValue("Insurance");
+    await $("button=Add section").click();
+    const beforeConfirmation = await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("validate_cabinet", { householdId })
+    ), testHousehold.id);
+    expect(beforeConfirmation).toBeNull();
+    await $("button=Create cabinet").click();
+
     await expect($("h1=New conversation")).toBeDisplayed();
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
     await expect($(`strong=${testHousehold.organiserName}`)).toBeDisplayed();
+    await $("button[aria-label='Cabinet']").click();
+    await expect($("h1=Cabinet")).toBeDisplayed();
+    await expect($("strong=Household bills")).toBeDisplayed();
+    await expect($("strong=Insurance")).toBeDisplayed();
+    await expect($("strong=Identity")).not.toBeExisting();
+    await $("button[aria-label='Luna']").click();
 
     await browser.execute(() => {
       (window as typeof window & {
