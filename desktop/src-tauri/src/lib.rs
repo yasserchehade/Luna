@@ -6,7 +6,7 @@ mod trusted_device;
 pub use account_session::{AccountSessionError, AccountSessionStore};
 pub use cabinet::{
     CabinetAvailability, CabinetConfiguration, CabinetError, CabinetManager, CabinetPreview,
-    CabinetStorage, CabinetValidation,
+    CabinetValidation,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -182,11 +182,10 @@ fn preview_cabinet(
 fn create_cabinet(
     manager: State<'_, CabinetState>,
     household_id: String,
-    storage: CabinetStorage,
     preview: CabinetPreview,
 ) -> Result<CabinetConfiguration, String> {
     manager
-        .create(&household_id, storage, preview)
+        .create(&household_id, preview)
         .map_err(|error| error.to_string())
 }
 

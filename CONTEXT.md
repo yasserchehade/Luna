@@ -82,6 +82,10 @@ _Avoid_: Vault, blob store, document database
 A proposed initial cabinet structure that the household may customise before any folders are created.
 _Avoid_: Fixed taxonomy
 
+**Cabinet Availability**:
+Whether the configured cabinet and its expected sections are present and writable at the location chosen by the household.
+_Avoid_: Storage health, automatic fallback
+
 **Document Arrival**:
 One occurrence of a file entering Luna through attachment, upload, email or another intake channel.
 _Avoid_: Upload

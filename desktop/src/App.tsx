@@ -300,7 +300,7 @@ export default function App({ accountService, cabinetService, trustedDeviceServi
         session={session}
         trustedDeviceService={trustedDeviceService}
       /> : activeDestination === "Cabinet" ? <main className="conversation cabinet-view">
-        <header><div><small>Household cabinet</small><h1>Cabinet</h1></div><span>{cabinetValidation.configuration.storage === "cloudSynchronized" ? "Cloud-synchronised" : "On this device"}</span></header>
+        <header><div><small>Household cabinet</small><h1>Cabinet</h1></div><span>User-selected folder</span></header>
         <section className="cabinet-summary">
           <p><small>Location</small><strong>{cabinetValidation.configuration.root}</strong></p>
           <div>{cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}</div>

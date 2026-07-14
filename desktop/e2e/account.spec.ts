@@ -48,8 +48,8 @@ describe("Luna account access", () => {
 
     await expect($("h1=Give Luna a desk")).toBeDisplayed();
     await expect($("button[aria-label='Cloud-synchronised storage']")).toHaveAttribute("aria-pressed", "true");
-    await $("button[aria-label='On this device']").click();
-    await expect($("button[aria-label='On this device']")).toHaveAttribute("aria-pressed", "true");
+    await $("button[aria-label='Local or network storage']").click();
+    await expect($("button[aria-label='Local or network storage']")).toHaveAttribute("aria-pressed", "true");
     await $("button[aria-label='Cloud-synchronised storage']").click();
     await $("button=Choose cabinet folder").click();
     await expect($("h1=Review your cabinet")).toBeDisplayed();

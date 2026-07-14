@@ -4,7 +4,6 @@ import {
   type CabinetConfiguration,
   type CabinetPreview,
   type CabinetService,
-  type CabinetStorage,
   recommendedCabinetSections,
 } from "./cabinetService";
 
@@ -16,7 +15,7 @@ type CabinetSetupProps = {
 };
 
 export function CabinetSetup({ cabinetService, session, unavailableRoot, onConfigured }: CabinetSetupProps) {
-  const [storage, setStorage] = useState<CabinetStorage>("cloudSynchronized");
+  const [storageGuidance, setStorageGuidance] = useState<"cloud" | "direct">("cloud");
   const [preview, setPreview] = useState<CabinetPreview | null>(null);
   const [sections, setSections] = useState<string[]>([...recommendedCabinetSections]);
   const [newSection, setNewSection] = useState("");
@@ -41,7 +40,7 @@ export function CabinetSetup({ cabinetService, session, unavailableRoot, onConfi
     setError("");
     setIsSubmitting(true);
     try {
-      onConfigured(await cabinetService.create(session.householdId, storage, {
+      onConfigured(await cabinetService.create(session.householdId, {
         root: preview.root,
         sections,
       }));
@@ -60,13 +59,13 @@ export function CabinetSetup({ cabinetService, session, unavailableRoot, onConfi
       <p>Choose where the {session.householdName} cabinet will live. The cabinet remains an ordinary folder you own and can use without Luna.</p>
       {unavailableRoot && <p role="status" className="session-notice">The remembered cabinet at <strong>{unavailableRoot}</strong> is unavailable. Luna will not redirect it without your direction.</p>}
       <div className="storage-options" role="group" aria-label="Cabinet storage">
-        <button aria-label="Cloud-synchronised storage" aria-pressed={storage === "cloudSynchronized"} className={storage === "cloudSynchronized" ? "selected" : undefined} onClick={() => setStorage("cloudSynchronized")} type="button">
+        <button aria-label="Cloud-synchronised storage" aria-pressed={storageGuidance === "cloud"} className={storageGuidance === "cloud" ? "selected" : undefined} onClick={() => setStorageGuidance("cloud")} type="button">
           <strong>Cloud-synchronised storage</strong>
           <span>Recommended · choose a folder inside OneDrive, iCloud Drive, Dropbox or another service you control.</span>
         </button>
-        <button aria-label="On this device" aria-pressed={storage === "local"} className={storage === "local" ? "selected" : undefined} onClick={() => setStorage("local")} type="button">
-          <strong>On this device</strong>
-          <span>Keep the cabinet in a local folder on this computer.</span>
+        <button aria-label="Local or network storage" aria-pressed={storageGuidance === "direct"} className={storageGuidance === "direct" ? "selected" : undefined} onClick={() => setStorageGuidance("direct")} type="button">
+          <strong>Local or network folder</strong>
+          <span>Keep the cabinet on this computer, an external drive or a network location you control.</span>
         </button>
       </div>
       {error && <p role="alert" className="account-error">{error}</p>}

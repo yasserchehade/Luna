@@ -1,12 +1,17 @@
 use std::{
     collections::HashSet,
+    fs::OpenOptions,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::SettingsStore;
+
+const MAX_CABINET_SECTION_BYTES: usize = 120;
+static WRITE_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub struct CabinetManager {
@@ -43,10 +48,10 @@ impl CabinetManager {
     pub fn create(
         &self,
         household_id: &str,
-        storage: CabinetStorage,
         preview: CabinetPreview,
     ) -> Result<CabinetConfiguration, CabinetError> {
         let preview = self.preview(&preview.root, &preview.sections)?;
+        verify_writable(&preview.root)?;
         let mut created = Vec::new();
         for section in &preview.sections {
             let section_path = preview.root.join(section);
@@ -62,7 +67,6 @@ impl CabinetManager {
         let configuration = CabinetConfiguration {
             root: preview.root,
             sections: preview.sections,
-            storage,
         };
         let stored = serde_json::to_string(&configuration)?;
         if let Err(error) = self.settings.set(&configuration_key(household_id), &stored) {
@@ -85,7 +89,8 @@ impl CabinetManager {
                 && configuration
                     .sections
                     .iter()
-                    .all(|section| configuration.root.join(section).is_dir());
+                    .all(|section| configuration.root.join(section).is_dir())
+                && verify_writable(&configuration.root).is_ok();
             CabinetValidation {
                 configuration,
                 availability: if available {
@@ -105,19 +110,11 @@ pub struct CabinetPreview {
     pub sections: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CabinetStorage {
-    CloudSynchronized,
-    Local,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CabinetConfiguration {
     pub root: PathBuf,
     pub sections: Vec<String>,
-    pub storage: CabinetStorage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -142,6 +139,8 @@ pub enum CabinetError {
     InvalidSectionName(String),
     #[error("'{0}' duplicates another cabinet section")]
     DuplicateSectionName(String),
+    #[error("the selected cabinet location is not writable")]
+    NotWritable,
     #[error("the cabinet filesystem operation failed")]
     Filesystem(#[from] std::io::Error),
     #[error("the cabinet setting could not be stored")]
@@ -158,6 +157,21 @@ fn rollback_created_sections(created: &mut Vec<PathBuf>) {
     for path in created.drain(..).rev() {
         let _ = std::fs::remove_dir(path);
     }
+}
+
+fn verify_writable(root: &Path) -> Result<(), CabinetError> {
+    let sequence = WRITE_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let probe = root.join(format!(
+        ".luna-write-probe-{}-{sequence}",
+        std::process::id()
+    ));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(|_| CabinetError::NotWritable)?;
+    drop(file);
+    std::fs::remove_file(probe).map_err(|_| CabinetError::NotWritable)
 }
 
 fn validate_section_name(section: &str) -> Result<(), CabinetError> {
@@ -190,6 +204,7 @@ fn validate_section_name(section: &str) -> Result<(), CabinetError> {
     );
     if trimmed.is_empty()
         || trimmed != section
+        || section.len() > MAX_CABINET_SECTION_BYTES
         || trimmed == "."
         || trimmed == ".."
         || trimmed.ends_with(['.', ' '])
