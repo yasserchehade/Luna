@@ -64,6 +64,12 @@ impl CabinetManager {
             }
             created.push(section_path);
         }
+        for section in &preview.sections {
+            if let Err(error) = verify_writable(&preview.root.join(section)) {
+                rollback_created_sections(&mut created);
+                return Err(error);
+            }
+        }
         let configuration = CabinetConfiguration {
             root: preview.root,
             sections: preview.sections,
@@ -86,10 +92,10 @@ impl CabinetManager {
     pub fn validate(&self, household_id: &str) -> Result<Option<CabinetValidation>, CabinetError> {
         Ok(self.load(household_id)?.map(|configuration| {
             let available = configuration.root.is_dir()
-                && configuration
-                    .sections
-                    .iter()
-                    .all(|section| configuration.root.join(section).is_dir())
+                && configuration.sections.iter().all(|section| {
+                    let section = configuration.root.join(section);
+                    section.is_dir() && verify_writable(&section).is_ok()
+                })
                 && verify_writable(&configuration.root).is_ok();
             CabinetValidation {
                 configuration,

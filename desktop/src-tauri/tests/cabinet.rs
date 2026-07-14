@@ -113,6 +113,31 @@ fn a_remembered_cabinet_with_denied_write_access_is_unavailable() {
 }
 
 #[test]
+fn a_remembered_cabinet_with_a_read_only_section_is_unavailable() {
+    let device_directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
+    fs::create_dir(&cabinet_root).expect("selected cabinet folder");
+    let manager = CabinetManager::new(
+        SettingsStore::open(device_directory.path().join("luna.db")).expect("open device settings"),
+    );
+    let preview = manager
+        .preview(&cabinet_root, &["Bills & Services".to_owned()])
+        .expect("preview cabinet");
+    manager
+        .create("rivera-household", preview)
+        .expect("create cabinet before section access is denied");
+    let denied_access = deny_write_access(&cabinet_root.join("Bills & Services"));
+
+    let validation = manager
+        .validate("rivera-household")
+        .expect("validate cabinet with a read-only section")
+        .expect("remembered cabinet");
+
+    assert_eq!(validation.availability, CabinetAvailability::Unavailable);
+    drop(denied_access);
+}
+
+#[test]
 fn a_failed_cabinet_creation_is_not_saved_or_left_half_created() {
     let device_directory = tempfile::tempdir().expect("temporary device directory");
     let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
