@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHmac, createPrivateKey, createPublicKey, randomBytes, sign } from "node:crypto";
 import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import * as OTPAuth from "otpauth";
+import postgres from "postgres";
 import { SupabaseAccountService } from "../src/account/supabaseAccountService";
 
 const localConfig = readLocalSupabaseConfig();
 const supabaseUrl = process.env.SUPABASE_URL ?? localConfig.API_URL;
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? localConfig.PUBLISHABLE_KEY;
 const jwtSecret = process.env.SUPABASE_JWT_SECRET ?? localConfig.JWT_SECRET;
+const databaseUrl = process.env.SUPABASE_DB_URL ?? localConfig.DB_URL;
 
 test("a verified Luna Account returns to the same Household after signing in again", async () => {
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
@@ -469,7 +471,12 @@ async function readLatestEmailCode(email: string): Promise<string> {
   return code;
 }
 
-function readLocalSupabaseConfig(): { API_URL?: string; PUBLISHABLE_KEY?: string; JWT_SECRET?: string } {
+function readLocalSupabaseConfig(): {
+  API_URL?: string;
+  DB_URL?: string;
+  JWT_SECRET?: string;
+  PUBLISHABLE_KEY?: string;
+} {
   if (process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY) return {};
 
   const command = path.resolve("node_modules", "supabase", "dist", "supabase.js");
@@ -479,7 +486,12 @@ function readLocalSupabaseConfig(): { API_URL?: string; PUBLISHABLE_KEY?: string
     { encoding: "utf8" },
   );
   assert.equal(status.status, 0, status.stderr || "local Supabase must be running");
-  return JSON.parse(status.stdout) as { API_URL?: string; PUBLISHABLE_KEY?: string; JWT_SECRET?: string };
+  return JSON.parse(status.stdout) as {
+    API_URL?: string;
+    DB_URL?: string;
+    JWT_SECRET?: string;
+    PUBLISHABLE_KEY?: string;
+  };
 }
 
 function createSigningAuthority(): { verificationKey: string; authorize: (message: string) => string } {
@@ -529,37 +541,25 @@ async function whileRecoveryAuthorityRowIsLocked<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   assert.match(householdId, /^[0-9a-f-]{36}$/i);
-  const containerResult = spawnSync(
-    "docker",
-    ["ps", "--filter", "name=supabase_db_", "--format", "{{.Names}}"],
-    { encoding: "utf8" },
-  );
-  assert.equal(containerResult.status, 0, containerResult.stderr || "local Supabase database must be running");
-  const container = containerResult.stdout.split(/\r?\n/).find((name) => name.startsWith("supabase_db_"));
-  assert.ok(container, "local Supabase database container was not found");
-
-  const database = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres"]);
-  let output = "";
-  let failureOutput = "";
-  database.stderr.setEncoding("utf8");
-  database.stderr.on("data", (chunk: string) => { failureOutput += chunk; });
-  const locked = new Promise<void>((resolve) => {
-    database.stdout.setEncoding("utf8");
-    database.stdout.on("data", (chunk: string) => {
-      output += chunk;
-      if (output.includes("LUNA_RECOVERY_AUTHORITY_LOCKED")) resolve();
+  assert.ok(databaseUrl, "SUPABASE_DB_URL is required for the recovery-authority race test");
+  const database = postgres(databaseUrl, { max: 1 });
+  let result: Promise<T> | undefined;
+  try {
+    await database.begin(async (transaction) => {
+      await transaction`
+        select key_epoch
+        from public.household_key_epochs
+        where household_id = ${householdId}
+        for update
+      `;
+      result = operation();
+      await new Promise((resolve) => setTimeout(resolve, 300));
     });
-  });
-  database.stdin.write(`BEGIN;\nSELECT key_epoch FROM public.household_key_epochs WHERE household_id = '${householdId}' FOR UPDATE;\n\\echo LUNA_RECOVERY_AUTHORITY_LOCKED\n`);
-  await locked;
-
-  const result = operation();
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  database.stdin.end("COMMIT;\n\\q\n");
-  const value = await result;
-  const exitCode = await new Promise<number | null>((resolve) => database.once("close", resolve));
-  assert.equal(exitCode, 0, failureOutput || "database lock fixture failed");
-  return value;
+    assert.ok(result, "the recovery-authority race operation did not start");
+    return await result;
+  } finally {
+    await database.end();
+  }
 }
 
 function replaceRecoveryKeyAuthorization(
