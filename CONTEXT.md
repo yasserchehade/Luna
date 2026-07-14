@@ -57,8 +57,16 @@ _Avoid_: Public space
 A device enrolled into the household's cryptographic trust and permitted to process protected Luna state.
 _Avoid_: Logged-in device
 
+**Device PIN**:
+A local secret that unlocks a Trusted Device for the current Luna session and remains separate from the Luna Account password.
+_Avoid_: Account PIN, recovery PIN
+
 **Recovery Key**:
 The offline household secret that can enrol a replacement trusted device and recover encrypted Luna memory independently of account-password recovery.
+
+**Device Revocation**:
+The removal of a Trusted Device's authority to receive future Household keys; after key rotation it cannot read newly protected Household state, though information it previously opened cannot be remotely erased.
+_Avoid_: Remote wipe, remove device
 
 ## Cabinet and documents
 

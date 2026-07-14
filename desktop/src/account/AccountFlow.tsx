@@ -4,7 +4,7 @@ import type { AccountService, HouseholdSession } from "./accountService";
 type AccountFlowProps = {
   accountService: AccountService;
   initialStep?: "registration" | "signIn";
-  onAuthenticated: (session: HouseholdSession) => void;
+  onAuthenticated: (session: HouseholdSession) => void | Promise<void>;
 };
 
 type AccountStep =
@@ -13,6 +13,7 @@ type AccountStep =
   | { kind: "household" }
   | { kind: "recoveryRequest" }
   | { kind: "recoveryVerification"; email: string }
+  | { kind: "authenticatorChallenge"; session: HouseholdSession }
   | { kind: "signIn" };
 
 export function AccountFlow({
@@ -61,15 +62,42 @@ export function AccountFlow({
   }, "That verification code did not work. Check the code and try again.");
 
   const createHousehold = submit(async (form) => {
-    onAuthenticated(await accountService.createHousehold(String(form.get("householdName"))));
+    await onAuthenticated(await accountService.createHousehold(String(form.get("householdName"))));
   }, "We could not create your Household. Check the name and try again.");
 
   const signIn = submit(async (form) => {
-    onAuthenticated(await accountService.signIn(
+    const session = await accountService.signIn(
       String(form.get("email")),
       String(form.get("password")),
-    ));
+    );
+    if (await accountService.getAuthenticatorStatus() === "challengeRequired") {
+      setStep({ kind: "authenticatorChallenge", session });
+      return;
+    }
+    await onAuthenticated(session);
   }, "The email or password is incorrect. Check your details and try again.");
+
+  const verifyAuthenticatorChallenge = submit(async (form) => {
+    if (step.kind !== "authenticatorChallenge") return;
+    await accountService.verifyAuthenticatorChallenge(String(form.get("code")));
+    await onAuthenticated(step.session);
+  }, "That authenticator code did not work. Check the current code and try again.");
+
+  const returnToSignIn = async () => {
+    if (submissionPending.current) return;
+    submissionPending.current = true;
+    setIsSubmitting(true);
+    setError("");
+    try {
+      await accountService.signOut();
+      setStep({ kind: "signIn" });
+    } catch {
+      setError("We could not safely return to sign in. Check your connection and try again.");
+    } finally {
+      submissionPending.current = false;
+      setIsSubmitting(false);
+    }
+  };
 
   const requestPasswordReset = submit(async (form) => {
     const email = String(form.get("email"));
@@ -79,11 +107,12 @@ export function AccountFlow({
 
   const resetPassword = submit(async (form) => {
     if (step.kind !== "recoveryVerification") return;
-    await accountService.resetPassword(
-      step.email,
-      String(form.get("code")),
-      String(form.get("password")),
-    );
+    await accountService.resetPassword({
+      email: step.email,
+      recoveryCode: String(form.get("code")),
+      authenticatorCode: String(form.get("authenticatorCode")),
+      newPassword: String(form.get("password")),
+    });
     await accountService.signOut();
     setNotice("Your password has been changed. Sign in with your new password.");
     setStep({ kind: "signIn" });
@@ -146,9 +175,23 @@ export function AccountFlow({
         <input id="recovery-code" name="code" inputMode="numeric" autoComplete="one-time-code" required />
         <label htmlFor="replacement-password">New password</label>
         <input id="replacement-password" name="password" type="password" autoComplete="new-password" minLength={12} required />
+        <label htmlFor="recovery-authenticator-code">Authenticator code</label>
+        <input id="recovery-authenticator-code" name="authenticatorCode" inputMode="numeric" autoComplete="one-time-code" required />
         <AccountError message={error} />
         <button type="submit" disabled={isSubmitting}>Set new password</button>
       </form>
+    </AccountCard>;
+  }
+
+  if (step.kind === "authenticatorChallenge") {
+    return <AccountCard key="authenticator-challenge" eyebrow="Account security" title="Verify your identity" description="Enter the current code from your authenticator app before Luna opens your Household.">
+      <form onSubmit={verifyAuthenticatorChallenge}>
+        <label htmlFor="sign-in-authenticator-code">Authenticator code</label>
+        <input id="sign-in-authenticator-code" name="code" inputMode="numeric" autoComplete="one-time-code" required />
+        <AccountError message={error} />
+        <button type="submit" disabled={isSubmitting}>Continue to Luna</button>
+      </form>
+      <div className="account-switch"><button type="button" disabled={isSubmitting} onClick={returnToSignIn}>Back to sign in</button></div>
     </AccountCard>;
   }
 

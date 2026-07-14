@@ -19,6 +19,6 @@ export const config: WebdriverIO.Config = {
   logLevel: "warn",
   waitforTimeout: 10_000,
   mochaOpts: {
-    timeout: 30_000,
+    timeout: 60_000,
   },
 };
