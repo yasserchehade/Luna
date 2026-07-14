@@ -1,7 +1,9 @@
 import path from "node:path";
 
 const executable = process.platform === "win32" ? "luna-desktop.exe" : "luna-desktop";
-const application = path.resolve("src-tauri", "target", "debug", executable);
+const application = process.env.LUNA_E2E_BINARY
+  ? path.resolve(process.env.LUNA_E2E_BINARY)
+  : path.resolve("src-tauri", "target", "debug", executable);
 const tauriServiceOptions = { appBinaryPath: application, driverProvider: "embedded" } as const;
 
 export const config: WebdriverIO.Config = {

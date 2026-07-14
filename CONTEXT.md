@@ -64,6 +64,10 @@ _Avoid_: Account PIN, recovery PIN
 **Recovery Key**:
 The offline household secret that can enrol a replacement trusted device and recover encrypted Luna memory independently of account-password recovery.
 
+**Recovery Key Replacement**:
+The Household Organiser-authorised creation of a new Recovery Key from an unlocked Trusted Device, making the previous Recovery Key unusable without relying on Luna Account recovery.
+_Avoid_: Recovery Key retrieval, Recovery Key reset
+
 **Device Revocation**:
 The removal of a Trusted Device's authority to receive future Household keys; after key rotation it cannot read newly protected Household state, though information it previously opened cannot be remotely erased.
 _Avoid_: Remote wipe, remove device

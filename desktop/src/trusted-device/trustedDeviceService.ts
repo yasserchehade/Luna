@@ -2,6 +2,7 @@ import type { HouseholdId } from "../account/accountService";
 
 export type TrustedDeviceEnrollment = {
   devicePublicKey: string;
+  deviceAuthorizationPublicKey: string;
   deviceKeyEnvelope: string;
   recoveryKey: string;
   recoveryEnvelope: string;
@@ -10,8 +11,16 @@ export type TrustedDeviceEnrollment = {
 
 export type RecoveredTrustedDevice = {
   devicePublicKey: string;
+  deviceAuthorizationPublicKey: string;
   deviceKeyEnvelope: string;
   recoveryAuthorizationSignature: string;
+};
+
+export type RecoveryKeyReplacement = {
+  recoveryKey: string;
+  recoveryEnvelope: string;
+  recoveryVerificationKey: string;
+  deviceAuthorizationSignature: string;
 };
 
 export type RotatedDeviceKeyEnvelope = {
@@ -43,6 +52,16 @@ export interface TrustedDeviceService {
     keyEpoch: number,
   ): Promise<RecoveredTrustedDevice>;
   finalizeRecoveredDevice(householdId: HouseholdId, keyEpoch: number): Promise<void>;
+  prepareRecoveryKeyReplacement(
+    householdId: HouseholdId,
+    currentKeyEpoch: number,
+    currentRecoveryVerificationKey: string,
+  ): Promise<RecoveryKeyReplacement>;
+  confirmRecoveryKeyReplacement(
+    householdId: HouseholdId,
+    recoveryKey: string,
+    recoveryEnvelope: string,
+  ): Promise<void>;
   prepareHouseholdKeyRotation(
     householdId: HouseholdId,
     recoveryKey: string,
@@ -97,6 +116,12 @@ export const unavailableTrustedDeviceService: TrustedDeviceService = {
   },
   async finalizeRecoveredDevice() {
     throw new Error("Trusted Device recovery is not configured.");
+  },
+  async prepareRecoveryKeyReplacement() {
+    throw new Error("Recovery Key Replacement is not configured.");
+  },
+  async confirmRecoveryKeyReplacement() {
+    throw new Error("Recovery Key Replacement is not configured.");
   },
   async prepareHouseholdKeyRotation() {
     throw new Error("Trusted Device revocation is not configured.");

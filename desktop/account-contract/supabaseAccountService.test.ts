@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { createPrivateKey, createPublicKey, randomBytes, sign } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { createHmac, createPrivateKey, createPublicKey, randomBytes, sign } from "node:crypto";
 import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import * as OTPAuth from "otpauth";
@@ -10,6 +10,7 @@ import { SupabaseAccountService } from "../src/account/supabaseAccountService";
 const localConfig = readLocalSupabaseConfig();
 const supabaseUrl = process.env.SUPABASE_URL ?? localConfig.API_URL;
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? localConfig.PUBLISHABLE_KEY;
+const jwtSecret = process.env.SUPABASE_JWT_SECRET ?? localConfig.JWT_SECRET;
 
 test("a verified Luna Account returns to the same Household after signing in again", async () => {
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
@@ -27,7 +28,8 @@ test("a verified Luna Account returns to the same Household after signing in aga
   const created = await accountService.createHousehold("Rivera Household");
   assert.equal(created.organiserName, "Sam Rivera");
   assert.equal(created.householdName, "Rivera Household");
-  const recoveryAuthority = createRecoveryAuthority();
+  const recoveryAuthority = createSigningAuthority();
+  const firstDeviceAuthority = createSigningAuthority();
 
   const authenticator = await accountService.beginAuthenticatorEnrollment();
   const totp = new OTPAuth.TOTP({
@@ -43,6 +45,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
   const trustedDevice = await accountService.registerFirstTrustedDevice({
     label: "Sam's test PC",
     publicKey: "age1testdevicepublickey",
+    authorizationPublicKey: firstDeviceAuthority.verificationKey,
     keyEnvelope: "encrypted-device-envelope",
     recoveryEnvelope: "encrypted-recovery-envelope",
     recoveryVerificationKey: recoveryAuthority.verificationKey,
@@ -51,6 +54,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
   assert.equal(trustedDevice.status, "active");
   assert.deepEqual(await accountService.getTrustedDeviceRecoveryEnvelope(), {
     recoveryEnvelope: "encrypted-recovery-envelope",
+    recoveryVerificationKey: recoveryAuthority.verificationKey,
     keyEpoch: 1,
   });
 
@@ -101,15 +105,18 @@ test("a verified Luna Account returns to the same Household after signing in aga
   await accountService.verifyAuthenticatorChallenge(totp.generate());
   const recoveredPublicKey = "age1testreplacementdevicepublickey";
   const recoveredKeyEnvelope = "encrypted-replacement-device-envelope";
+  const recoveredDeviceAuthority = createSigningAuthority();
   const recoveredAuthorization = recoveryAuthority.authorize(recoverDeviceAuthorization(
     created.householdId,
     1,
     recoveredPublicKey,
+    recoveredDeviceAuthority.verificationKey,
     recoveredKeyEnvelope,
   ));
   await assert.rejects(accountService.registerRecoveredTrustedDevice({
     label: "Unauthorised replacement",
     publicKey: recoveredPublicKey,
+    authorizationPublicKey: recoveredDeviceAuthority.verificationKey,
     keyEnvelope: recoveredKeyEnvelope,
     keyEpoch: 1,
     recoveryAuthorizationSignature: randomBytes(64).toString("base64"),
@@ -117,6 +124,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
   await assert.rejects(accountService.registerRecoveredTrustedDevice({
     label: "Missing recovery authority",
     publicKey: recoveredPublicKey,
+    authorizationPublicKey: recoveredDeviceAuthority.verificationKey,
     keyEnvelope: recoveredKeyEnvelope,
     keyEpoch: 1,
     recoveryAuthorizationSignature: null as unknown as string,
@@ -124,6 +132,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
   await assert.rejects(accountService.registerRecoveredTrustedDevice({
     label: "Substituted replacement envelope",
     publicKey: recoveredPublicKey,
+    authorizationPublicKey: recoveredDeviceAuthority.verificationKey,
     keyEnvelope: "substituted-replacement-device-envelope",
     keyEpoch: 1,
     recoveryAuthorizationSignature: recoveredAuthorization,
@@ -131,6 +140,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
   const recoveredDevice = await accountService.registerRecoveredTrustedDevice({
     label: "Sam's replacement PC",
     publicKey: recoveredPublicKey,
+    authorizationPublicKey: recoveredDeviceAuthority.verificationKey,
     keyEnvelope: recoveredKeyEnvelope,
     keyEpoch: 1,
     recoveryAuthorizationSignature: recoveredAuthorization,
@@ -155,6 +165,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
     }],
     recoveryAuthorizationSignature: randomBytes(64).toString("base64"),
   }));
+
   await assert.rejects(accountService.revokeTrustedDevice({
     deviceId: trustedDevice.id,
     currentDevicePublicKey: recoveredDevice.publicKey,
@@ -215,6 +226,7 @@ test("a verified Luna Account returns to the same Household after signing in aga
   );
   assert.deepEqual(await accountService.getTrustedDeviceRecoveryEnvelope(), {
     recoveryEnvelope: "rotated-recovery-envelope",
+    recoveryVerificationKey: recoveryAuthority.verificationKey,
     keyEpoch: 2,
   });
   assert.deepEqual(await accountService.getTrustedDeviceKeyCoordination(recoveredDevice.publicKey), {
@@ -246,8 +258,157 @@ test("a verified Luna Account returns to the same Household after signing in aga
     )),
   }));
 
+  const replacementRecoveryAuthority = createSigningAuthority();
+  const replacementRecoveryEnvelope = "replacement-recovery-envelope";
+  const replacementAuthorization = recoveredDeviceAuthority.authorize(replaceRecoveryKeyAuthorization(
+    created.householdId,
+    2,
+    recoveredDevice.publicKey,
+    recoveryAuthority.verificationKey,
+    replacementRecoveryEnvelope,
+    replacementRecoveryAuthority.verificationKey,
+  ));
+  assert.ok(jwtSecret, "SUPABASE_JWT_SECRET is required for the stale-MFA boundary test");
+  const staleIdentityClient = createClient(supabaseUrl, publishableKey, { auth: { persistSession: false } });
+  const staleIdentity = await staleIdentityClient.auth.signInWithPassword({ email, password: replacementPassword });
+  assert.equal(staleIdentity.error, null);
+  assert.ok(staleIdentity.data.user);
+  const staleMfaToken = createTestJwt(jwtSecret, {
+    sub: staleIdentity.data.user.id,
+    email,
+    role: "authenticated",
+    aud: "authenticated",
+    aal: "aal2",
+    amr: [{ method: "totp", timestamp: Math.floor(Date.now() / 1000) - 10 * 60 }],
+  });
+  const staleMfaClient = createClient(supabaseUrl, publishableKey, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: `Bearer ${staleMfaToken}` } },
+  });
+  const staleMfaReplacement = await staleMfaClient.rpc("replace_recovery_key", {
+    requested_current_device_public_key: recoveredDevice.publicKey,
+    requested_current_key_epoch: 2,
+    requested_current_recovery_verification_key: recoveryAuthority.verificationKey,
+    requested_recovery_envelope: replacementRecoveryEnvelope,
+    requested_recovery_verification_key: replacementRecoveryAuthority.verificationKey,
+    requested_device_authorization_signature: replacementAuthorization,
+  });
+  assert.match(
+    staleMfaReplacement.error?.message ?? "",
+    /Fresh authenticator verification is required/,
+    "a stale AAL2 session must not authorize Recovery Key Replacement",
+  );
+  await assert.rejects(accountService.replaceRecoveryKey({
+    currentDevicePublicKey: recoveredDevice.publicKey,
+    currentKeyEpoch: 2,
+    currentRecoveryVerificationKey: recoveryAuthority.verificationKey,
+    recoveryEnvelope: replacementRecoveryEnvelope,
+    recoveryVerificationKey: replacementRecoveryAuthority.verificationKey,
+    deviceAuthorizationSignature: randomBytes(64).toString("base64"),
+  }));
+  await assert.rejects(accountService.replaceRecoveryKey({
+    currentDevicePublicKey: recoveredDevice.publicKey,
+    currentKeyEpoch: 2,
+    currentRecoveryVerificationKey: recoveryAuthority.verificationKey,
+    recoveryEnvelope: "substituted-recovery-envelope",
+    recoveryVerificationKey: replacementRecoveryAuthority.verificationKey,
+    deviceAuthorizationSignature: replacementAuthorization,
+  }));
+  const concurrentDeviceAuthority = createSigningAuthority();
+  const concurrentDevicePublicKey = "age1concurrentoldrecoverydevice";
+  const concurrentDeviceEnvelope = "concurrent-old-recovery-device-envelope";
+  const concurrentRecoveryAuthorization = recoveryAuthority.authorize(recoverDeviceAuthorization(
+    created.householdId,
+    2,
+    concurrentDevicePublicKey,
+    concurrentDeviceAuthority.verificationKey,
+    concurrentDeviceEnvelope,
+  ));
+  const [replacementResult, staleEnrollmentResult] = await whileRecoveryAuthorityRowIsLocked(
+    created.householdId,
+    async () => {
+      const replacement = accountService.replaceRecoveryKey({
+        currentDevicePublicKey: recoveredDevice.publicKey,
+        currentKeyEpoch: 2,
+        currentRecoveryVerificationKey: recoveryAuthority.verificationKey,
+        recoveryEnvelope: replacementRecoveryEnvelope,
+        recoveryVerificationKey: replacementRecoveryAuthority.verificationKey,
+        deviceAuthorizationSignature: replacementAuthorization,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const staleEnrollment = accountService.registerRecoveredTrustedDevice({
+        label: "Concurrent device using previous Recovery Key",
+        publicKey: concurrentDevicePublicKey,
+        authorizationPublicKey: concurrentDeviceAuthority.verificationKey,
+        keyEnvelope: concurrentDeviceEnvelope,
+        keyEpoch: 2,
+        recoveryAuthorizationSignature: concurrentRecoveryAuthorization,
+      });
+      return Promise.allSettled([replacement, staleEnrollment]);
+    },
+  );
+  assert.equal(replacementResult.status, "fulfilled", "replacement should win the queued authority update");
+  assert.equal(staleEnrollmentResult.status, "rejected", "old Recovery Key enrollment must not commit after replacement");
+  assert.deepEqual(await accountService.getTrustedDeviceRecoveryEnvelope(), {
+    recoveryEnvelope: replacementRecoveryEnvelope,
+    recoveryVerificationKey: replacementRecoveryAuthority.verificationKey,
+    keyEpoch: 2,
+  });
+  await assert.rejects(accountService.replaceRecoveryKey({
+    currentDevicePublicKey: recoveredDevice.publicKey,
+    currentKeyEpoch: 2,
+    currentRecoveryVerificationKey: recoveryAuthority.verificationKey,
+    recoveryEnvelope: replacementRecoveryEnvelope,
+    recoveryVerificationKey: replacementRecoveryAuthority.verificationKey,
+    deviceAuthorizationSignature: replacementAuthorization,
+  }), "a committed Recovery Key Replacement cannot be replayed");
+
+  const postReplacementDeviceAuthority = createSigningAuthority();
+  const postReplacementPublicKey = "age1postreplacementdevicepublickey";
+  const postReplacementEnvelope = "post-replacement-device-envelope";
+  const oldRecoveryAuthorization = recoveryAuthority.authorize(recoverDeviceAuthorization(
+    created.householdId,
+    2,
+    postReplacementPublicKey,
+    postReplacementDeviceAuthority.verificationKey,
+    postReplacementEnvelope,
+  ));
+  await assert.rejects(accountService.registerRecoveredTrustedDevice({
+    label: "Device using previous Recovery Key",
+    publicKey: postReplacementPublicKey,
+    authorizationPublicKey: postReplacementDeviceAuthority.verificationKey,
+    keyEnvelope: postReplacementEnvelope,
+    keyEpoch: 2,
+    recoveryAuthorizationSignature: oldRecoveryAuthorization,
+  }));
+  const newRecoveryAuthorization = replacementRecoveryAuthority.authorize(recoverDeviceAuthorization(
+    created.householdId,
+    2,
+    postReplacementPublicKey,
+    postReplacementDeviceAuthority.verificationKey,
+    postReplacementEnvelope,
+  ));
+  const postReplacementDevice = await accountService.registerRecoveredTrustedDevice({
+    label: "Device using replacement Recovery Key",
+    publicKey: postReplacementPublicKey,
+    authorizationPublicKey: postReplacementDeviceAuthority.verificationKey,
+    keyEnvelope: postReplacementEnvelope,
+    keyEpoch: 2,
+    recoveryAuthorizationSignature: newRecoveryAuthorization,
+  });
+  assert.equal(postReplacementDevice.status, "active");
+
   const organiserClient = createClient(supabaseUrl, publishableKey, { auth: { persistSession: false } });
   assert.equal((await organiserClient.auth.signInWithPassword({ email, password: replacementPassword })).error, null);
+  const aal1Replacement = await organiserClient.rpc("replace_recovery_key", {
+    requested_current_device_public_key: recoveredDevice.publicKey,
+    requested_current_key_epoch: 2,
+    requested_current_recovery_verification_key: recoveryAuthority.verificationKey,
+    requested_recovery_envelope: replacementRecoveryEnvelope,
+    requested_recovery_verification_key: replacementRecoveryAuthority.verificationKey,
+    requested_device_authorization_signature: replacementAuthorization,
+  });
+  assert.notEqual(aal1Replacement.error, null, "authenticator MFA must be required for replacement");
   const organiserHouseholds = await organiserClient.from("households").select("id");
   assert.equal(organiserHouseholds.error, null);
   assert.deepEqual(organiserHouseholds.data, [{ id: created.householdId }]);
@@ -308,7 +469,7 @@ async function readLatestEmailCode(email: string): Promise<string> {
   return code;
 }
 
-function readLocalSupabaseConfig(): { API_URL?: string; PUBLISHABLE_KEY?: string } {
+function readLocalSupabaseConfig(): { API_URL?: string; PUBLISHABLE_KEY?: string; JWT_SECRET?: string } {
   if (process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY) return {};
 
   const command = path.resolve("node_modules", "supabase", "dist", "supabase.js");
@@ -318,10 +479,10 @@ function readLocalSupabaseConfig(): { API_URL?: string; PUBLISHABLE_KEY?: string
     { encoding: "utf8" },
   );
   assert.equal(status.status, 0, status.stderr || "local Supabase must be running");
-  return JSON.parse(status.stdout) as { API_URL?: string; PUBLISHABLE_KEY?: string };
+  return JSON.parse(status.stdout) as { API_URL?: string; PUBLISHABLE_KEY?: string; JWT_SECRET?: string };
 }
 
-function createRecoveryAuthority(): { verificationKey: string; authorize: (message: string) => string } {
+function createSigningAuthority(): { verificationKey: string; authorize: (message: string) => string } {
   const seed = randomBytes(32);
   const privateKey = createPrivateKey({
     key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
@@ -339,13 +500,83 @@ function recoverDeviceAuthorization(
   householdId: string,
   keyEpoch: number,
   devicePublicKey: string,
+  deviceAuthorizationPublicKey: string,
   keyEnvelope: string,
 ): string {
   return canonicalAuthorization("luna:recover-device:v2:", [
     householdId,
     keyEpoch.toString(),
     devicePublicKey,
+    deviceAuthorizationPublicKey,
     keyEnvelope,
+  ]);
+}
+
+function createTestJwt(secret: string, claims: Record<string, unknown>): string {
+  const now = Math.floor(Date.now() / 1000);
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
+    ...claims,
+    iat: now,
+    exp: now + 5 * 60,
+  })}`;
+  const signature = createHmac("sha256", secret).update(unsigned).digest("base64url");
+  return `${unsigned}.${signature}`;
+}
+
+async function whileRecoveryAuthorityRowIsLocked<T>(
+  householdId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  assert.match(householdId, /^[0-9a-f-]{36}$/i);
+  const containerResult = spawnSync(
+    "docker",
+    ["ps", "--filter", "name=supabase_db_", "--format", "{{.Names}}"],
+    { encoding: "utf8" },
+  );
+  assert.equal(containerResult.status, 0, containerResult.stderr || "local Supabase database must be running");
+  const container = containerResult.stdout.split(/\r?\n/).find((name) => name.startsWith("supabase_db_"));
+  assert.ok(container, "local Supabase database container was not found");
+
+  const database = spawn("docker", ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres"]);
+  let output = "";
+  let failureOutput = "";
+  database.stderr.setEncoding("utf8");
+  database.stderr.on("data", (chunk: string) => { failureOutput += chunk; });
+  const locked = new Promise<void>((resolve) => {
+    database.stdout.setEncoding("utf8");
+    database.stdout.on("data", (chunk: string) => {
+      output += chunk;
+      if (output.includes("LUNA_RECOVERY_AUTHORITY_LOCKED")) resolve();
+    });
+  });
+  database.stdin.write(`BEGIN;\nSELECT key_epoch FROM public.household_key_epochs WHERE household_id = '${householdId}' FOR UPDATE;\n\\echo LUNA_RECOVERY_AUTHORITY_LOCKED\n`);
+  await locked;
+
+  const result = operation();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  database.stdin.end("COMMIT;\n\\q\n");
+  const value = await result;
+  const exitCode = await new Promise<number | null>((resolve) => database.once("close", resolve));
+  assert.equal(exitCode, 0, failureOutput || "database lock fixture failed");
+  return value;
+}
+
+function replaceRecoveryKeyAuthorization(
+  householdId: string,
+  keyEpoch: number,
+  currentDevicePublicKey: string,
+  currentRecoveryVerificationKey: string,
+  recoveryEnvelope: string,
+  recoveryVerificationKey: string,
+): string {
+  return canonicalAuthorization("luna:replace-recovery-key:v1:", [
+    householdId,
+    keyEpoch.toString(),
+    currentDevicePublicKey,
+    currentRecoveryVerificationKey,
+    recoveryEnvelope,
+    recoveryVerificationKey,
   ]);
 }
 

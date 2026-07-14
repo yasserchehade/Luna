@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import type { AccountService, HouseholdSession, TrustedDeviceRecord } from "../account/accountService";
+import { RecoveryKeyReplacementOptions } from "./RecoveryKeyReplacementOptions";
 import type { TrustedDeviceService } from "./trustedDeviceService";
 
 export function TrustedDevicesOptions({
@@ -94,6 +95,12 @@ export function TrustedDevicesOptions({
           </li>;
         })}
       </ul>
+      <RecoveryKeyReplacementOptions
+        accountService={accountService}
+        currentDevicePublicKey={currentPublicKey}
+        session={session}
+        trustedDeviceService={trustedDeviceService}
+      />
       {target && <section className="revocation-card">
         <h2>Confirm device revocation</h2>
         <p>Enter your offline Recovery Key. Luna will rotate Household memory keys before future state is written.</p>

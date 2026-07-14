@@ -8,6 +8,7 @@ import type {
   RegisterAccountRequest,
   RegisterRecoveredTrustedDeviceRequest,
   RegisterTrustedDeviceRequest,
+  ReplaceRecoveryKeyRequest,
   RevokeTrustedDeviceRequest,
   ResetPasswordRequest,
   TrustedDeviceRecord,
@@ -146,6 +147,7 @@ export class SupabaseAccountService implements AccountService {
     const { data, error } = await this.client.rpc("register_first_trusted_device", {
       requested_label: request.label,
       requested_public_key: request.publicKey,
+      requested_authorization_public_key: request.authorizationPublicKey,
       requested_key_envelope: request.keyEnvelope,
       requested_recovery_envelope: request.recoveryEnvelope,
       requested_recovery_verification_key: request.recoveryVerificationKey,
@@ -160,6 +162,7 @@ export class SupabaseAccountService implements AccountService {
     const { data, error } = await this.client.rpc("register_recovered_trusted_device", {
       requested_label: request.label,
       requested_public_key: request.publicKey,
+      requested_authorization_public_key: request.authorizationPublicKey,
       requested_key_envelope: request.keyEnvelope,
       requested_key_epoch: request.keyEpoch,
       requested_recovery_authorization_signature: request.recoveryAuthorizationSignature,
@@ -172,10 +175,19 @@ export class SupabaseAccountService implements AccountService {
     const { data, error } = await this.client.rpc("current_trusted_device_recovery");
     if (error) throw error;
     const row = Array.isArray(data) ? data[0] : data;
-    if (!row || typeof row.recovery_envelope !== "string" || typeof row.key_epoch !== "number") {
+    if (
+      !row
+      || typeof row.recovery_envelope !== "string"
+      || typeof row.recovery_verification_key !== "string"
+      || typeof row.key_epoch !== "number"
+    ) {
       throw new Error("The Luna account service returned invalid Trusted Device recovery data.");
     }
-    return { recoveryEnvelope: row.recovery_envelope, keyEpoch: row.key_epoch };
+    return {
+      recoveryEnvelope: row.recovery_envelope,
+      recoveryVerificationKey: row.recovery_verification_key,
+      keyEpoch: row.key_epoch,
+    };
   }
 
   async listTrustedDevices(): Promise<TrustedDeviceRecord[]> {
@@ -206,6 +218,18 @@ export class SupabaseAccountService implements AccountService {
       keyEpoch: row.key_epoch,
       status: row.device_status,
     };
+  }
+
+  async replaceRecoveryKey(request: ReplaceRecoveryKeyRequest): Promise<void> {
+    const { error } = await this.client.rpc("replace_recovery_key", {
+      requested_current_device_public_key: request.currentDevicePublicKey,
+      requested_current_key_epoch: request.currentKeyEpoch,
+      requested_current_recovery_verification_key: request.currentRecoveryVerificationKey,
+      requested_recovery_envelope: request.recoveryEnvelope,
+      requested_recovery_verification_key: request.recoveryVerificationKey,
+      requested_device_authorization_signature: request.deviceAuthorizationSignature,
+    });
+    if (error) throw error;
   }
 
   async revokeTrustedDevice(request: RevokeTrustedDeviceRequest): Promise<TrustedDeviceRecord[]> {
