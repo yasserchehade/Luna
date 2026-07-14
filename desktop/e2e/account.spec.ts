@@ -171,6 +171,64 @@ describe("Luna account access", () => {
     ), { householdId: testHousehold.id, protected: protectedState }) as string;
     expect(openedState).toBe("state received after remote rotation");
 
+    await $("button[aria-label='Options']").click();
+    await expect($("h1=Trusted devices")).toBeDisplayed();
+    const recoveryBeforeCancellation = await browser.execute(() => (
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: {
+          currentRecovery(): { recoveryEnvelope: string; recoveryVerificationKey: string; keyEpoch: number };
+        };
+      }).__LUNA_E2E_ACCOUNT__.currentRecovery()
+    ));
+    await $("button=Replace lost Recovery Key").click();
+    await $("#replacement-authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Verify and generate replacement").click();
+    await expect($("h2=Save your replacement Recovery Key")).toBeDisplayed();
+    await $("button=Cancel").click();
+    await expect($("button=Replace lost Recovery Key")).toBeDisplayed();
+    expect(await browser.execute(() => (
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: {
+          currentRecovery(): { recoveryEnvelope: string; recoveryVerificationKey: string; keyEpoch: number };
+        };
+      }).__LUNA_E2E_ACCOUNT__.currentRecovery()
+    ))).toEqual(recoveryBeforeCancellation);
+
+    await $("button=Replace lost Recovery Key").click();
+    await expect($("h2=Verify Recovery Key Replacement")).toBeDisplayed();
+    await $("#replacement-authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Verify and generate replacement").click();
+    await expect($("h2=Save your replacement Recovery Key")).toBeDisplayed();
+    const replacementRecoveryKey = await $("#replacement-recovery-key-output").getText();
+    expect(replacementRecoveryKey.split(/\s+/)).toHaveLength(24);
+    expect(replacementRecoveryKey).not.toBe(recoveryKey);
+    await $("#replacement-recovery-key-confirmation").setValue("wrong recovery key");
+    await $("button=Confirm replacement Recovery Key").click();
+    await expect($("[role='alert']")).toHaveText(expect.stringContaining("does not match"));
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: {
+          failAfterNextRecoveryReplacementCommit(): void;
+          setCoordinationAvailable(available: boolean): void;
+        };
+      }).__LUNA_E2E_ACCOUNT__.failAfterNextRecoveryReplacementCommit();
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };
+      }).__LUNA_E2E_ACCOUNT__.setCoordinationAvailable(false);
+    });
+    await $("#replacement-recovery-key-confirmation").setValue(replacementRecoveryKey);
+    await $("button=Confirm replacement Recovery Key").click();
+    await expect($("[role='alert']")).toHaveText(expect.stringContaining("could not confirm whether"));
+    await expect($("#replacement-recovery-key-output")).toHaveText(replacementRecoveryKey);
+    await expect($("button=Check replacement status")).toBeDisplayed();
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };
+      }).__LUNA_E2E_ACCOUNT__.setCoordinationAvailable(true);
+    });
+    await $("button=Check replacement status").click();
+    await expect($("[role='status']")).toHaveText(expect.stringContaining("previous Recovery Key no longer works"));
+
     await browser.execute(() => {
       (window as typeof window & {
         __LUNA_E2E_ACCOUNT__: { failNextAccountSignOut(): void };
@@ -230,6 +288,9 @@ describe("Luna account access", () => {
     await expect($("h1=Enter your Recovery Key")).toBeDisplayed();
     await $("#replacement-recovery-key").setValue(recoveryKey);
     await $("button=Recover trusted device").click();
+    await expect($("[role='alert']")).toHaveText(expect.stringContaining("does not match"));
+    await $("#replacement-recovery-key").setValue(replacementRecoveryKey);
+    await $("button=Recover trusted device").click();
     await expect($("h1=Create a device PIN")).toBeDisplayed();
     await $("#device-pin").setValue(testHousehold.replacementDevicePin);
     await $("#device-pin-confirmation").setValue(testHousehold.replacementDevicePin);
@@ -242,7 +303,7 @@ describe("Luna account access", () => {
     await expect($("[data-device-label='Recovered device']")).toHaveText(expect.stringContaining("This device"));
     await $("button[aria-label='Revoke This device']").click();
     await expect($("h2=Confirm device revocation")).toBeDisplayed();
-    await $("#revocation-recovery-key").setValue(recoveryKey);
+    await $("#revocation-recovery-key").setValue(replacementRecoveryKey);
     await $("button=Revoke device").click();
     await expect($("[data-device-label='This device']")).toHaveText(expect.stringContaining("Revoked"));
 
