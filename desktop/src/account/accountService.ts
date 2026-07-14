@@ -26,9 +26,19 @@ export type ResetPasswordRequest = {
 export type RegisterTrustedDeviceRequest = {
   label: string;
   publicKey: string;
+  authorizationPublicKey: string;
   keyEnvelope: string;
   recoveryEnvelope: string;
   recoveryVerificationKey: string;
+};
+
+export type ReplaceRecoveryKeyRequest = {
+  currentDevicePublicKey: string;
+  currentKeyEpoch: number;
+  currentRecoveryVerificationKey: string;
+  recoveryEnvelope: string;
+  recoveryVerificationKey: string;
+  deviceAuthorizationSignature: string;
 };
 
 export type RegisterRecoveredTrustedDeviceRequest = Omit<
@@ -94,9 +104,14 @@ export interface AccountService {
   verifyAuthenticatorChallenge(code: string): Promise<void>;
   registerFirstTrustedDevice(request: RegisterTrustedDeviceRequest): Promise<TrustedDeviceRecord>;
   registerRecoveredTrustedDevice(request: RegisterRecoveredTrustedDeviceRequest): Promise<TrustedDeviceRecord>;
-  getTrustedDeviceRecoveryEnvelope(): Promise<{ recoveryEnvelope: string; keyEpoch: number }>;
+  getTrustedDeviceRecoveryEnvelope(): Promise<{
+    recoveryEnvelope: string;
+    recoveryVerificationKey: string;
+    keyEpoch: number;
+  }>;
   listTrustedDevices(): Promise<TrustedDeviceRecord[]>;
   getTrustedDeviceKeyCoordination(publicKey: string): Promise<TrustedDeviceKeyCoordination>;
+  replaceRecoveryKey(request: ReplaceRecoveryKeyRequest): Promise<void>;
   revokeTrustedDevice(request: RevokeTrustedDeviceRequest): Promise<TrustedDeviceRecord[]>;
   restoreSession(): Promise<HouseholdSession | null>;
   signIn(email: string, password: string): Promise<HouseholdSession>;
@@ -145,6 +160,9 @@ export const unavailableAccountService: AccountService = {
   },
   async getTrustedDeviceKeyCoordination() {
     throw new Error("Trusted Device key coordination is not configured.");
+  },
+  async replaceRecoveryKey() {
+    throw new Error("Recovery Key Replacement is not configured.");
   },
   async revokeTrustedDevice() {
     throw new Error("Trusted Device revocation is not configured.");

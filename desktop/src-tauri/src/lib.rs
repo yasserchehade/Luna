@@ -67,6 +67,7 @@ impl CredentialVault for E2eCredentialVault {
 #[serde(rename_all = "camelCase")]
 struct DeviceEnrollmentResponse {
     device_public_key: String,
+    device_authorization_public_key: String,
     device_key_envelope: String,
     recovery_key: String,
     recovery_envelope: String,
@@ -77,8 +78,18 @@ struct DeviceEnrollmentResponse {
 #[serde(rename_all = "camelCase")]
 struct RecoveredDeviceResponse {
     device_public_key: String,
+    device_authorization_public_key: String,
     device_key_envelope: String,
     recovery_authorization_signature: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryKeyReplacementResponse {
+    recovery_key: String,
+    recovery_envelope: String,
+    recovery_verification_key: String,
+    device_authorization_signature: String,
 }
 
 #[derive(Serialize)]
@@ -229,6 +240,7 @@ fn enrol_first_device(
         .map_err(|error| error.to_string())?;
     Ok(DeviceEnrollmentResponse {
         device_public_key: enrollment.device_public_key,
+        device_authorization_public_key: BASE64.encode(enrollment.device_authorization_public_key),
         device_key_envelope: BASE64.encode(enrollment.device_key_envelope),
         recovery_key: enrollment.recovery_key,
         recovery_envelope: BASE64.encode(enrollment.recovery_envelope),
@@ -267,9 +279,52 @@ fn recover_device(
         .map_err(|error| error.to_string())?;
     Ok(RecoveredDeviceResponse {
         device_public_key: recovered.device_public_key,
+        device_authorization_public_key: BASE64.encode(recovered.device_authorization_public_key),
         device_key_envelope: BASE64.encode(recovered.device_key_envelope),
         recovery_authorization_signature: BASE64.encode(recovered.recovery_authorization_signature),
     })
+}
+
+#[tauri::command]
+fn prepare_recovery_key_replacement(
+    manager: State<'_, DeviceManager>,
+    household_id: String,
+    current_key_epoch: u32,
+    current_recovery_verification_key: String,
+) -> Result<RecoveryKeyReplacementResponse, String> {
+    let current_recovery_verification_key: [u8; 32] = BASE64
+        .decode(current_recovery_verification_key)
+        .map_err(|_| "The current Recovery Key verifier is invalid.".to_owned())?
+        .try_into()
+        .map_err(|_| "The current Recovery Key verifier is invalid.".to_owned())?;
+    let replacement = manager
+        .prepare_recovery_key_replacement(
+            &household_id,
+            current_key_epoch,
+            &current_recovery_verification_key,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(RecoveryKeyReplacementResponse {
+        recovery_key: replacement.recovery_key,
+        recovery_envelope: BASE64.encode(replacement.recovery_envelope),
+        recovery_verification_key: BASE64.encode(replacement.recovery_verification_key),
+        device_authorization_signature: BASE64.encode(replacement.device_authorization_signature),
+    })
+}
+
+#[tauri::command]
+fn confirm_recovery_key_replacement(
+    manager: State<'_, DeviceManager>,
+    household_id: String,
+    recovery_key: String,
+    recovery_envelope: String,
+) -> Result<(), String> {
+    let envelope = BASE64
+        .decode(recovery_envelope)
+        .map_err(|_| "The replacement Recovery Key envelope is invalid.".to_owned())?;
+    manager
+        .confirm_recovery_key_replacement(&household_id, &recovery_key, &envelope)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -426,6 +481,8 @@ pub fn run() {
         confirm_recovery_key,
         recover_device,
         finalize_recovered_device,
+        prepare_recovery_key_replacement,
+        confirm_recovery_key_replacement,
         prepare_household_key_rotation,
         finalize_household_key_rotation,
         discard_household_key_rotation,

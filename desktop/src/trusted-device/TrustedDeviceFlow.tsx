@@ -56,6 +56,7 @@ export function TrustedDeviceFlow({
       const registered = await accountService.registerFirstTrustedDevice({
         label: "This device",
         publicKey: enrollment.devicePublicKey,
+        authorizationPublicKey: enrollment.deviceAuthorizationPublicKey,
         keyEnvelope: enrollment.deviceKeyEnvelope,
         recoveryEnvelope: enrollment.recoveryEnvelope,
         recoveryVerificationKey: enrollment.recoveryVerificationKey,
@@ -98,6 +99,7 @@ export function TrustedDeviceFlow({
       const registered = await accountService.registerRecoveredTrustedDevice({
         label: "Recovered device",
         publicKey: recovered.devicePublicKey,
+        authorizationPublicKey: recovered.deviceAuthorizationPublicKey,
         keyEnvelope: recovered.deviceKeyEnvelope,
         keyEpoch: step.keyEpoch,
         recoveryAuthorizationSignature: recovered.recoveryAuthorizationSignature,

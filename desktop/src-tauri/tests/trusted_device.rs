@@ -102,6 +102,121 @@ fn a_confirmed_recovery_key_makes_the_first_device_trusted() {
 }
 
 #[test]
+fn an_unlocked_trusted_device_prepares_and_confirms_recovery_key_replacement() {
+    let household_id = "12121212-1212-4212-8212-121212121212";
+    let manager = TrustedDeviceManager::new(MemoryCredentialVault::default());
+    let enrollment = manager
+        .enrol_first_device(household_id)
+        .expect("first device enrolment should succeed");
+    manager
+        .confirm_recovery_key(
+            household_id,
+            &enrollment.recovery_key,
+            &enrollment.recovery_envelope,
+        )
+        .expect("the original Recovery Key should confirm");
+    manager
+        .set_current_key_epoch(household_id, 1)
+        .expect("service registration should record the first key epoch");
+    manager
+        .configure_device_pin(household_id, "246810")
+        .expect("a local Device PIN should complete trust setup");
+
+    manager.lock_device(household_id);
+    assert!(manager
+        .prepare_recovery_key_replacement(household_id, 1, &enrollment.recovery_verification_key)
+        .is_err());
+    manager
+        .unlock_device(household_id, "246810")
+        .expect("the Trusted Device should unlock");
+
+    let replacement = manager
+        .prepare_recovery_key_replacement(household_id, 1, &enrollment.recovery_verification_key)
+        .expect("an unlocked Trusted Device should prepare replacement recovery material");
+    assert_eq!(replacement.recovery_key.split_whitespace().count(), 24);
+    assert_ne!(replacement.recovery_key, enrollment.recovery_key);
+    assert!(manager
+        .confirm_recovery_key_replacement(
+            household_id,
+            "wrong replacement key",
+            &replacement.recovery_envelope,
+        )
+        .is_err());
+    manager
+        .confirm_recovery_key_replacement(
+            household_id,
+            &replacement.recovery_key,
+            &replacement.recovery_envelope,
+        )
+        .expect("the displayed replacement Recovery Key should confirm");
+    let protected = manager
+        .protect_household_state(household_id, b"memory protected before replacement")
+        .expect("the current Trusted Device should retain the Household key");
+
+    let device_verifier = VerifyingKey::from_bytes(&enrollment.device_authorization_public_key)
+        .expect("the device authorization verifier should be an Ed25519 public key");
+    device_verifier
+        .verify(
+            &canonical_authorization(
+                "luna:replace-recovery-key:v1:",
+                [
+                    household_id.to_owned(),
+                    "1".to_owned(),
+                    enrollment.device_public_key.clone(),
+                    BASE64.encode(enrollment.recovery_verification_key),
+                    BASE64.encode(&replacement.recovery_envelope),
+                    BASE64.encode(replacement.recovery_verification_key),
+                ],
+            ),
+            &Signature::from_bytes(&replacement.device_authorization_signature),
+        )
+        .expect("replacement should prove current Trusted Device possession");
+
+    manager
+        .confirm_recovery_key(
+            household_id,
+            &enrollment.recovery_key,
+            &enrollment.recovery_envelope,
+        )
+        .expect("preparing replacement must not mutate the existing recovery material locally");
+
+    let old_key_device = TrustedDeviceManager::new(MemoryCredentialVault::default());
+    assert!(
+        old_key_device
+            .recover_device(
+                household_id,
+                &enrollment.recovery_key,
+                &replacement.recovery_envelope,
+                1,
+            )
+            .is_err(),
+        "the previous Recovery Key must not open the replacement envelope"
+    );
+
+    let replacement_device = TrustedDeviceManager::new(MemoryCredentialVault::default());
+    replacement_device
+        .recover_device(
+            household_id,
+            &replacement.recovery_key,
+            &replacement.recovery_envelope,
+            1,
+        )
+        .expect("the replacement Recovery Key should recover a new device");
+    replacement_device
+        .finalize_recovered_device(household_id, 1)
+        .expect("the replacement device should finalize after service registration");
+    replacement_device
+        .configure_device_pin(household_id, "864209")
+        .expect("the replacement device should require a local PIN");
+    assert_eq!(
+        replacement_device
+            .open_household_state(household_id, &protected)
+            .expect("the replacement device should open existing Household state"),
+        b"memory protected before replacement"
+    );
+}
+
+#[test]
 fn the_recovery_key_enrols_a_replacement_trusted_device() {
     let household_id = "22222222-2222-4222-8222-222222222222";
     let first_device = TrustedDeviceManager::new(MemoryCredentialVault::default());
@@ -147,6 +262,7 @@ fn the_recovery_key_enrols_a_replacement_trusted_device() {
                     household_id.to_owned(),
                     "1".to_owned(),
                     recovered.device_public_key.clone(),
+                    BASE64.encode(recovered.device_authorization_public_key),
                     BASE64.encode(&recovered.device_key_envelope),
                 ],
             ),
@@ -161,6 +277,7 @@ fn the_recovery_key_enrols_a_replacement_trusted_device() {
                     household_id.to_owned(),
                     "1".to_owned(),
                     recovered.device_public_key.clone(),
+                    BASE64.encode(recovered.device_authorization_public_key),
                     BASE64.encode(b"substituted envelope"),
                 ],
             ),

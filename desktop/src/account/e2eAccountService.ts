@@ -17,7 +17,9 @@ let authenticatorEnrolled = false;
 let authenticatorVerified = false;
 let coordinationAvailable = true;
 let failNextSignOut = false;
+let failAfterNextRecoveryReplacement = false;
 let recoveryEnvelope = "";
+let recoveryVerificationKey = "";
 let trustedDevices: TrustedDeviceRecord[] = [];
 const trustedDeviceEnvelopes = new Map<string, string>();
 
@@ -34,9 +36,13 @@ export const e2eAccountTestControl = {
   failNextAccountSignOut() {
     failNextSignOut = true;
   },
+  failAfterNextRecoveryReplacementCommit() {
+    failAfterNextRecoveryReplacement = true;
+  },
   currentRecovery() {
     return {
       recoveryEnvelope,
+      recoveryVerificationKey,
       keyEpoch: Math.max(...trustedDevices.map(({ keyEpoch }) => keyEpoch)),
     };
   },
@@ -136,6 +142,7 @@ export const e2eAccountService: AccountService = {
   async registerFirstTrustedDevice(request) {
     if (!request.recoveryVerificationKey) throw new Error("Recovery verifier is required.");
     recoveryEnvelope = request.recoveryEnvelope;
+    recoveryVerificationKey = request.recoveryVerificationKey;
     const device: TrustedDeviceRecord = {
       id: "device-sam-rivera",
       label: request.label,
@@ -161,8 +168,10 @@ export const e2eAccountService: AccountService = {
     return device;
   },
   async getTrustedDeviceRecoveryEnvelope() {
+    if (!coordinationAvailable) throw new Error("Trusted Device coordination is offline.");
     return {
       recoveryEnvelope,
+      recoveryVerificationKey,
       keyEpoch: Math.max(...trustedDevices.map(({ keyEpoch }) => keyEpoch)),
     };
   },
@@ -176,6 +185,26 @@ export const e2eAccountService: AccountService = {
     const keyEnvelope = trustedDeviceEnvelopes.get(device.publicKey);
     if (!keyEnvelope) throw new Error("Trusted Device envelope not found.");
     return { keyEnvelope, keyEpoch: device.keyEpoch, status: device.status };
+  },
+  async replaceRecoveryKey(request) {
+    const current = trustedDevices.find(({ publicKey, status }) => (
+      publicKey === request.currentDevicePublicKey && status === "active"
+    ));
+    const currentKeyEpoch = Math.max(...trustedDevices.map(({ keyEpoch }) => keyEpoch));
+    if (
+      !current
+      || request.currentKeyEpoch !== currentKeyEpoch
+      || request.currentRecoveryVerificationKey !== recoveryVerificationKey
+      || !request.deviceAuthorizationSignature
+    ) {
+      throw new Error("Recovery Key Replacement is invalid.");
+    }
+    recoveryEnvelope = request.recoveryEnvelope;
+    recoveryVerificationKey = request.recoveryVerificationKey;
+    if (failAfterNextRecoveryReplacement) {
+      failAfterNextRecoveryReplacement = false;
+      throw new Error("The replacement response was lost after commit.");
+    }
   },
   async revokeTrustedDevice(request) {
     if (!request.recoveryAuthorizationSignature) throw new Error("Recovery authorization is required.");

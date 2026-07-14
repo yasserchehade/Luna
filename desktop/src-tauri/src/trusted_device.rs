@@ -97,6 +97,8 @@ pub enum TrustedDeviceError {
     UnlockStateUnavailable,
     #[error("this Trusted Device is locked")]
     DeviceLocked,
+    #[error("this beta Trusted Device must be re-enrolled before replacing its Recovery Key")]
+    MissingDeviceAuthorizationKey,
     #[error("protected Household state could not be opened")]
     ProtectedStateRejected,
     #[error("trusted-device cryptography failed")]
@@ -106,6 +108,7 @@ pub enum TrustedDeviceError {
 #[derive(Debug)]
 pub struct FirstDeviceEnrollment {
     pub device_public_key: String,
+    pub device_authorization_public_key: [u8; 32],
     pub device_key_envelope: Vec<u8>,
     pub recovery_key: String,
     pub recovery_envelope: Vec<u8>,
@@ -113,8 +116,17 @@ pub struct FirstDeviceEnrollment {
 }
 
 #[derive(Debug)]
+pub struct RecoveryKeyReplacement {
+    pub recovery_key: String,
+    pub recovery_envelope: Vec<u8>,
+    pub recovery_verification_key: [u8; 32],
+    pub device_authorization_signature: [u8; 64],
+}
+
+#[derive(Debug)]
 pub struct RecoveredDeviceEnrollment {
     pub device_public_key: String,
+    pub device_authorization_public_key: [u8; 32],
     pub device_key_envelope: Vec<u8>,
     pub recovery_authorization_signature: [u8; 64],
 }
@@ -263,9 +275,13 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         self.vault
             .delete_secret(&pending_device_identity_name(household_id))?;
         self.vault
+            .delete_secret(&pending_device_authorization_key_name(household_id))?;
+        self.vault
             .delete_secret(&pending_household_key_name(household_id))?;
         self.vault
             .delete_secret(&pending_rotation_key_name(household_id))?;
+        self.vault
+            .delete_secret(&device_authorization_key_name(household_id))?;
         self.lock_device(household_id);
         Ok(())
     }
@@ -277,6 +293,8 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         let device_identity = x25519::Identity::generate();
         let device_public_key = device_identity.to_public().to_string();
         let device_secret = device_identity.to_string();
+        let device_authorization_key = SigningKey::from_bytes(&random_bytes::<32>()?);
+        let device_authorization_public_key = device_authorization_key.verifying_key().to_bytes();
         let household_key = random_bytes::<HOUSEHOLD_KEY_BYTES>()?;
         let recovery_key = Mnemonic::from_entropy(&random_bytes::<HOUSEHOLD_KEY_BYTES>()?)
             .map_err(|_| TrustedDeviceError::Cryptography)?
@@ -294,14 +312,75 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         )?;
         self.vault
             .set_secret(&household_key_name(household_id), &household_key)?;
+        self.vault.set_secret(
+            &device_authorization_key_name(household_id),
+            &device_authorization_key.to_bytes(),
+        )?;
 
         Ok(FirstDeviceEnrollment {
             device_public_key,
+            device_authorization_public_key,
             device_key_envelope,
             recovery_key,
             recovery_envelope,
             recovery_verification_key,
         })
+    }
+
+    pub fn prepare_recovery_key_replacement(
+        &self,
+        household_id: &str,
+        current_key_epoch: u32,
+        current_recovery_verification_key: &[u8; 32],
+    ) -> Result<RecoveryKeyReplacement, TrustedDeviceError> {
+        self.require_unlocked(household_id)?;
+        if self.current_key_epoch(household_id)? != current_key_epoch {
+            return Err(TrustedDeviceError::Cryptography);
+        }
+        let household_key = self.household_key(household_id)?;
+        let recovery_key = Mnemonic::from_entropy(&random_bytes::<HOUSEHOLD_KEY_BYTES>()?)
+            .map_err(|_| TrustedDeviceError::Cryptography)?
+            .to_string();
+        let recovery_envelope = encrypt_for_recovery(&recovery_key, &household_key)?;
+        let recovery_verification_key = recovery_signing_key(&recovery_key)?
+            .verifying_key()
+            .to_bytes();
+        let device_public_key = self.current_device_public_key(household_id)?;
+        let device_authorization_signature = self
+            .device_authorization_signing_key(household_id)?
+            .sign(
+                replace_recovery_key_authorization(
+                    household_id,
+                    current_key_epoch,
+                    &device_public_key,
+                    current_recovery_verification_key,
+                    &recovery_envelope,
+                    &recovery_verification_key,
+                )
+                .as_bytes(),
+            )
+            .to_bytes();
+
+        Ok(RecoveryKeyReplacement {
+            recovery_key,
+            recovery_envelope,
+            recovery_verification_key,
+            device_authorization_signature,
+        })
+    }
+
+    pub fn confirm_recovery_key_replacement(
+        &self,
+        household_id: &str,
+        recovery_key: &str,
+        recovery_envelope: &[u8],
+    ) -> Result<(), TrustedDeviceError> {
+        self.require_unlocked(household_id)?;
+        let recovered = decrypt_recovery_envelope(recovery_key, recovery_envelope)?;
+        if recovered != self.household_key(household_id)? {
+            return Err(TrustedDeviceError::InvalidRecoveryKey);
+        }
+        Ok(())
     }
 
     pub fn recover_device(
@@ -319,6 +398,8 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         let device_identity = x25519::Identity::generate();
         let device_public_key = device_identity.to_public().to_string();
         let device_secret = device_identity.to_string();
+        let device_authorization_key = SigningKey::from_bytes(&random_bytes::<32>()?);
+        let device_authorization_public_key = device_authorization_key.verifying_key().to_bytes();
         let device_key_envelope = age::encrypt(&device_identity.to_public(), &household_key)
             .map_err(|_| TrustedDeviceError::Cryptography)?;
         let recovery_authorization_signature = recovery_signing_key(recovery_key)?
@@ -327,6 +408,7 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
                     household_id,
                     key_epoch,
                     &device_public_key,
+                    &device_authorization_public_key,
                     &device_key_envelope,
                 )
                 .as_bytes(),
@@ -339,9 +421,14 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         )?;
         self.vault
             .set_secret(&pending_household_key_name(household_id), &household_key)?;
+        self.vault.set_secret(
+            &pending_device_authorization_key_name(household_id),
+            &device_authorization_key.to_bytes(),
+        )?;
 
         Ok(RecoveredDeviceEnrollment {
             device_public_key,
+            device_authorization_public_key,
             device_key_envelope,
             recovery_authorization_signature,
         })
@@ -360,10 +447,18 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             .vault
             .get_secret(&pending_household_key_name(household_id))?
             .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
+        let device_authorization_key = self
+            .vault
+            .get_secret(&pending_device_authorization_key_name(household_id))?
+            .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
         self.vault
             .set_secret(&device_identity_name(household_id), &identity)?;
         self.vault
             .set_secret(&household_key_name(household_id), &household_key)?;
+        self.vault.set_secret(
+            &device_authorization_key_name(household_id),
+            &device_authorization_key,
+        )?;
         self.vault
             .set_secret(&trust_confirmation_name(household_id), &[1])?;
         self.set_current_key_epoch(household_id, key_epoch)?;
@@ -371,6 +466,8 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             .delete_secret(&pending_device_identity_name(household_id))?;
         self.vault
             .delete_secret(&pending_household_key_name(household_id))?;
+        self.vault
+            .delete_secret(&pending_device_authorization_key_name(household_id))?;
         Ok(())
     }
 
@@ -564,6 +661,20 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         x25519::Identity::from_str(&text).map_err(|_| TrustedDeviceError::Cryptography)
     }
 
+    fn device_authorization_signing_key(
+        &self,
+        household_id: &str,
+    ) -> Result<SigningKey, TrustedDeviceError> {
+        let secret = self
+            .vault
+            .get_secret(&device_authorization_key_name(household_id))?
+            .ok_or(TrustedDeviceError::MissingDeviceAuthorizationKey)?;
+        let bytes: [u8; 32] = secret
+            .try_into()
+            .map_err(|_| TrustedDeviceError::Cryptography)?;
+        Ok(SigningKey::from_bytes(&bytes))
+    }
+
     fn require_unlocked(&self, household_id: &str) -> Result<(), TrustedDeviceError> {
         if self.is_current_device_unlocked(household_id)? {
             Ok(())
@@ -621,6 +732,7 @@ fn recover_device_authorization(
     household_id: &str,
     key_epoch: u32,
     device_public_key: &str,
+    device_authorization_public_key: &[u8; 32],
     device_key_envelope: &[u8],
 ) -> String {
     canonical_authorization(
@@ -629,6 +741,7 @@ fn recover_device_authorization(
             household_id.to_owned(),
             key_epoch.to_string(),
             device_public_key.to_owned(),
+            BASE64.encode(device_authorization_public_key),
             BASE64.encode(device_key_envelope),
         ],
     )
@@ -659,6 +772,27 @@ fn revoke_device_authorization(
     canonical_authorization("luna:revoke-device:v2:", fields)
 }
 
+fn replace_recovery_key_authorization(
+    household_id: &str,
+    key_epoch: u32,
+    current_device_public_key: &str,
+    current_recovery_verification_key: &[u8; 32],
+    recovery_envelope: &[u8],
+    recovery_verification_key: &[u8; 32],
+) -> String {
+    canonical_authorization(
+        "luna:replace-recovery-key:v1:",
+        [
+            household_id.to_owned(),
+            key_epoch.to_string(),
+            current_device_public_key.to_owned(),
+            BASE64.encode(current_recovery_verification_key),
+            BASE64.encode(recovery_envelope),
+            BASE64.encode(recovery_verification_key),
+        ],
+    )
+}
+
 fn canonical_authorization(
     domain_separator: &str,
     fields: impl IntoIterator<Item = String>,
@@ -682,6 +816,10 @@ fn device_identity_name(household_id: &str) -> String {
     format!("household:{household_id}:device-identity")
 }
 
+fn device_authorization_key_name(household_id: &str) -> String {
+    format!("household:{household_id}:device-authorization-key")
+}
+
 fn household_key_name(household_id: &str) -> String {
     format!("household:{household_id}:memory-key")
 }
@@ -696,6 +834,10 @@ fn device_pin_name(household_id: &str) -> String {
 
 fn pending_device_identity_name(household_id: &str) -> String {
     format!("household:{household_id}:pending-device-identity")
+}
+
+fn pending_device_authorization_key_name(household_id: &str) -> String {
+    format!("household:{household_id}:pending-device-authorization-key")
 }
 
 fn pending_household_key_name(household_id: &str) -> String {

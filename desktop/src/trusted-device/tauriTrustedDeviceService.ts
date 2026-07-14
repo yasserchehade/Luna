@@ -38,6 +38,16 @@ export const tauriTrustedDeviceService: TrustedDeviceService = {
   async finalizeRecoveredDevice(householdId, keyEpoch) {
     await invoke("finalize_recovered_device", { householdId, keyEpoch });
   },
+  async prepareRecoveryKeyReplacement(householdId, currentKeyEpoch, currentRecoveryVerificationKey) {
+    return invoke("prepare_recovery_key_replacement", {
+      householdId,
+      currentKeyEpoch,
+      currentRecoveryVerificationKey,
+    });
+  },
+  async confirmRecoveryKeyReplacement(householdId, recoveryKey, recoveryEnvelope) {
+    await invoke("confirm_recovery_key_replacement", { householdId, recoveryKey, recoveryEnvelope });
+  },
   async prepareHouseholdKeyRotation(
     householdId,
     recoveryKey,
