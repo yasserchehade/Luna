@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use luna_core::{CabinetAvailability, CabinetManager, SettingsStore};
+use luna_core::{CabinetAvailability, CabinetConfiguration, CabinetManager, SettingsStore};
 
 #[test]
 fn previewing_a_cabinet_does_not_change_the_selected_folder() {
@@ -85,6 +85,71 @@ fn cabinet_sections_cannot_escape_the_selected_folder() {
         .is_err());
     assert!(manager.preview(&cabinet_root, &["a".repeat(121)]).is_err());
     assert!(!device_directory.path().join("Outside").exists());
+}
+
+#[test]
+fn an_unsafe_remembered_section_is_unavailable_without_leaving_the_cabinet() {
+    let device_directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
+    let outside = device_directory.path().join("Outside");
+    fs::create_dir(&cabinet_root).expect("selected cabinet folder");
+    fs::create_dir(&outside).expect("folder outside the selected cabinet");
+    let settings =
+        SettingsStore::open(device_directory.path().join("luna.db")).expect("open device settings");
+    let stored = serde_json::to_string(&CabinetConfiguration {
+        root: cabinet_root,
+        sections: vec!["../Outside".to_owned()],
+    })
+    .expect("serialize unsafe remembered cabinet fixture");
+    settings
+        .set("cabinet:rivera-household", &stored)
+        .expect("store remembered cabinet fixture");
+    let manager = CabinetManager::new(settings);
+
+    let validation = manager
+        .validate("rivera-household")
+        .expect("validate remembered cabinet")
+        .expect("remembered cabinet");
+
+    assert_eq!(validation.availability, CabinetAvailability::Unavailable);
+    assert_eq!(
+        fs::read_dir(&outside)
+            .expect("read folder outside the cabinet")
+            .count(),
+        0,
+        "validation must not write outside the selected cabinet",
+    );
+}
+
+#[test]
+fn an_existing_section_link_cannot_redirect_cabinet_writes() {
+    let device_directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
+    let outside = device_directory.path().join("Outside");
+    fs::create_dir(&cabinet_root).expect("selected cabinet folder");
+    fs::create_dir(&outside).expect("folder outside the selected cabinet");
+    create_directory_link(&outside, &cabinet_root.join("Linked"));
+    let manager = CabinetManager::new(
+        SettingsStore::open(device_directory.path().join("luna.db")).expect("open device settings"),
+    );
+    let preview = manager
+        .preview(&cabinet_root, &["Linked".to_owned()])
+        .expect("preview cabinet with existing linked section");
+
+    assert!(manager.create("rivera-household", preview).is_err());
+    assert_eq!(
+        fs::read_dir(&outside)
+            .expect("read folder outside the cabinet")
+            .count(),
+        0,
+        "cabinet creation must not probe or write through a linked section",
+    );
+    assert_eq!(
+        manager
+            .load("rivera-household")
+            .expect("load cabinet after linked section is rejected"),
+        None,
+    );
 }
 
 #[test]
@@ -218,6 +283,27 @@ fn deny_write_access(path: &Path) -> DeniedAccess {
         path: path.to_owned(),
         original,
     }
+}
+
+#[cfg(unix)]
+fn create_directory_link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("create linked cabinet section");
+}
+
+#[cfg(windows)]
+fn create_directory_link(target: &Path, link: &Path) {
+    if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+        return;
+    }
+    let status = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target)
+        .status()
+        .expect("create cabinet section junction");
+    assert!(status.success(), "create cabinet section junction");
 }
 
 #[cfg(windows)]

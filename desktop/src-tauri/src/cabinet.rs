@@ -65,7 +65,12 @@ impl CabinetManager {
             created.push(section_path);
         }
         for section in &preview.sections {
-            if let Err(error) = verify_writable(&preview.root.join(section)) {
+            let section_path = preview.root.join(section);
+            if !directory_stays_within(&preview.root, &section_path) {
+                rollback_created_sections(&mut created);
+                return Err(CabinetError::UnsafeSectionTarget(section.to_owned()));
+            }
+            if let Err(error) = verify_writable(&section_path) {
                 rollback_created_sections(&mut created);
                 return Err(error);
             }
@@ -91,10 +96,15 @@ impl CabinetManager {
 
     pub fn validate(&self, household_id: &str) -> Result<Option<CabinetValidation>, CabinetError> {
         Ok(self.load(household_id)?.map(|configuration| {
-            let available = configuration.root.is_dir()
+            let available = configuration
+                .sections
+                .iter()
+                .all(|section| validate_section_name(section).is_ok())
+                && configuration.root.is_dir()
                 && configuration.sections.iter().all(|section| {
                     let section = configuration.root.join(section);
-                    section.is_dir() && verify_writable(&section).is_ok()
+                    directory_stays_within(&configuration.root, &section)
+                        && verify_writable(&section).is_ok()
                 })
                 && verify_writable(&configuration.root).is_ok();
             CabinetValidation {
@@ -145,6 +155,8 @@ pub enum CabinetError {
     InvalidSectionName(String),
     #[error("'{0}' duplicates another cabinet section")]
     DuplicateSectionName(String),
+    #[error("'{0}' points outside the selected cabinet")]
+    UnsafeSectionTarget(String),
     #[error("the selected cabinet location is not writable")]
     NotWritable,
     #[error("the cabinet filesystem operation failed")]
@@ -163,6 +175,16 @@ fn rollback_created_sections(created: &mut Vec<PathBuf>) {
     for path in created.drain(..).rev() {
         let _ = std::fs::remove_dir(path);
     }
+}
+
+fn directory_stays_within(root: &Path, directory: &Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    let Ok(directory) = directory.canonicalize() else {
+        return false;
+    };
+    directory.is_dir() && directory.starts_with(root)
 }
 
 fn verify_writable(root: &Path) -> Result<(), CabinetError> {
