@@ -61,4 +61,20 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .context-panel > div { display: flex; flex-direction: column; padding: 17px 2px; border-bottom: 1px solid #e1e3dd; }.context-panel small { color: #91968e; font-size: 9px; text-transform: uppercase; }.context-panel strong { margin-top: 5px; font-size: 12px; }.context-panel p { margin: 5px 0 0; color: #7c827a; font-size: 10px; line-height: 1.5; }.context-panel .privacy { margin-top: 18px; padding: 14px; border: 1px solid #d9ddd4; border-radius: 11px; background: #fff; }
 .device-settings { padding: 36px clamp(30px, 7vw, 92px); overflow: auto; }.device-settings > p { max-width: 680px; color: #687068; font-size: 13px; line-height: 1.6; }.device-settings ul { display: grid; gap: 10px; padding: 0; list-style: none; }.device-settings li { display: flex; align-items: center; justify-content: space-between; padding: 15px; border: 1px solid #dfe2da; border-radius: 12px; }.device-settings li div { display: flex; flex-direction: column; gap: 4px; }.device-settings li span { color: #7e857e; font-size: 11px; }.device-settings button { padding: 8px 12px; border: 1px solid #ccd2ca; border-radius: 8px; color: #394139; background: #fff; }.revocation-card { margin-top: 22px; padding: 20px; border: 1px solid #d9ddd4; border-radius: 12px; background: #f7f8f4; }.revocation-card h2 { margin: 0; font-family: Georgia, serif; font-size: 20px; font-weight: 500; }.revocation-card p { color: #687068; font-size: 12px; line-height: 1.6; }.revocation-card form { display: grid; gap: 8px; }.revocation-card label { font-size: 12px; font-weight: 650; }.revocation-card textarea { padding: 10px; border: 1px solid #ccd2ca; border-radius: 9px; resize: vertical; }
 
+.cabinet-setup-card { width: min(680px, calc(100vw - 48px)); }
+.cabinet-setup-card > button { width: 100%; padding: 11px 14px; border: 0; border-radius: 10px; color: #fff; background: #355f4a; font-weight: 700; }
+.storage-options { display: grid; gap: 12px; margin: 24px 0; }
+.storage-options button { display: grid; gap: 6px; padding: 16px; border: 1px solid #c9cec5; border-radius: 10px; color: #173229; background: #fffdf8; text-align: left; }
+.storage-options button.selected { border-color: #356b57; box-shadow: 0 0 0 2px rgba(53, 107, 87, .15); }
+.storage-options button span { color: #667068; font-size: 12px; font-weight: 400; line-height: 1.45; }
+.selected-folder { display: grid; gap: 4px; padding: 12px 14px; overflow-wrap: anywhere; border-radius: 10px; background: #f2f3ed; }
+.selected-folder small { color: #7e877f; font-size: 9px; text-transform: uppercase; }
+.cabinet-section-editor { display: grid; gap: 10px; margin: 20px 0; }
+.cabinet-section-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.cabinet-section-row button { width: auto; padding: 0 14px; border: 1px solid #ccd2ca; border-radius: 9px; color: #394139; background: #fff; }
+.cabinet-summary { display: grid; gap: 24px; padding: 32px; }
+.cabinet-summary > p { display: grid; gap: 6px; overflow-wrap: anywhere; }
+.cabinet-summary > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.cabinet-summary article { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid #d8dbd2; border-radius: 12px; background: #fffdf8; }
+
 @media (max-width: 980px) { .luna-shell { grid-template-columns: 200px 1fr; }.context-panel { display: none; } }

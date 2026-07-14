@@ -1,8 +1,13 @@
 mod account_session;
+mod cabinet;
 mod settings;
 mod trusted_device;
 
 pub use account_session::{AccountSessionError, AccountSessionStore};
+pub use cabinet::{
+    CabinetAvailability, CabinetConfiguration, CabinetError, CabinetManager, CabinetPreview,
+    CabinetValidation,
+};
 pub use settings::SettingsStore;
 pub use trusted_device::{
     CredentialVault, FirstDeviceEnrollment, HouseholdKeyRotation, OsCredentialVault,
@@ -13,6 +18,8 @@ pub use trusted_device::{
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use tauri::{Manager, State};
+#[cfg(not(feature = "e2e"))]
+use tauri_plugin_dialog::DialogExt;
 
 #[cfg(feature = "e2e")]
 use std::{
@@ -28,6 +35,8 @@ type AccountSessionManager = AccountSessionStore<OsCredentialVault>;
 type DeviceManager = TrustedDeviceManager<E2eCredentialVault>;
 #[cfg(feature = "e2e")]
 type AccountSessionManager = AccountSessionStore<E2eCredentialVault>;
+
+type CabinetState = CabinetManager;
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -140,6 +149,65 @@ fn get_setting(store: State<'_, SettingsStore>, key: String) -> Result<Option<St
 #[tauri::command]
 fn set_setting(store: State<'_, SettingsStore>, key: String, value: String) -> Result<(), String> {
     store.set(&key, &value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn select_cabinet_folder(_app: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(feature = "e2e")]
+    {
+        let folder = std::env::temp_dir().join(format!("luna-e2e-cabinet-{}", std::process::id()));
+        if folder.exists() {
+            std::fs::remove_dir_all(&folder).map_err(|error| error.to_string())?;
+        }
+        std::fs::create_dir(&folder).map_err(|error| error.to_string())?;
+        Ok(Some(folder.to_string_lossy().into_owned()))
+    }
+
+    #[cfg(not(feature = "e2e"))]
+    {
+        _app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .map(|folder| {
+                folder
+                    .into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+    }
+}
+
+#[tauri::command]
+fn preview_cabinet(
+    manager: State<'_, CabinetState>,
+    root: String,
+    sections: Vec<String>,
+) -> Result<CabinetPreview, String> {
+    manager
+        .preview(root, &sections)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_cabinet(
+    manager: State<'_, CabinetState>,
+    household_id: String,
+    preview: CabinetPreview,
+) -> Result<CabinetConfiguration, String> {
+    manager
+        .create(&household_id, preview)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn validate_cabinet(
+    manager: State<'_, CabinetState>,
+    household_id: String,
+) -> Result<Option<CabinetValidation>, String> {
+    manager
+        .validate(&household_id)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -436,17 +504,26 @@ fn open_household_state(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
     #[cfg(all(debug_assertions, feature = "e2e"))]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
     let builder = builder.setup(|app| {
+        #[cfg(not(feature = "e2e"))]
         let application_data = app.path().app_data_dir()?;
+        #[cfg(feature = "e2e")]
+        let application_data =
+            std::env::temp_dir().join(format!("luna-e2e-device-{}", std::process::id()));
+        #[cfg(feature = "e2e")]
+        if application_data.exists() {
+            std::fs::remove_dir_all(&application_data)?;
+        }
         std::fs::create_dir_all(&application_data)?;
         let settings = SettingsStore::open(application_data.join("luna.db"))?;
-        app.manage(settings);
+        app.manage(settings.clone());
+        app.manage(CabinetManager::new(settings));
         #[cfg(not(feature = "e2e"))]
         app.manage(TrustedDeviceManager::new(OsCredentialVault::new(
             "app.luna.household",
@@ -465,6 +542,10 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         get_setting,
         set_setting,
+        select_cabinet_folder,
+        preview_cabinet,
+        create_cabinet,
+        validate_cabinet,
         get_account_session_item,
         set_account_session_item,
         remove_account_session_item,
