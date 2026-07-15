@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import type { AccountService, HouseholdSession } from "./account/accountService";
 import { AccountFlow } from "./account/AccountFlow";
@@ -8,6 +8,8 @@ import { synchronizeTrustedDevice } from "./trusted-device/trustedDeviceCoordina
 import { TrustedDevicesOptions } from "./trusted-device/TrustedDevicesOptions";
 import { CabinetSetup } from "./cabinet/CabinetSetup";
 import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService";
+import { ConversationWorkspace } from "./conversation/ConversationWorkspace";
+import type { ConversationService } from "./conversation/conversationService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
 type TrustedDeviceMode = "first" | "recovery";
@@ -15,10 +17,11 @@ type TrustedDeviceMode = "first" | "recovery";
 type AppProps = {
   accountService: AccountService;
   cabinetService: CabinetService;
+  conversationService: ConversationService;
   trustedDeviceService: TrustedDeviceService;
 };
 
-export default function App({ accountService, cabinetService, trustedDeviceService }: AppProps) {
+export default function App({ accountService, cabinetService, conversationService, trustedDeviceService }: AppProps) {
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [restoreAttempt, setRestoreAttempt] = useState(0);
   const [restoreFailed, setRestoreFailed] = useState(false);
@@ -36,17 +39,9 @@ export default function App({ accountService, cabinetService, trustedDeviceServi
     session: HouseholdSession;
   } | null>(null);
   const [accountEntry, setAccountEntry] = useState<"registration" | "signIn">("registration");
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<string[]>([]);
   const [activeDestination, setActiveDestination] = useState<(typeof destinations)[number]>("Luna");
-
-  const submitMessage = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const message = draft.trim();
-    if (!message) return;
-    setMessages((current) => [...current, message]);
-    setDraft("");
-  };
+  const [newConversationRequest, setNewConversationRequest] = useState(0);
+  const [todoCount, setTodoCount] = useState(0);
 
   const lockLuna = async () => {
     if (!session) return;
@@ -275,7 +270,10 @@ export default function App({ accountService, cabinetService, trustedDeviceServi
     <div className="luna-shell">
       <aside className="sidebar">
         <div className="brand"><span aria-hidden="true">L</span><strong>Luna</strong></div>
-        <button className="new-conversation" type="button">＋ New conversation</button>
+        <button className="new-conversation" type="button" onClick={() => {
+          setActiveDestination("Luna");
+          setNewConversationRequest((request) => request + 1);
+        }}>＋ New Conversation</button>
         <nav aria-label="Primary destinations">
           {destinations.map((destination) => (
             <button
@@ -287,7 +285,7 @@ export default function App({ accountService, cabinetService, trustedDeviceServi
               type="button"
             >
               <span>{destination}</span>
-              {destination === "To do" && <small aria-hidden="true">2</small>}
+              {destination === "To do" && todoCount > 0 && <small aria-hidden="true">{todoCount}</small>}
             </button>
           ))}
         </nav>
@@ -305,27 +303,20 @@ export default function App({ accountService, cabinetService, trustedDeviceServi
           <p><small>Location</small><strong>{cabinetValidation.configuration.root}</strong></p>
           <div>{cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}</div>
         </section>
-      </main> : <main className="conversation">
-        <header><div><small>Today</small><h1>New conversation</h1></div><span>Private conversation</span></header>
+      </main> : activeDestination === "History" ? <main className="conversation">
+        <header><div><small>Household history</small><h1>History</h1></div></header>
+        <section className="messages"><p>History will show durable Audit Events as Luna handles documents.</p></section>
+      </main> : <>
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
-        <section className="messages" aria-label="Conversation">
-          <article className="luna-message"><span aria-hidden="true">L</span><p>What would you like me to take care of?</p></article>
-          {messages.map((message, index) => (
-            <article className="member-message" key={`${message}-${index}`}><span aria-hidden="true">YC</span><p>{message}</p></article>
-          ))}
-        </section>
-        <form className="composer" onSubmit={submitMessage}>
-          <label htmlFor="message-composer">Message Luna</label>
-          <textarea
-            id="message-composer"
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Message Luna or attach a document"
-            rows={1}
-            value={draft}
-          />
-          <button type="submit" aria-label="Send message">↑</button>
-        </form>
-      </main>}
+        <ConversationWorkspace
+          conversationService={conversationService}
+          destination={activeDestination}
+          householdId={session.householdId}
+          newConversationRequest={newConversationRequest}
+          onOpenConversation={() => setActiveDestination("Luna")}
+          onTodoCountChange={setTodoCount}
+        />
+      </>}
 
       <aside className="context-panel">
         <header>Household context</header>

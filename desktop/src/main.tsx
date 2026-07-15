@@ -4,6 +4,7 @@ import App from "./App";
 import { unavailableAccountService } from "./account/accountService";
 import { tauriTrustedDeviceService } from "./trusted-device/tauriTrustedDeviceService";
 import { tauriCabinetService } from "./cabinet/cabinetService";
+import { tauriConversationService } from "./conversation/conversationService";
 
 let accountService = unavailableAccountService;
 let trustedDeviceService = tauriTrustedDeviceService;
@@ -32,6 +33,7 @@ createRoot(document.getElementById("root")!).render(
     <App
       accountService={accountService}
       cabinetService={tauriCabinetService}
+      conversationService={tauriConversationService}
       trustedDeviceService={trustedDeviceService}
     />
   </StrictMode>,
