@@ -10,8 +10,9 @@ pub use cabinet::{
     CabinetValidation,
 };
 pub use conversation::{
-    Conversation, ConversationError, ConversationMessage, ConversationStore, DocumentArrival,
-    DocumentProcessingState, TodoItem,
+    ConfidenceState, Conversation, ConversationError, ConversationMessage, ConversationStore,
+    DocumentArrival, DocumentProcessingState, LocalOcr, ReviewCard, ReviewEvidence, TesseractOcr,
+    TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -303,12 +304,17 @@ fn list_conversation_messages(
 #[tauri::command]
 fn attach_document(
     store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     conversation_id: i64,
     path: String,
 ) -> Result<DocumentArrival, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before attaching a document.".to_owned())?;
     store
-        .attach_document(&household_id, conversation_id, path)
+        .attach_document(&household_id, conversation_id, path, configuration.root)
         .map_err(|error| error.to_string())
 }
 
@@ -343,14 +349,46 @@ fn dismiss_document_arrival(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(feature = "e2e")]
+fn e2e_digital_pdf() -> Vec<u8> {
+    let content = "BT\n/F1 12 Tf\n72 720 Td\n(Luna E2E fixture) Tj\nET\n";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
 #[tauri::command]
 fn select_document_files(_app: tauri::AppHandle) -> Result<Vec<String>, String> {
     #[cfg(feature = "e2e")]
     {
         let document =
             std::env::temp_dir().join(format!("luna-e2e-document-{}.pdf", std::process::id()));
-        std::fs::write(&document, b"%PDF-1.7 Luna E2E fixture")
-            .map_err(|error| error.to_string())?;
+        std::fs::write(&document, e2e_digital_pdf()).map_err(|error| error.to_string())?;
         Ok(vec![document.to_string_lossy().into_owned()])
     }
 

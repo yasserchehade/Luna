@@ -79,8 +79,12 @@ The working environment the household grants Luna, consisting of trusted device 
 _Avoid_: Workspace
 
 **Cabinet**:
-The user-owned, human-readable folder structure containing the household's filed original documents.
+The user-owned, human-readable folder structure containing the household's incoming and filed original documents.
 _Avoid_: Vault, blob store, document database
+
+**Incoming Cabinet Folder**:
+A visible Cabinet folder that holds untouched Originals awaiting a Filing Decision.
+_Avoid_: Staging area, temporary upload folder
 
 **Cabinet Preset**:
 A proposed initial cabinet structure that the household may customise before any folders are created.

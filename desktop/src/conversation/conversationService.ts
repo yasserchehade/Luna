@@ -16,13 +16,31 @@ export type ConversationMessage = {
 
 export type DocumentProcessingState = "needsMemberDirection" | "dismissed";
 
+export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
+
+export type ReviewEvidence = {
+  label: string;
+  value: string;
+};
+
+export type ReviewCard = {
+  confidenceState: ConfidenceState;
+  evidence: ReviewEvidence[];
+  uncertainties: string[];
+  proposedCabinetDestination: string | null;
+};
+
 export type DocumentArrival = {
   id: number;
   householdId: string;
   conversationId: number;
   originalName: string;
+  originalPath: string;
   sourcePath: string;
+  checksum: string;
   mediaType: string;
+  extractedText: string | null;
+  reviewCard: ReviewCard;
   processingState: DocumentProcessingState;
 };
 

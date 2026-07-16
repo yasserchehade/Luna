@@ -21,6 +21,13 @@ const stateLabel = (arrival: DocumentArrival) => arrival.processingState === "ne
   ? "Needs your direction"
   : "Dismissed";
 
+const confidenceLabel = (arrival: DocumentArrival) => ({
+  confirmed: "Confirmed",
+  looksRight: "Looks right",
+  needsChecking: "Needs checking",
+  unknown: "Unknown",
+})[arrival.reviewCard.confidenceState];
+
 export function ConversationWorkspace({
   conversationService,
   destination,
@@ -274,7 +281,17 @@ export function ConversationWorkspace({
         key={arrival.id}
         tabIndex={-1}
       >
-        <div><small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p></div>
+        <div>
+          <small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p>
+          <section className="review-card" aria-label={`Review card for ${arrival.originalName}`}>
+            <strong>{confidenceLabel(arrival)}</strong>
+            <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
+              <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
+            </div>)}</dl>
+            {arrival.reviewCard.uncertainties.map((uncertainty) => <p key={uncertainty}>{uncertainty}</p>)}
+            {arrival.reviewCard.proposedCabinetDestination && <p>Proposed destination: {arrival.reviewCard.proposedCabinetDestination}</p>}
+          </section>
+        </div>
         {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
       </article>)}
     </section>
