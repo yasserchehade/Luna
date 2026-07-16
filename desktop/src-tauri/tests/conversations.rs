@@ -10,6 +10,8 @@ use luna_core::{
     ConfidenceState, ConversationStore, CredentialVault, DocumentProcessingState, LocalOcr,
     TrustedDeviceManager, VaultError,
 };
+use rusqlite::{params, Connection};
+use serde_json::json;
 
 #[derive(Clone, Default)]
 struct MemoryCredentialVault {
@@ -154,6 +156,27 @@ fn open_conversation_store_with_ocr(
     let store = ConversationStore::open_with_ocr(database, trusted_device.clone(), FixedLocalOcr)
         .expect("open Conversation store");
     (store, trusted_device)
+}
+
+#[cfg(unix)]
+fn create_directory_link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("create linked Incoming folder");
+}
+
+#[cfg(windows)]
+fn create_directory_link(target: &Path, link: &Path) {
+    if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+        return;
+    }
+    let status = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target)
+        .status()
+        .expect("create Incoming folder junction");
+    assert!(status.success(), "create Incoming folder junction");
 }
 
 #[test]
@@ -522,6 +545,92 @@ fn a_document_arrival_preserves_the_exact_original_and_its_checksum() {
     assert_eq!(
         fs::read(&arrival.original_path).expect("read preserved Original after source change"),
         original_bytes
+    );
+}
+
+#[test]
+fn a_legacy_document_arrival_remains_readable_and_dismissible() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let database = directory.path().join("luna.db");
+    let source_path = directory.path().join("legacy bill.pdf");
+    let (store, trusted_device) = open_conversation_store(&database);
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+    let legacy_payload = json!({
+        "original_name": "legacy bill.pdf",
+        "source_path": source_path,
+        "media_type": "application/pdf",
+        "extracted_text": null,
+        "processing_state": "needsMemberDirection",
+    });
+    let protected = trusted_device
+        .protect_household_state(
+            "rivera-household",
+            &serde_json::to_vec(&legacy_payload).expect("serialize legacy arrival"),
+        )
+        .expect("protect legacy arrival");
+    let connection = Connection::open(&database).expect("open Conversation database");
+    connection
+        .execute(
+            "INSERT INTO document_arrivals (household_id, conversation_id, protected_payload)
+             VALUES (?1, ?2, ?3)",
+            params![
+                "rivera-household",
+                conversation.id,
+                serde_json::to_string(&protected).expect("serialize protected arrival")
+            ],
+        )
+        .expect("store legacy arrival");
+
+    let arrival = store
+        .list_document_arrivals("rivera-household")
+        .expect("read legacy Document Arrival")
+        .pop()
+        .expect("legacy arrival");
+    assert_eq!(arrival.original_path, source_path);
+    assert!(arrival.checksum.is_empty());
+    assert_eq!(
+        store
+            .list_todo_items("rivera-household")
+            .expect("list legacy To-do Item")
+            .len(),
+        1
+    );
+
+    store
+        .dismiss_document_arrival("rivera-household", arrival.id)
+        .expect("dismiss legacy Document Arrival");
+    assert!(store
+        .list_todo_items("rivera-household")
+        .expect("list resolved legacy To-do Item")
+        .is_empty());
+}
+
+#[test]
+fn a_document_arrival_rejects_a_redirected_incoming_folder() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("AGL bill.pdf");
+    fs::write(&document, digital_pdf_with_text("AGL bill")).expect("write source document");
+    let cabinet = directory.path().join("Cabinet");
+    let outside = directory.path().join("outside");
+    fs::create_dir(&cabinet).expect("create Cabinet");
+    fs::create_dir(&outside).expect("create outside directory");
+    create_directory_link(&outside, &cabinet.join("Incoming"));
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+
+    assert!(store
+        .attach_document("rivera-household", conversation.id, &document, &cabinet)
+        .is_err());
+    assert!(
+        fs::read_dir(&outside)
+            .expect("read outside directory")
+            .next()
+            .is_none(),
+        "a redirected Incoming folder must not receive the Original"
     );
 }
 
