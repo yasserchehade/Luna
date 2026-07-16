@@ -53,6 +53,7 @@ fn confirming_a_preview_creates_readable_folders_and_remembers_the_cabinet() {
 
     assert!(cabinet_root.join("Bills & Services").is_dir());
     assert!(cabinet_root.join("Identity").is_dir());
+    assert!(cabinet_root.join("Incoming").is_dir());
     let reopened = CabinetManager::new(
         SettingsStore::open(&database).expect("reopen device settings after restart"),
     );
@@ -150,6 +151,78 @@ fn an_existing_section_link_cannot_redirect_cabinet_writes() {
             .expect("load cabinet after linked section is rejected"),
         None,
     );
+}
+
+#[test]
+fn incoming_is_reserved_for_unfiled_originals() {
+    let device_directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
+    fs::create_dir(&cabinet_root).expect("selected cabinet folder");
+    let manager = CabinetManager::new(
+        SettingsStore::open(device_directory.path().join("luna.db")).expect("open device settings"),
+    );
+
+    assert!(manager
+        .preview(&cabinet_root, &["incoming".to_owned()])
+        .is_err());
+}
+
+#[test]
+fn an_existing_incoming_link_cannot_redirect_cabinet_writes() {
+    let device_directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
+    let outside = device_directory.path().join("Outside");
+    fs::create_dir(&cabinet_root).expect("selected cabinet folder");
+    fs::create_dir(&outside).expect("folder outside the cabinet");
+    create_directory_link(&outside, &cabinet_root.join("Incoming"));
+    let manager = CabinetManager::new(
+        SettingsStore::open(device_directory.path().join("luna.db")).expect("open device settings"),
+    );
+    let preview = manager
+        .preview(&cabinet_root, &["Bills & Services".to_owned()])
+        .expect("preview cabinet with linked Incoming folder");
+
+    assert!(manager.create("rivera-household", preview).is_err());
+    assert_eq!(
+        fs::read_dir(&outside)
+            .expect("read folder outside the cabinet")
+            .count(),
+        0,
+        "cabinet creation must not probe or write through a linked Incoming folder",
+    );
+    assert_eq!(
+        manager
+            .load("rivera-household")
+            .expect("load cabinet after linked Incoming folder is rejected"),
+        None,
+    );
+}
+
+#[test]
+fn validating_an_existing_cabinet_creates_the_incoming_folder() {
+    let device_directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet_root = device_directory.path().join("Rivera Household Cabinet");
+    fs::create_dir(&cabinet_root).expect("selected cabinet folder");
+    fs::create_dir(cabinet_root.join("Bills & Services")).expect("configured cabinet section");
+    let settings =
+        SettingsStore::open(device_directory.path().join("luna.db")).expect("open device settings");
+    let stored = serde_json::to_string(&CabinetConfiguration {
+        root: cabinet_root.clone(),
+        sections: vec!["Bills & Services".to_owned()],
+    })
+    .expect("serialize remembered cabinet");
+    settings
+        .set("cabinet:rivera-household", &stored)
+        .expect("store remembered cabinet");
+    let manager = CabinetManager::new(settings);
+
+    let validation = manager
+        .validate("rivera-household")
+        .expect("validate remembered cabinet")
+        .expect("remembered cabinet");
+
+    assert_eq!(validation.availability, CabinetAvailability::Ready);
+    assert!(cabinet_root.join("Incoming").is_dir());
 }
 
 #[test]

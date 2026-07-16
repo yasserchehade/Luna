@@ -301,7 +301,10 @@ export default function App({ accountService, cabinetService, conversationServic
         <header><div><small>Household cabinet</small><h1>Cabinet</h1></div><span>User-selected folder</span></header>
         <section className="cabinet-summary">
           <p><small>Location</small><strong>{cabinetValidation.configuration.root}</strong></p>
-          <div>{cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}</div>
+          <div>
+            <article><span aria-hidden="true">▰</span><strong>Incoming</strong></article>
+            {cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}
+          </div>
         </section>
       </main> : activeDestination === "History" ? <main className="conversation">
         <header><div><small>Household history</small><h1>History</h1></div></header>

@@ -12,6 +12,7 @@ use crate::SettingsStore;
 
 const MAX_CABINET_SECTION_BYTES: usize = 120;
 static WRITE_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const INCOMING_FOLDER: &str = "Incoming";
 
 #[derive(Clone)]
 pub struct CabinetManager {
@@ -35,6 +36,9 @@ impl CabinetManager {
         let mut seen = HashSet::new();
         for section in sections {
             validate_section_name(section)?;
+            if section.eq_ignore_ascii_case(INCOMING_FOLDER) {
+                return Err(CabinetError::InvalidSectionName(section.to_owned()));
+            }
             if !seen.insert(section.to_lowercase()) {
                 return Err(CabinetError::DuplicateSectionName(section.to_owned()));
             }
@@ -52,17 +56,21 @@ impl CabinetManager {
     ) -> Result<CabinetConfiguration, CabinetError> {
         let preview = self.preview(&preview.root, &preview.sections)?;
         verify_writable(&preview.root)?;
+        let mut folders = preview.sections.clone();
+        if !folders.iter().any(|folder| folder == INCOMING_FOLDER) {
+            folders.push(INCOMING_FOLDER.to_owned());
+        }
         let mut created = Vec::new();
-        for section in &preview.sections {
-            let section_path = preview.root.join(section);
-            if section_path.is_dir() {
+        for folder in &folders {
+            let folder_path = preview.root.join(folder);
+            if folder_path.is_dir() {
                 continue;
             }
-            if let Err(error) = std::fs::create_dir(&section_path) {
+            if let Err(error) = std::fs::create_dir(&folder_path) {
                 rollback_created_sections(&mut created);
                 return Err(error.into());
             }
-            created.push(section_path);
+            created.push(folder_path);
         }
         for section in &preview.sections {
             let section_path = preview.root.join(section);
@@ -74,6 +82,10 @@ impl CabinetManager {
                 rollback_created_sections(&mut created);
                 return Err(error);
             }
+        }
+        if let Err(error) = ensure_incoming_folder(&preview.root) {
+            rollback_created_sections(&mut created);
+            return Err(error);
         }
         let configuration = CabinetConfiguration {
             root: preview.root,
@@ -106,7 +118,8 @@ impl CabinetManager {
                     directory_stays_within(&configuration.root, &section)
                         && verify_writable(&section).is_ok()
                 })
-                && verify_writable(&configuration.root).is_ok();
+                && verify_writable(&configuration.root).is_ok()
+                && ensure_incoming_folder(&configuration.root).is_ok();
             CabinetValidation {
                 configuration,
                 availability: if available {
@@ -185,6 +198,19 @@ fn directory_stays_within(root: &Path, directory: &Path) -> bool {
         return false;
     };
     directory.is_dir() && directory.starts_with(root)
+}
+
+fn ensure_incoming_folder(root: &Path) -> Result<(), CabinetError> {
+    let incoming = root.join(INCOMING_FOLDER);
+    if !incoming.exists() {
+        std::fs::create_dir(&incoming)?;
+    }
+    if !directory_stays_within(root, &incoming) {
+        return Err(CabinetError::UnsafeSectionTarget(
+            INCOMING_FOLDER.to_owned(),
+        ));
+    }
+    verify_writable(&incoming)
 }
 
 fn verify_writable(root: &Path) -> Result<(), CabinetError> {

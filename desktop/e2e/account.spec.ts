@@ -69,6 +69,7 @@ describe("Luna account access", () => {
     await expect($(`strong=${testHousehold.organiserName}`)).toBeDisplayed();
     await $("button[aria-label='Cabinet']").click();
     await expect($("h1=Cabinet")).toBeDisplayed();
+    await expect($("strong=Incoming")).toBeDisplayed();
     await expect($("strong=Household bills")).toBeDisplayed();
     await expect($("strong=Insurance")).toBeDisplayed();
     await expect($("strong=Identity")).not.toBeExisting();
