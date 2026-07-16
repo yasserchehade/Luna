@@ -216,7 +216,7 @@ fn messages_are_durable_parts_of_a_conversation() {
 fn resolving_work_from_any_surface_updates_the_same_document_handling_state() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("rates.png");
-    fs::write(&document, b"PNG fixture").expect("write document fixture");
+    fs::write(&document, b"\x89PNG\r\n\x1a\nfixture").expect("write document fixture");
     let (store, _) = open_conversation_store(directory.path().join("luna.db"));
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
@@ -269,12 +269,17 @@ fn only_pdf_jpg_and_png_files_can_enter_the_document_workflow() {
         .create_conversation("rivera-household", "Supported documents")
         .expect("create Conversation");
 
-    for filename in ["bill.pdf", "photo.jpg", "scan.jpeg", "letter.png"] {
+    for (filename, contents) in [
+        ("bill.pdf", b"%PDF-1.7 fixture".as_slice()),
+        ("photo.jpg", b"\xFF\xD8\xFFfixture".as_slice()),
+        ("scan.jpeg", b"\xFF\xD8\xFFfixture".as_slice()),
+        ("letter.png", b"\x89PNG\r\n\x1a\nfixture".as_slice()),
+    ] {
         let document = directory.path().join(filename);
-        fs::write(&document, b"fixture").expect("write supported fixture");
+        fs::write(&document, contents).expect("write supported fixture");
         store
             .attach_document("rivera-household", conversation.id, document)
-            .expect("attach supported document extension");
+            .expect("attach supported document type");
     }
 
     let unsupported = directory.path().join("notes.txt");
@@ -285,11 +290,30 @@ fn only_pdf_jpg_and_png_files_can_enter_the_document_workflow() {
 }
 
 #[test]
+fn a_document_arrival_rejects_a_file_whose_bytes_do_not_match_its_claimed_type() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Validate documents")
+        .expect("create Conversation");
+    let renamed_text_file = directory.path().join("statement.pdf");
+    fs::write(&renamed_text_file, b"This is not a PDF.").expect("write malformed document");
+
+    assert!(store
+        .attach_document("rivera-household", conversation.id, renamed_text_file)
+        .is_err());
+    assert!(store
+        .list_document_arrivals("rivera-household")
+        .expect("list Document Arrivals")
+        .is_empty());
+}
+
+#[test]
 fn conversation_content_is_protected_and_requires_an_unlocked_trusted_device() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let database = directory.path().join("luna.db");
     let document = directory.path().join("private rates notice.pdf");
-    fs::write(&document, b"%PDF fixture").expect("write private document fixture");
+    fs::write(&document, b"%PDF-1.7 fixture").expect("write private document fixture");
     let (store, trusted_device) = open_conversation_store(&database);
     let conversation = store
         .create_conversation("rivera-household", "Private rates Conversation")

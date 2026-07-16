@@ -1,5 +1,6 @@
 use std::{
-    io,
+    fs::File,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
@@ -89,6 +90,8 @@ pub enum ConversationError {
     NotFound,
     #[error("Only PDF, JPG, and PNG documents can be attached.")]
     UnsupportedDocument,
+    #[error("The selected document does not match its declared file type.")]
+    InvalidDocument,
     #[error("The selected document is unavailable.")]
     DocumentUnavailable(#[from] io::Error),
     #[error("Protected Household state is unavailable.")]
@@ -279,7 +282,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                 "document is not a file",
             )));
         }
-        let media_type = match path
+        let declared_media_type = match path
             .extension()
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
@@ -290,6 +293,10 @@ impl<V: CredentialVault> ConversationStore<V> {
             Some("png") => "image/png",
             _ => return Err(ConversationError::UnsupportedDocument),
         };
+        let media_type = detected_media_type(path)?;
+        if media_type != declared_media_type {
+            return Err(ConversationError::InvalidDocument);
+        }
         let original_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -545,5 +552,21 @@ impl<V: CredentialVault> ConversationStore<V> {
 
     fn connect(&self) -> rusqlite::Result<Connection> {
         Connection::open(&self.database)
+    }
+}
+
+fn detected_media_type(path: &Path) -> Result<&'static str, ConversationError> {
+    let mut header = [0; 8];
+    let bytes_read = File::open(path)?.read(&mut header)?;
+    let header = &header[..bytes_read];
+
+    if header.starts_with(b"%PDF-") {
+        Ok("application/pdf")
+    } else if header.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Ok("image/jpeg")
+    } else if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Ok("image/png")
+    } else {
+        Err(ConversationError::InvalidDocument)
     }
 }
