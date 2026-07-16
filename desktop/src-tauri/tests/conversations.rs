@@ -499,7 +499,20 @@ fn a_document_arrival_preserves_the_exact_original_and_its_checksum() {
     );
     assert_eq!(
         arrival.original_path.parent(),
-        Some(directory.path().join("Incoming").as_path())
+        Some(
+            directory
+                .path()
+                .join("Incoming")
+                .join("6efc42d3b61e3ea0a01ad7b717f8745065894d8c94fa9fb9ef8db718d341e16f")
+                .as_path()
+        )
+    );
+    assert_eq!(
+        arrival
+            .original_path
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("AGL bill.pdf")
     );
     assert_eq!(
         fs::read(&arrival.original_path).expect("read preserved Original"),

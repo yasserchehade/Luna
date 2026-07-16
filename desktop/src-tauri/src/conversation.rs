@@ -437,7 +437,8 @@ impl<V: CredentialVault> ConversationStore<V> {
             .ok_or(ConversationError::UnsupportedDocument)?;
         let extracted_pdf_text = extract_digital_pdf_text(media_type, &original)?;
         let checksum = sha256(&original);
-        let original_path = self.preserve_original(cabinet_root.as_ref(), &checksum, &original)?;
+        let original_path =
+            self.preserve_original(cabinet_root.as_ref(), &checksum, original_name, &original)?;
         let extracted_text = extract_local_text(
             media_type,
             &original_path,
@@ -714,6 +715,7 @@ impl<V: CredentialVault> ConversationStore<V> {
         &self,
         cabinet_root: &Path,
         checksum: &str,
+        original_name: &str,
         original: &[u8],
     ) -> Result<PathBuf, ConversationError> {
         if !cabinet_root.is_dir() {
@@ -722,9 +724,9 @@ impl<V: CredentialVault> ConversationStore<V> {
                 "Cabinet is unavailable",
             )));
         }
-        let directory = cabinet_root.join("Incoming");
+        let directory = cabinet_root.join("Incoming").join(checksum);
         fs::create_dir_all(&directory)?;
-        let original_path = directory.join(checksum);
+        let original_path = directory.join(original_name);
 
         match OpenOptions::new()
             .write(true)
