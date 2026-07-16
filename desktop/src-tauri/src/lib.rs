@@ -10,8 +10,9 @@ pub use cabinet::{
     CabinetValidation,
 };
 pub use conversation::{
-    Conversation, ConversationError, ConversationMessage, ConversationStore, DocumentArrival,
-    DocumentProcessingState, TodoItem,
+    ConfidenceState, Conversation, ConversationError, ConversationMessage, ConversationStore,
+    DocumentArrival, DocumentProcessingState, LocalOcr, ReviewCard, ReviewEvidence, TesseractOcr,
+    TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{

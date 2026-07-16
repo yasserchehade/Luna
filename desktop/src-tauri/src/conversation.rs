@@ -1,11 +1,15 @@
 use std::{
-    fs::File,
-    io::{self, Read},
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Write},
     path::{Path, PathBuf},
+    process::Command,
+    sync::Arc,
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::trusted_device::{
@@ -28,6 +32,100 @@ pub enum DocumentProcessingState {
     Dismissed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfidenceState {
+    Confirmed,
+    LooksRight,
+    NeedsChecking,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewEvidence {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCard {
+    pub confidence_state: ConfidenceState,
+    pub evidence: Vec<ReviewEvidence>,
+}
+
+pub trait LocalOcr: Send + Sync {
+    fn extract_text(&self, original: &Path, media_type: &str) -> Option<String>;
+}
+
+#[derive(Default)]
+pub struct TesseractOcr;
+
+impl LocalOcr for TesseractOcr {
+    fn extract_text(&self, original: &Path, media_type: &str) -> Option<String> {
+        if media_type == "application/pdf" {
+            let directory = tempfile::tempdir().ok()?;
+            let image_base = directory.path().join("page");
+            let output = Command::new(configured_local_executable(
+                "LUNA_PDFTOPPM_COMMAND",
+                "pdftoppm",
+            ))
+            .args(["-f", "1", "-l", "1", "-png", "-singlefile"])
+            .arg(original)
+            .arg(&image_base)
+            .output()
+            .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            return self.extract_image_text(&image_base.with_extension("png"));
+        }
+        self.extract_image_text(original)
+    }
+}
+
+impl TesseractOcr {
+    fn extract_image_text(&self, image: &Path) -> Option<String> {
+        let output = Command::new(tesseract_executable())
+            .arg(image)
+            .arg("stdout")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8(output.stdout).ok()?;
+        let text = text.trim().to_owned();
+        (!text.is_empty()).then_some(text)
+    }
+}
+
+fn configured_local_executable(environment_variable: &str, default: &str) -> PathBuf {
+    if let Some(command) = env::var_os(environment_variable) {
+        return command.into();
+    }
+    default.into()
+}
+
+fn tesseract_executable() -> PathBuf {
+    if let Some(command) = env::var_os("LUNA_TESSERACT_COMMAND") {
+        return command.into();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            let command = PathBuf::from(program_files)
+                .join("Tesseract-OCR")
+                .join("tesseract.exe");
+            if command.is_file() {
+                return command;
+            }
+        }
+    }
+    "tesseract".into()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentArrival {
@@ -35,8 +133,12 @@ pub struct DocumentArrival {
     pub household_id: String,
     pub conversation_id: i64,
     pub original_name: String,
+    pub original_path: PathBuf,
     pub source_path: PathBuf,
+    pub checksum: String,
     pub media_type: String,
+    pub extracted_text: Option<String>,
+    pub review_card: ReviewCard,
     pub processing_state: DocumentProcessingState,
 }
 
@@ -75,8 +177,11 @@ struct MessagePayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DocumentArrivalPayload {
     original_name: String,
+    original_path: PathBuf,
     source_path: PathBuf,
+    checksum: String,
     media_type: String,
+    extracted_text: Option<String>,
     processing_state: DocumentProcessingState,
 }
 
@@ -92,6 +197,8 @@ pub enum ConversationError {
     UnsupportedDocument,
     #[error("The selected document does not match its declared file type.")]
     InvalidDocument,
+    #[error("A different Original already occupies this document's preserved location.")]
+    OriginalConflict,
     #[error("The selected document is unavailable.")]
     DocumentUnavailable(#[from] io::Error),
     #[error("Protected Household state is unavailable.")]
@@ -106,6 +213,7 @@ pub enum ConversationError {
 pub struct ConversationStore<V: CredentialVault> {
     database: PathBuf,
     trusted_device: TrustedDeviceManager<V>,
+    local_ocr: Arc<dyn LocalOcr>,
 }
 
 impl<V: CredentialVault> ConversationStore<V> {
@@ -113,9 +221,18 @@ impl<V: CredentialVault> ConversationStore<V> {
         database: impl AsRef<Path>,
         trusted_device: TrustedDeviceManager<V>,
     ) -> Result<Self, ConversationError> {
+        Self::open_with_ocr(database, trusted_device, TesseractOcr)
+    }
+
+    pub fn open_with_ocr(
+        database: impl AsRef<Path>,
+        trusted_device: TrustedDeviceManager<V>,
+        local_ocr: impl LocalOcr + 'static,
+    ) -> Result<Self, ConversationError> {
         let store = Self {
             database: database.as_ref().to_owned(),
             trusted_device,
+            local_ocr: Arc::new(local_ocr),
         };
         store.connect()?.execute_batch(
             "CREATE TABLE IF NOT EXISTS conversations (
@@ -293,7 +410,8 @@ impl<V: CredentialVault> ConversationStore<V> {
             Some("png") => "image/png",
             _ => return Err(ConversationError::UnsupportedDocument),
         };
-        let media_type = detected_media_type(path)?;
+        let original = fs::read(path)?;
+        let media_type = detected_media_type(&original)?;
         if media_type != declared_media_type {
             return Err(ConversationError::InvalidDocument);
         }
@@ -301,10 +419,17 @@ impl<V: CredentialVault> ConversationStore<V> {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or(ConversationError::UnsupportedDocument)?;
+        let checksum = sha256(&original);
+        let original_path = self.preserve_original(&checksum, &original)?;
+        let extracted_text =
+            extract_local_text(media_type, &original_path, &original, &*self.local_ocr)?;
         let payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
+            original_path,
             source_path: path.to_owned(),
+            checksum,
             media_type: media_type.to_owned(),
+            extracted_text,
             processing_state: DocumentProcessingState::NeedsMemberDirection,
         };
         let protected = self.protect(household_id, &payload)?;
@@ -314,13 +439,18 @@ impl<V: CredentialVault> ConversationStore<V> {
              VALUES (?1, ?2, ?3)",
             params![household_id, conversation_id, protected],
         )?;
+        let review_card = review_card(&payload);
         Ok(DocumentArrival {
             id: connection.last_insert_rowid(),
             household_id: household_id.to_owned(),
             conversation_id,
             original_name: payload.original_name,
+            original_path: payload.original_path,
             source_path: payload.source_path,
+            checksum: payload.checksum,
             media_type: payload.media_type,
+            extracted_text: payload.extracted_text,
+            review_card,
             processing_state: payload.processing_state,
         })
     }
@@ -411,13 +541,18 @@ impl<V: CredentialVault> ConversationStore<V> {
             .map(|(id, conversation_id, protected)| {
                 let payload: DocumentArrivalPayload =
                     self.open_protected(household_id, &protected)?;
+                let review_card = review_card(&payload);
                 Ok(DocumentArrival {
                     id,
                     household_id: household_id.to_owned(),
                     conversation_id,
                     original_name: payload.original_name,
+                    original_path: payload.original_path,
                     source_path: payload.source_path,
+                    checksum: payload.checksum,
                     media_type: payload.media_type,
+                    extracted_text: payload.extracted_text,
+                    review_card,
                     processing_state: payload.processing_state,
                 })
             })
@@ -553,20 +688,122 @@ impl<V: CredentialVault> ConversationStore<V> {
     fn connect(&self) -> rusqlite::Result<Connection> {
         Connection::open(&self.database)
     }
+
+    fn preserve_original(
+        &self,
+        checksum: &str,
+        original: &[u8],
+    ) -> Result<PathBuf, ConversationError> {
+        let directory = self
+            .database
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("document-arrivals");
+        fs::create_dir_all(&directory)?;
+        let original_path = directory.join(checksum);
+
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&original_path)
+        {
+            Ok(mut file) => {
+                file.write_all(original)?;
+                file.sync_all()?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if fs::read(&original_path)? != original {
+                    return Err(ConversationError::OriginalConflict);
+                }
+            }
+            Err(error) => return Err(ConversationError::DocumentUnavailable(error)),
+        }
+
+        Ok(original_path)
+    }
 }
 
-fn detected_media_type(path: &Path) -> Result<&'static str, ConversationError> {
-    let mut header = [0; 8];
-    let bytes_read = File::open(path)?.read(&mut header)?;
-    let header = &header[..bytes_read];
-
-    if header.starts_with(b"%PDF-") {
+fn detected_media_type(original: &[u8]) -> Result<&'static str, ConversationError> {
+    if original.starts_with(b"%PDF-") {
         Ok("application/pdf")
-    } else if header.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    } else if original.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Ok("image/jpeg")
-    } else if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+    } else if original.starts_with(b"\x89PNG\r\n\x1a\n") {
         Ok("image/png")
     } else {
         Err(ConversationError::InvalidDocument)
+    }
+}
+
+fn sha256(original: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(original))
+}
+
+fn extract_local_text(
+    media_type: &str,
+    original_path: &Path,
+    original: &[u8],
+    local_ocr: &dyn LocalOcr,
+) -> Result<Option<String>, ConversationError> {
+    if matches!(media_type, "image/jpeg" | "image/png") {
+        return Ok(local_ocr.extract_text(original_path, media_type));
+    }
+    if media_type != "application/pdf" {
+        return Ok(None);
+    }
+    pdf_extract::extract_text_from_mem(original)
+        .map(|text| {
+            let text = text.trim().to_owned();
+            if text.is_empty() {
+                local_ocr.extract_text(original_path, media_type)
+            } else {
+                Some(text)
+            }
+        })
+        .map_err(|_| ConversationError::InvalidDocument)
+}
+
+fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
+    let mut evidence = vec![
+        ReviewEvidence {
+            label: "Original name".to_owned(),
+            value: payload.original_name.clone(),
+        },
+        ReviewEvidence {
+            label: "Detected type".to_owned(),
+            value: media_type_label(&payload.media_type).to_owned(),
+        },
+        ReviewEvidence {
+            label: "SHA-256".to_owned(),
+            value: payload.checksum.clone(),
+        },
+    ];
+    if let Some(text) = &payload.extracted_text {
+        evidence.push(ReviewEvidence {
+            label: "Extracted text".to_owned(),
+            value: text.clone(),
+        });
+    } else {
+        evidence.push(ReviewEvidence {
+            label: "Local inspection".to_owned(),
+            value: "No text could be read locally.".to_owned(),
+        });
+    }
+    ReviewCard {
+        confidence_state: if payload.extracted_text.is_some() {
+            ConfidenceState::NeedsChecking
+        } else {
+            ConfidenceState::Unknown
+        },
+        evidence,
+    }
+}
+
+fn media_type_label(media_type: &str) -> &str {
+    match media_type {
+        "application/pdf" => "PDF",
+        "image/jpeg" => "JPG",
+        "image/png" => "PNG",
+        _ => "Unknown",
     }
 }

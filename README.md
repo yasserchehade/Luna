@@ -31,6 +31,10 @@ pnpm --filter luna-desktop test:e2e
 
 Windows development requires Rust and the Visual Studio C++ build workload. macOS development requires Rust and Xcode command-line tools.
 
+### Local document inspection
+
+Luna keeps document inspection on-device. Digital PDFs are read through the bundled Rust parser; image OCR uses local Tesseract. Image-only PDFs are first rasterised locally with Poppler's `pdftoppm`. Set `LUNA_TESSERACT_COMMAND` and `LUNA_PDFTOPPM_COMMAND` when those executables are not already available on the device path.
+
 ### Local account service
 
 Luna's beta account boundary uses Supabase Auth and PostgreSQL. Docker Desktop must be running for local account development.
