@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use image::ImageFormat;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -419,10 +420,15 @@ impl<V: CredentialVault> ConversationStore<V> {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or(ConversationError::UnsupportedDocument)?;
+        let extracted_pdf_text = extract_digital_pdf_text(media_type, &original)?;
         let checksum = sha256(&original);
         let original_path = self.preserve_original(&checksum, &original)?;
-        let extracted_text =
-            extract_local_text(media_type, &original_path, &original, &*self.local_ocr)?;
+        let extracted_text = extract_local_text(
+            media_type,
+            &original_path,
+            extracted_pdf_text,
+            &*self.local_ocr,
+        );
         let payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
             original_path,
@@ -727,8 +733,12 @@ fn detected_media_type(original: &[u8]) -> Result<&'static str, ConversationErro
     if original.starts_with(b"%PDF-") {
         Ok("application/pdf")
     } else if original.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        image::load_from_memory_with_format(original, ImageFormat::Jpeg)
+            .map_err(|_| ConversationError::InvalidDocument)?;
         Ok("image/jpeg")
     } else if original.starts_with(b"\x89PNG\r\n\x1a\n") {
+        image::load_from_memory_with_format(original, ImageFormat::Png)
+            .map_err(|_| ConversationError::InvalidDocument)?;
         Ok("image/png")
     } else {
         Err(ConversationError::InvalidDocument)
@@ -739,28 +749,34 @@ fn sha256(original: &[u8]) -> String {
     format!("{:x}", Sha256::digest(original))
 }
 
-fn extract_local_text(
+fn extract_digital_pdf_text(
     media_type: &str,
-    original_path: &Path,
     original: &[u8],
-    local_ocr: &dyn LocalOcr,
 ) -> Result<Option<String>, ConversationError> {
-    if matches!(media_type, "image/jpeg" | "image/png") {
-        return Ok(local_ocr.extract_text(original_path, media_type));
-    }
     if media_type != "application/pdf" {
         return Ok(None);
     }
     pdf_extract::extract_text_from_mem(original)
         .map(|text| {
             let text = text.trim().to_owned();
-            if text.is_empty() {
-                local_ocr.extract_text(original_path, media_type)
-            } else {
-                Some(text)
-            }
+            (!text.is_empty()).then_some(text)
         })
         .map_err(|_| ConversationError::InvalidDocument)
+}
+
+fn extract_local_text(
+    media_type: &str,
+    original_path: &Path,
+    extracted_pdf_text: Option<String>,
+    local_ocr: &dyn LocalOcr,
+) -> Option<String> {
+    match media_type {
+        "application/pdf" => {
+            extracted_pdf_text.or_else(|| local_ocr.extract_text(original_path, media_type))
+        }
+        "image/jpeg" | "image/png" => local_ocr.extract_text(original_path, media_type),
+        _ => None,
+    }
 }
 
 fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Cursor,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -82,6 +83,19 @@ fn digital_pdf_with_text(text: &str) -> Vec<u8> {
         .as_bytes(),
     );
     pdf
+}
+
+fn image_fixture(format: image::ImageFormat) -> Vec<u8> {
+    let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        1,
+        1,
+        image::Rgb([255, 255, 255]),
+    ));
+    let mut bytes = Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, format)
+        .expect("encode image fixture");
+    bytes.into_inner()
 }
 
 fn open_conversation_store(
@@ -286,7 +300,7 @@ fn messages_are_durable_parts_of_a_conversation() {
 fn resolving_work_from_any_surface_updates_the_same_document_handling_state() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("rates.png");
-    fs::write(&document, b"\x89PNG\r\n\x1a\nfixture").expect("write document fixture");
+    fs::write(&document, image_fixture(image::ImageFormat::Png)).expect("write document fixture");
     let (store, _) = open_conversation_store(directory.path().join("luna.db"));
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
@@ -341,9 +355,9 @@ fn only_pdf_jpg_and_png_files_can_enter_the_document_workflow() {
 
     for (filename, contents) in [
         ("bill.pdf", digital_pdf_with_text("Electricity bill")),
-        ("photo.jpg", b"\xFF\xD8\xFFfixture".to_vec()),
-        ("scan.jpeg", b"\xFF\xD8\xFFfixture".to_vec()),
-        ("letter.png", b"\x89PNG\r\n\x1a\nfixture".to_vec()),
+        ("photo.jpg", image_fixture(image::ImageFormat::Jpeg)),
+        ("scan.jpeg", image_fixture(image::ImageFormat::Jpeg)),
+        ("letter.png", image_fixture(image::ImageFormat::Png)),
     ] {
         let document = directory.path().join(filename);
         fs::write(&document, contents).expect("write supported fixture");
@@ -376,6 +390,10 @@ fn a_document_arrival_rejects_a_file_whose_bytes_do_not_match_its_claimed_type()
         .list_document_arrivals("rivera-household")
         .expect("list Document Arrivals")
         .is_empty());
+    assert!(
+        !directory.path().join("document-arrivals").exists(),
+        "malformed documents must not leave preserved Originals"
+    );
 }
 
 #[test]
@@ -390,6 +408,29 @@ fn a_document_arrival_rejects_a_malformed_pdf() {
 
     assert!(store
         .attach_document("rivera-household", conversation.id, malformed_pdf)
+        .is_err());
+    assert!(store
+        .list_document_arrivals("rivera-household")
+        .expect("list Document Arrivals")
+        .is_empty());
+    assert!(
+        !directory.path().join("document-arrivals").exists(),
+        "malformed documents must not leave preserved Originals"
+    );
+}
+
+#[test]
+fn a_document_arrival_rejects_a_malformed_png() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Validate documents")
+        .expect("create Conversation");
+    let malformed_png = directory.path().join("statement.png");
+    fs::write(&malformed_png, b"\x89PNG\r\n\x1a\nnot an image").expect("write malformed PNG");
+
+    assert!(store
+        .attach_document("rivera-household", conversation.id, malformed_png)
         .is_err());
     assert!(store
         .list_document_arrivals("rivera-household")
@@ -467,7 +508,7 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
 fn a_document_arrival_uses_local_ocr_for_an_image() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("council-rates.png");
-    fs::write(&document, b"\x89PNG\r\n\x1a\nfixture").expect("write PNG");
+    fs::write(&document, image_fixture(image::ImageFormat::Png)).expect("write PNG");
     let (store, _) = open_conversation_store_with_ocr(directory.path().join("luna.db"));
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
