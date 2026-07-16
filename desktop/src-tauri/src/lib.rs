@@ -1,5 +1,6 @@
 mod account_session;
 mod cabinet;
+mod conversation;
 mod settings;
 mod trusted_device;
 
@@ -7,6 +8,10 @@ pub use account_session::{AccountSessionError, AccountSessionStore};
 pub use cabinet::{
     CabinetAvailability, CabinetConfiguration, CabinetError, CabinetManager, CabinetPreview,
     CabinetValidation,
+};
+pub use conversation::{
+    Conversation, ConversationError, ConversationMessage, ConversationStore, DocumentArrival,
+    DocumentProcessingState, TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -37,6 +42,10 @@ type DeviceManager = TrustedDeviceManager<E2eCredentialVault>;
 type AccountSessionManager = AccountSessionStore<E2eCredentialVault>;
 
 type CabinetState = CabinetManager;
+#[cfg(not(feature = "e2e"))]
+type ConversationState = ConversationStore<OsCredentialVault>;
+#[cfg(feature = "e2e")]
+type ConversationState = ConversationStore<E2eCredentialVault>;
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -208,6 +217,158 @@ fn validate_cabinet(
     manager
         .validate(&household_id)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_conversation(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    title: String,
+) -> Result<Conversation, String> {
+    store
+        .create_conversation(&household_id, &title)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_conversations(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    search: Option<String>,
+    include_archived: bool,
+) -> Result<Vec<Conversation>, String> {
+    store
+        .list_conversations(&household_id, search.as_deref(), include_archived)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn rename_conversation(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    conversation_id: i64,
+    title: String,
+) -> Result<(), String> {
+    store
+        .rename_conversation(&household_id, conversation_id, &title)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn archive_conversation(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    conversation_id: i64,
+    archived: bool,
+) -> Result<(), String> {
+    store
+        .archive_conversation(&household_id, conversation_id, archived)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_conversation(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    conversation_id: i64,
+) -> Result<(), String> {
+    store
+        .delete_conversation(&household_id, conversation_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_member_message(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    conversation_id: i64,
+    body: String,
+) -> Result<ConversationMessage, String> {
+    store
+        .add_member_message(&household_id, conversation_id, &body)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_conversation_messages(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    conversation_id: i64,
+) -> Result<Vec<ConversationMessage>, String> {
+    store
+        .list_messages(&household_id, conversation_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn attach_document(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    conversation_id: i64,
+    path: String,
+) -> Result<DocumentArrival, String> {
+    store
+        .attach_document(&household_id, conversation_id, path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_document_arrivals(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<DocumentArrival>, String> {
+    store
+        .list_document_arrivals(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_todo_items(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<TodoItem>, String> {
+    store
+        .list_todo_items(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn dismiss_document_arrival(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    arrival_id: i64,
+) -> Result<(), String> {
+    store
+        .dismiss_document_arrival(&household_id, arrival_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn select_document_files(_app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    #[cfg(feature = "e2e")]
+    {
+        let document =
+            std::env::temp_dir().join(format!("luna-e2e-document-{}.pdf", std::process::id()));
+        std::fs::write(&document, b"%PDF-1.7 Luna E2E fixture")
+            .map_err(|error| error.to_string())?;
+        Ok(vec![document.to_string_lossy().into_owned()])
+    }
+
+    #[cfg(not(feature = "e2e"))]
+    {
+        _app.dialog()
+            .file()
+            .add_filter("Documents", &["pdf", "jpg", "jpeg", "png"])
+            .blocking_pick_files()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|file| {
+                file.into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            })
+            .collect()
+    }
 }
 
 #[tauri::command]
@@ -521,19 +682,27 @@ pub fn run() {
             std::fs::remove_dir_all(&application_data)?;
         }
         std::fs::create_dir_all(&application_data)?;
-        let settings = SettingsStore::open(application_data.join("luna.db"))?;
+        let database = application_data.join("luna.db");
+        let settings = SettingsStore::open(&database)?;
         app.manage(settings.clone());
         app.manage(CabinetManager::new(settings));
         #[cfg(not(feature = "e2e"))]
-        app.manage(TrustedDeviceManager::new(OsCredentialVault::new(
-            "app.luna.household",
-        )));
+        {
+            let trusted_device =
+                TrustedDeviceManager::new(OsCredentialVault::new("app.luna.household"));
+            app.manage(ConversationStore::open(&database, trusted_device.clone())?);
+            app.manage(trusted_device);
+        }
         #[cfg(not(feature = "e2e"))]
         app.manage(AccountSessionStore::new(OsCredentialVault::new(
             "app.luna.account",
         )));
         #[cfg(feature = "e2e")]
-        app.manage(TrustedDeviceManager::new(E2eCredentialVault::default()));
+        {
+            let trusted_device = TrustedDeviceManager::new(E2eCredentialVault::default());
+            app.manage(ConversationStore::open(&database, trusted_device.clone())?);
+            app.manage(trusted_device);
+        }
         #[cfg(feature = "e2e")]
         app.manage(AccountSessionStore::new(E2eCredentialVault::default()));
         Ok(())
@@ -546,6 +715,18 @@ pub fn run() {
         preview_cabinet,
         create_cabinet,
         validate_cabinet,
+        create_conversation,
+        list_conversations,
+        rename_conversation,
+        archive_conversation,
+        delete_conversation,
+        add_member_message,
+        list_conversation_messages,
+        attach_document,
+        list_document_arrivals,
+        list_todo_items,
+        dismiss_document_arrival,
+        select_document_files,
         get_account_session_item,
         set_account_session_item,
         remove_account_session_item,
