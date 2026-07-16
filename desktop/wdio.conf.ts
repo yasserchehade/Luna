@@ -4,7 +4,11 @@ const executable = process.platform === "win32" ? "luna-desktop.exe" : "luna-des
 const application = process.env.LUNA_E2E_BINARY
   ? path.resolve(process.env.LUNA_E2E_BINARY)
   : path.resolve("src-tauri", "target", "debug", executable);
-const tauriServiceOptions = { appBinaryPath: application, driverProvider: "embedded" } as const;
+const tauriServiceOptions = {
+  appBinaryPath: application,
+  driverProvider: "embedded",
+  statusPollTimeout: 10_000,
+} as const;
 
 export const config: WebdriverIO.Config = {
   runner: "local",
