@@ -72,7 +72,7 @@ impl LocalOcr for TesseractOcr {
                 "LUNA_PDFTOPPM_COMMAND",
                 "pdftoppm",
             ))
-            .args(["-f", "1", "-l", "1", "-png", "-singlefile"])
+            .arg("-png")
             .arg(original)
             .arg(&image_base)
             .output()
@@ -80,7 +80,19 @@ impl LocalOcr for TesseractOcr {
             if !output.status.success() {
                 return None;
             }
-            return self.extract_image_text(&image_base.with_extension("png"));
+            let mut pages = fs::read_dir(directory.path())
+                .ok()?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
+                .collect::<Vec<_>>();
+            pages.sort();
+            let text = pages
+                .iter()
+                .filter_map(|page| self.extract_image_text(page))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            return (!text.is_empty()).then_some(text);
         }
         self.extract_image_text(original)
     }
