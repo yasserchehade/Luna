@@ -288,6 +288,8 @@ export function ConversationWorkspace({
             <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
               <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
             </div>)}</dl>
+            {arrival.reviewCard.uncertainties.map((uncertainty) => <p key={uncertainty}>{uncertainty}</p>)}
+            {arrival.reviewCard.proposedCabinetDestination && <p>Proposed destination: {arrival.reviewCard.proposedCabinetDestination}</p>}
           </section>
         </div>
         {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}

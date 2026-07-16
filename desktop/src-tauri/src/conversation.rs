@@ -54,6 +54,8 @@ pub struct ReviewEvidence {
 pub struct ReviewCard {
     pub confidence_state: ConfidenceState,
     pub evidence: Vec<ReviewEvidence>,
+    pub uncertainties: Vec<String>,
+    pub proposed_cabinet_destination: Option<String>,
 }
 
 pub trait LocalOcr: Send + Sync {
@@ -403,6 +405,7 @@ impl<V: CredentialVault> ConversationStore<V> {
         household_id: &str,
         conversation_id: i64,
         path: impl AsRef<Path>,
+        cabinet_root: impl AsRef<Path>,
     ) -> Result<DocumentArrival, ConversationError> {
         self.require_active_conversation(household_id, conversation_id)?;
         let path = path.as_ref();
@@ -434,7 +437,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             .ok_or(ConversationError::UnsupportedDocument)?;
         let extracted_pdf_text = extract_digital_pdf_text(media_type, &original)?;
         let checksum = sha256(&original);
-        let original_path = self.preserve_original(&checksum, &original)?;
+        let original_path = self.preserve_original(cabinet_root.as_ref(), &checksum, &original)?;
         let extracted_text = extract_local_text(
             media_type,
             &original_path,
@@ -709,14 +712,17 @@ impl<V: CredentialVault> ConversationStore<V> {
 
     fn preserve_original(
         &self,
+        cabinet_root: &Path,
         checksum: &str,
         original: &[u8],
     ) -> Result<PathBuf, ConversationError> {
-        let directory = self
-            .database
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("document-arrivals");
+        if !cabinet_root.is_dir() {
+            return Err(ConversationError::DocumentUnavailable(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Cabinet is unavailable",
+            )));
+        }
+        let directory = cabinet_root.join("Incoming");
         fs::create_dir_all(&directory)?;
         let original_path = directory.join(checksum);
 
@@ -824,6 +830,8 @@ fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
             ConfidenceState::Unknown
         },
         evidence,
+        uncertainties: vec!["Luna needs your direction before filing this Original.".to_owned()],
+        proposed_cabinet_destination: None,
     }
 }
 

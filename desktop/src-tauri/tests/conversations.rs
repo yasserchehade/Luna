@@ -235,7 +235,12 @@ fn a_document_arrival_and_one_todo_survive_conversation_deletion() {
         .expect("create Conversation");
 
     let arrival = store
-        .attach_document("rivera-household", conversation.id, &document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &document,
+            directory.path(),
+        )
         .expect("attach supported document");
 
     assert_eq!(arrival.original_name, "AGL bill.pdf");
@@ -306,7 +311,12 @@ fn resolving_work_from_any_surface_updates_the_same_document_handling_state() {
         .create_conversation("rivera-household", "Council rates")
         .expect("create Conversation");
     let arrival = store
-        .attach_document("rivera-household", conversation.id, &document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &document,
+            directory.path(),
+        )
         .expect("attach supported document");
 
     store
@@ -362,14 +372,24 @@ fn only_pdf_jpg_and_png_files_can_enter_the_document_workflow() {
         let document = directory.path().join(filename);
         fs::write(&document, contents).expect("write supported fixture");
         store
-            .attach_document("rivera-household", conversation.id, document)
+            .attach_document(
+                "rivera-household",
+                conversation.id,
+                document,
+                directory.path(),
+            )
             .expect("attach supported document type");
     }
 
     let unsupported = directory.path().join("notes.txt");
     fs::write(&unsupported, b"fixture").expect("write unsupported fixture");
     assert!(store
-        .attach_document("rivera-household", conversation.id, unsupported)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            unsupported,
+            directory.path()
+        )
         .is_err());
 }
 
@@ -384,7 +404,12 @@ fn a_document_arrival_rejects_a_file_whose_bytes_do_not_match_its_claimed_type()
     fs::write(&renamed_text_file, b"This is not a PDF.").expect("write malformed document");
 
     assert!(store
-        .attach_document("rivera-household", conversation.id, renamed_text_file)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            renamed_text_file,
+            directory.path()
+        )
         .is_err());
     assert!(store
         .list_document_arrivals("rivera-household")
@@ -407,7 +432,12 @@ fn a_document_arrival_rejects_a_malformed_pdf() {
     fs::write(&malformed_pdf, b"%PDF-1.7 not a complete PDF").expect("write malformed PDF");
 
     assert!(store
-        .attach_document("rivera-household", conversation.id, malformed_pdf)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            malformed_pdf,
+            directory.path()
+        )
         .is_err());
     assert!(store
         .list_document_arrivals("rivera-household")
@@ -430,7 +460,12 @@ fn a_document_arrival_rejects_a_malformed_png() {
     fs::write(&malformed_png, b"\x89PNG\r\n\x1a\nnot an image").expect("write malformed PNG");
 
     assert!(store
-        .attach_document("rivera-household", conversation.id, malformed_png)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            malformed_png,
+            directory.path()
+        )
         .is_err());
     assert!(store
         .list_document_arrivals("rivera-household")
@@ -450,12 +485,21 @@ fn a_document_arrival_preserves_the_exact_original_and_its_checksum() {
         .expect("create Conversation");
 
     let arrival = store
-        .attach_document("rivera-household", conversation.id, &source_document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &source_document,
+            directory.path(),
+        )
         .expect("attach supported document");
 
     assert_eq!(
         arrival.checksum,
         "6efc42d3b61e3ea0a01ad7b717f8745065894d8c94fa9fb9ef8db718d341e16f"
+    );
+    assert_eq!(
+        arrival.original_path.parent(),
+        Some(directory.path().join("Incoming").as_path())
     );
     assert_eq!(
         fs::read(&arrival.original_path).expect("read preserved Original"),
@@ -479,7 +523,12 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
         .expect("create Conversation");
 
     let arrival = store
-        .attach_document("rivera-household", conversation.id, document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
         .expect("attach digital PDF");
 
     assert_eq!(
@@ -490,6 +539,11 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
         arrival.review_card.confidence_state,
         ConfidenceState::NeedsChecking
     );
+    assert_eq!(
+        arrival.review_card.uncertainties,
+        vec!["Luna needs your direction before filing this Original."]
+    );
+    assert_eq!(arrival.review_card.proposed_cabinet_destination, None);
     let evidence = arrival
         .review_card
         .evidence
@@ -515,7 +569,12 @@ fn a_document_arrival_uses_local_ocr_for_an_image() {
         .expect("create Conversation");
 
     let arrival = store
-        .attach_document("rivera-household", conversation.id, document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
         .expect("attach PNG");
 
     assert_eq!(
@@ -535,7 +594,12 @@ fn a_document_arrival_uses_local_ocr_for_an_image_only_pdf() {
         .expect("create Conversation");
 
     let arrival = store
-        .attach_document("rivera-household", conversation.id, document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
         .expect("attach image-only PDF");
 
     assert_eq!(
@@ -563,7 +627,12 @@ fn conversation_content_is_protected_and_requires_an_unlocked_trusted_device() {
         )
         .expect("add protected message");
     store
-        .attach_document("rivera-household", conversation.id, &document)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &document,
+            directory.path(),
+        )
         .expect("attach protected document");
 
     let database_bytes =

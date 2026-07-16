@@ -26,6 +26,8 @@ export type ReviewEvidence = {
 export type ReviewCard = {
   confidenceState: ConfidenceState;
   evidence: ReviewEvidence[];
+  uncertainties: string[];
+  proposedCabinetDestination: string | null;
 };
 
 export type DocumentArrival = {

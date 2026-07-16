@@ -43,7 +43,10 @@ describe("Luna Conversation desk", () => {
 
     await $("button[aria-label='Luna']").click();
     const droppedDocument = join(tmpdir(), `luna-e2e-dropped-${Date.now()}.png`);
-    writeFileSync(droppedDocument, "PNG fixture");
+    writeFileSync(droppedDocument, Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6HwAAAABJRU5ErkJggg==",
+      "base64",
+    ));
     await browser.execute((documentPath) => (
       window as unknown as {
         __TAURI_INTERNALS__: {
