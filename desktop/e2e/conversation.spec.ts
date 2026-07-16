@@ -44,7 +44,7 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Luna']").click();
     const droppedDocument = join(tmpdir(), `luna-e2e-dropped-${Date.now()}.png`);
     writeFileSync(droppedDocument, Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6HwAAAABJRU5ErkJggg==",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
       "base64",
     ));
     await browser.execute((documentPath) => (
@@ -57,14 +57,22 @@ describe("Luna Conversation desk", () => {
       event: "tauri://drag-drop",
       payload: { paths: [documentPath], position: { x: 40, y: 40 } },
     }), droppedDocument);
+    await browser.waitUntil(async () => {
+      const arrivals = await $$(".document-arrival");
+      return await arrivals.length === 2 || await $("[role='alert']").isExisting();
+    }, { timeoutMsg: "The dropped document was neither attached nor rejected." });
+    const attachmentError = $("[role='alert']");
+    if (await attachmentError.isExisting()) {
+      throw new Error(`The dropped document was rejected: ${await attachmentError.getText()}`);
+    }
     await expect($$(".document-arrival")).toBeElementsArrayOfSize(2);
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $(".todo-list article").$("button=Dismiss").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
     await $("button[aria-label='Luna']").click();
-    await expect($$(".document-arrival p")).toBeElementsArrayOfSize(2);
-    for (const state of await $$(".document-arrival p")) await expect(state).toHaveText("Dismissed");
+    await expect($$(".document-arrival > div > p")).toBeElementsArrayOfSize(2);
+    for (const state of await $$(".document-arrival > div > p")) await expect(state).toHaveText("Dismissed");
 
     await $("button=Archive").click();
     await expect($("button=Restore")).toBeDisplayed();

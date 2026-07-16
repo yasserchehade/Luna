@@ -2,10 +2,14 @@ import { $, browser } from "@wdio/globals";
 import { testHousehold } from "./testHousehold";
 
 export async function onboardTestHousehold() {
-  await browser.waitUntil(async () => (
+  const accountEntryAvailable = await browser.waitUntil(async () => (
     await $("#organiser-name").isExisting()
     || await $("#sign-in-email").isExisting()
-  ), { timeoutMsg: "Luna account entry did not become available" });
+  ), { timeout: 10_000 }).catch(() => false);
+  if (!accountEntryAvailable) {
+    const visibleContent = await $("body").getText().catch(() => "<not available>");
+    throw new Error(`Luna account entry did not become available. Visible content: ${visibleContent}`);
+  }
 
   if (await $("#organiser-name").isExisting()) {
     await registerTestHousehold();
