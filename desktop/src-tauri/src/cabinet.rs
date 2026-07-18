@@ -200,7 +200,7 @@ fn directory_stays_within(root: &Path, directory: &Path) -> bool {
     directory.is_dir() && directory.starts_with(root)
 }
 
-fn ensure_incoming_folder(root: &Path) -> Result<(), CabinetError> {
+pub(crate) fn ensure_incoming_folder(root: &Path) -> Result<PathBuf, CabinetError> {
     let incoming = root.join(INCOMING_FOLDER);
     if !incoming.exists() {
         std::fs::create_dir(&incoming)?;
@@ -210,7 +210,7 @@ fn ensure_incoming_folder(root: &Path) -> Result<(), CabinetError> {
             INCOMING_FOLDER.to_owned(),
         ));
     }
-    verify_writable(&incoming)
+    verify_writable(&incoming).map(|()| incoming)
 }
 
 fn verify_writable(root: &Path) -> Result<(), CabinetError> {

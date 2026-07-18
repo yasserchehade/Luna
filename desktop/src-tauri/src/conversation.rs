@@ -13,6 +13,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::cabinet::ensure_incoming_folder;
 use crate::trusted_device::{
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -192,12 +193,22 @@ struct MessagePayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DocumentArrivalPayload {
     original_name: String,
+    #[serde(default)]
     original_path: PathBuf,
     source_path: PathBuf,
+    #[serde(default)]
     checksum: String,
     media_type: String,
     extracted_text: Option<String>,
     processing_state: DocumentProcessingState,
+}
+
+impl DocumentArrivalPayload {
+    fn restore_legacy_original_path(&mut self) {
+        if self.original_path.as_os_str().is_empty() {
+            self.original_path = self.source_path.clone();
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -561,8 +572,9 @@ impl<V: CredentialVault> ConversationStore<V> {
         protected_rows
             .into_iter()
             .map(|(id, conversation_id, protected)| {
-                let payload: DocumentArrivalPayload =
+                let mut payload: DocumentArrivalPayload =
                     self.open_protected(household_id, &protected)?;
+                payload.restore_legacy_original_path();
                 let review_card = review_card(&payload);
                 Ok(DocumentArrival {
                     id,
@@ -618,6 +630,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             .optional()?;
         let mut payload: DocumentArrivalPayload =
             self.open_protected(household_id, &protected.ok_or(ConversationError::NotFound)?)?;
+        payload.restore_legacy_original_path();
         if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
             return Err(ConversationError::NotFound);
         }
@@ -724,7 +737,8 @@ impl<V: CredentialVault> ConversationStore<V> {
                 "Cabinet is unavailable",
             )));
         }
-        let directory = cabinet_root.join("Incoming").join(checksum);
+        let incoming = ensure_incoming_folder(cabinet_root).map_err(io::Error::other)?;
+        let directory = incoming.join(checksum);
         fs::create_dir_all(&directory)?;
         let original_path = directory.join(original_name);
 
@@ -811,7 +825,11 @@ fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
         },
         ReviewEvidence {
             label: "SHA-256".to_owned(),
-            value: payload.checksum.clone(),
+            value: if payload.checksum.is_empty() {
+                "Not recorded before Original staging".to_owned()
+            } else {
+                payload.checksum.clone()
+            },
         },
     ];
     if let Some(text) = &payload.extracted_text {
