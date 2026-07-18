@@ -31,6 +31,7 @@ pub struct Conversation {
 #[serde(rename_all = "camelCase")]
 pub enum DocumentProcessingState {
     NeedsMemberDirection,
+    ReadyToFile,
     Dismissed,
 }
 
@@ -52,11 +53,115 @@ pub struct ReviewEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReviewField {
+    pub value: Option<String>,
+    pub confidence_state: ConfidenceState,
+}
+
+impl Default for ReviewField {
+    fn default() -> Self {
+        Self {
+            value: None,
+            confidence_state: ConfidenceState::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentContextReview {
+    pub document_type: ReviewField,
+    pub service_provider: ReviewField,
+    pub service_provider_relevance: ReviewField,
+    pub addressee: ReviewField,
+    pub property: ReviewField,
+    pub property_relevance: ReviewField,
+    pub account: ReviewField,
+    pub amount: ReviewField,
+    pub relevant_dates: Vec<ReviewField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClarificationQuestion {
+    pub field: ContextField,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ContextField {
+    DocumentType,
+    ServiceProvider,
+    ServiceProviderRelevance,
+    Addressee,
+    Property,
+    PropertyRelevance,
+    Account,
+    Amount,
+    RelevantDates,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingDecisionReview {
+    pub file_name: String,
+    pub cabinet_destination: String,
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingDecisionDirection {
+    pub file_name: String,
+    pub cabinet_destination: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentContextDirection {
+    pub document_type: Option<String>,
+    #[serde(default)]
+    pub document_type_resolved: bool,
+    pub service_provider: Option<String>,
+    #[serde(default)]
+    pub service_provider_resolved: bool,
+    pub addressee: Option<String>,
+    #[serde(default)]
+    pub addressee_resolved: bool,
+    pub property: Option<String>,
+    #[serde(default)]
+    pub property_resolved: bool,
+    pub account: Option<String>,
+    #[serde(default)]
+    pub account_resolved: bool,
+    pub amount: Option<String>,
+    #[serde(default)]
+    pub amount_resolved: bool,
+    pub relevant_dates: Vec<String>,
+    #[serde(default)]
+    pub relevant_dates_resolved: bool,
+    pub service_provider_relevance: Option<ContextRelevanceDirection>,
+    pub property_relevance: Option<ContextRelevanceDirection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextRelevanceDirection {
+    pub subject: String,
+    pub explanation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewCard {
     pub confidence_state: ConfidenceState,
     pub evidence: Vec<ReviewEvidence>,
     pub uncertainties: Vec<String>,
     pub proposed_cabinet_destination: Option<String>,
+    pub context: DocumentContextReview,
+    pub questions: Vec<ClarificationQuestion>,
+    pub filing_decision: Option<FilingDecisionReview>,
 }
 
 pub trait LocalOcr: Send + Sync {
@@ -201,6 +306,10 @@ struct DocumentArrivalPayload {
     media_type: String,
     extracted_text: Option<String>,
     processing_state: DocumentProcessingState,
+    #[serde(default)]
+    context_direction: DocumentContextDirection,
+    #[serde(default)]
+    filing_decision: Option<FilingDecisionReview>,
 }
 
 impl DocumentArrivalPayload {
@@ -225,6 +334,10 @@ pub enum ConversationError {
     InvalidDocument,
     #[error("A different Original already occupies this document's preserved location.")]
     OriginalConflict,
+    #[error("Household Context must be resolved before confirming a Filing Decision.")]
+    UnresolvedContext,
+    #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
+    InvalidCabinetDestination,
     #[error("The selected document is unavailable.")]
     DocumentUnavailable(#[from] io::Error),
     #[error("Protected Household state is unavailable.")]
@@ -456,6 +569,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             extracted_pdf_text,
             &*self.local_ocr,
         );
+        let context_direction = local_context_direction(extracted_text.as_deref());
         let payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
             original_path,
@@ -464,6 +578,8 @@ impl<V: CredentialVault> ConversationStore<V> {
             media_type: media_type.to_owned(),
             extracted_text,
             processing_state: DocumentProcessingState::NeedsMemberDirection,
+            context_direction,
+            filing_decision: None,
         };
         let protected = self.protect(household_id, &payload)?;
         let connection = self.connect()?;
@@ -643,6 +759,106 @@ impl<V: CredentialVault> ConversationStore<V> {
         )
     }
 
+    pub fn record_member_direction(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        direction: DocumentContextDirection,
+        cabinet_section: &str,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+            return Err(ConversationError::NotFound);
+        }
+        payload.context_direction = direction.normalized();
+        payload.filing_decision = clarification_questions(&payload.context_direction)
+            .is_empty()
+            .then(|| propose_filing_decision(&payload, cabinet_section));
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn confirm_filing_decision(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        direction: FilingDecisionDirection,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+            return Err(ConversationError::NotFound);
+        }
+        if !clarification_questions(&payload.context_direction).is_empty()
+            || payload.filing_decision.is_none()
+        {
+            return Err(ConversationError::UnresolvedContext);
+        }
+        let file_name = direction.file_name.trim();
+        let cabinet_destination = direction.cabinet_destination.trim();
+        if !valid_file_name(file_name, &payload.original_name)
+            || !valid_cabinet_destination(cabinet_destination, file_name)
+        {
+            return Err(ConversationError::InvalidCabinetDestination);
+        }
+        payload.filing_decision = Some(FilingDecisionReview {
+            file_name: file_name.to_owned(),
+            cabinet_destination: cabinet_destination.to_owned(),
+            confirmed: true,
+        });
+        payload.processing_state = DocumentProcessingState::ReadyToFile;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
+    fn load_document_arrival_payload(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<(i64, DocumentArrivalPayload), ConversationError> {
+        let stored: Option<(i64, String)> = self
+            .connect()?
+            .query_row(
+                "SELECT conversation_id, protected_payload FROM document_arrivals
+                  WHERE id = ?1 AND household_id = ?2",
+                params![arrival_id, household_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (conversation_id, protected) = stored.ok_or(ConversationError::NotFound)?;
+        let mut payload: DocumentArrivalPayload = self.open_protected(household_id, &protected)?;
+        payload.restore_legacy_original_path();
+        Ok((conversation_id, payload))
+    }
+
+    fn save_document_arrival_payload(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        conversation_id: i64,
+        payload: DocumentArrivalPayload,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let protected = self.protect(household_id, &payload)?;
+        self.ensure_updated(
+            "UPDATE document_arrivals SET protected_payload = ?1
+              WHERE id = ?2 AND household_id = ?3",
+            params![protected, arrival_id, household_id],
+        )?;
+        let review_card = review_card(&payload);
+        Ok(DocumentArrival {
+            id: arrival_id,
+            household_id: household_id.to_owned(),
+            conversation_id,
+            original_name: payload.original_name,
+            original_path: payload.original_path,
+            source_path: payload.source_path,
+            checksum: payload.checksum,
+            media_type: payload.media_type,
+            extracted_text: payload.extracted_text,
+            review_card,
+            processing_state: payload.processing_state,
+        })
+    }
+
     fn require_active_conversation(
         &self,
         household_id: &str,
@@ -813,6 +1029,37 @@ fn extract_local_text(
     }
 }
 
+fn local_context_direction(extracted_text: Option<&str>) -> DocumentContextDirection {
+    let mut direction = DocumentContextDirection::default();
+    let Some(extracted_text) = extracted_text else {
+        return direction;
+    };
+    for segment in extracted_text.split(['\n', ';']) {
+        let Some((label, value)) = segment.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match label.trim().to_ascii_lowercase().as_str() {
+            "document type" => direction.document_type = Some(value.to_owned()),
+            "service provider" | "provider" => {
+                direction.service_provider = Some(value.to_owned());
+            }
+            "addressee" => direction.addressee = Some(value.to_owned()),
+            "property" | "property address" | "address" => {
+                direction.property = Some(value.to_owned());
+            }
+            "account" | "account number" => direction.account = Some(value.to_owned()),
+            "amount" => direction.amount = Some(value.to_owned()),
+            "relevant date" | "date" => direction.relevant_dates.push(value.to_owned()),
+            _ => {}
+        }
+    }
+    direction
+}
+
 fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
     let mut evidence = vec![
         ReviewEvidence {
@@ -843,15 +1090,302 @@ fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
             value: "No text could be read locally.".to_owned(),
         });
     }
+    let context = &payload.context_direction;
+    let questions = clarification_questions(context);
     ReviewCard {
-        confidence_state: if payload.extracted_text.is_some() {
+        confidence_state: if questions.is_empty() {
+            ConfidenceState::Confirmed
+        } else if payload.extracted_text.is_some() {
             ConfidenceState::NeedsChecking
         } else {
             ConfidenceState::Unknown
         },
         evidence,
-        uncertainties: vec!["Luna needs your direction before filing this Original.".to_owned()],
-        proposed_cabinet_destination: None,
+        uncertainties: if questions.is_empty() {
+            Vec::new()
+        } else {
+            vec!["Luna needs your direction before filing this Original.".to_owned()]
+        },
+        proposed_cabinet_destination: payload
+            .filing_decision
+            .as_ref()
+            .map(|decision| decision.cabinet_destination.clone()),
+        context: DocumentContextReview {
+            document_type: review_field(&context.document_type, context.document_type_resolved),
+            service_provider: review_field(
+                &context.service_provider,
+                context.service_provider_resolved,
+            ),
+            service_provider_relevance: review_field(
+                &context
+                    .service_provider_relevance
+                    .as_ref()
+                    .map(|relevance| relevance.explanation.clone()),
+                context.service_provider_relevance.is_some(),
+            ),
+            addressee: review_field(&context.addressee, context.addressee_resolved),
+            property: review_field(&context.property, context.property_resolved),
+            property_relevance: review_field(
+                &context
+                    .property_relevance
+                    .as_ref()
+                    .map(|relevance| relevance.explanation.clone()),
+                context.property_relevance.is_some(),
+            ),
+            account: review_field(&context.account, context.account_resolved),
+            amount: review_field(&context.amount, context.amount_resolved),
+            relevant_dates: context
+                .relevant_dates
+                .iter()
+                .map(|date| review_field(&Some(date.clone()), context.relevant_dates_resolved))
+                .collect(),
+        },
+        questions,
+        filing_decision: payload.filing_decision.clone(),
+    }
+}
+
+fn clarification_questions(context: &DocumentContextDirection) -> Vec<ClarificationQuestion> {
+    let mut questions = Vec::new();
+    if !context.document_type_resolved || context.document_type.is_none() {
+        questions.push(ClarificationQuestion {
+            field: ContextField::DocumentType,
+            prompt: "What kind of document is this?".to_owned(),
+        });
+    }
+    if !context.service_provider_resolved || context.service_provider.is_none() {
+        questions.push(ClarificationQuestion {
+            field: ContextField::ServiceProvider,
+            prompt: "Which Service Provider issued this document?".to_owned(),
+        });
+    } else if context.service_provider_relevance.is_none() {
+        questions.push(ClarificationQuestion {
+            field: ContextField::ServiceProviderRelevance,
+            prompt: format!(
+                "How is {} relevant to this Household?",
+                context.service_provider.as_deref().unwrap_or_default()
+            ),
+        });
+    }
+    if !context.addressee_resolved || context.addressee.is_none() {
+        questions.push(ClarificationQuestion {
+            field: ContextField::Addressee,
+            prompt: "Who is this document addressed to?".to_owned(),
+        });
+    }
+    if !context.property_resolved {
+        questions.push(ClarificationQuestion {
+            field: ContextField::Property,
+            prompt: "Does this document relate to a Household property or address?".to_owned(),
+        });
+    } else if context.property.is_some() && context.property_relevance.is_none() {
+        questions.push(ClarificationQuestion {
+            field: ContextField::PropertyRelevance,
+            prompt: format!(
+                "How is {} relevant to this Household?",
+                context.property.as_deref().unwrap_or_default()
+            ),
+        });
+    }
+    if !context.account_resolved {
+        questions.push(ClarificationQuestion {
+            field: ContextField::Account,
+            prompt: "Does this document relate to a Household account?".to_owned(),
+        });
+    }
+    if !context.amount_resolved {
+        questions.push(ClarificationQuestion {
+            field: ContextField::Amount,
+            prompt: "What amount, if any, helps identify this document?".to_owned(),
+        });
+    }
+    if !context.relevant_dates_resolved {
+        questions.push(ClarificationQuestion {
+            field: ContextField::RelevantDates,
+            prompt: "Which dates, if any, should identify this document?".to_owned(),
+        });
+    }
+    questions
+}
+
+fn propose_filing_decision(
+    payload: &DocumentArrivalPayload,
+    cabinet_section: &str,
+) -> FilingDecisionReview {
+    let context = &payload.context_direction;
+    let date = context
+        .relevant_dates
+        .first()
+        .map(String::as_str)
+        .unwrap_or("Undated");
+    let year = date
+        .get(..4)
+        .filter(|year| year.chars().all(|character| character.is_ascii_digit()))
+        .unwrap_or("Undated");
+    let service_provider = context
+        .service_provider
+        .as_deref()
+        .unwrap_or("Unknown provider");
+    let document_type = context.document_type.as_deref().unwrap_or("Document");
+    let addressee = context.addressee.as_deref().unwrap_or("Household");
+    let extension = Path::new(&payload.original_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| "pdf".to_owned());
+    let file_name = format!(
+        "{} - {} - {} - {}.{}",
+        safe_component(date),
+        safe_component(service_provider),
+        safe_component(document_type),
+        safe_component(addressee),
+        extension
+    );
+    let subject = context
+        .property
+        .as_deref()
+        .or(context.account.as_deref())
+        .unwrap_or(addressee);
+    let cabinet_destination = [
+        safe_component(cabinet_section),
+        safe_component(subject),
+        safe_component(service_provider),
+        safe_component(year),
+        file_name.clone(),
+    ]
+    .join("/");
+    FilingDecisionReview {
+        file_name,
+        cabinet_destination,
+        confirmed: false,
+    }
+}
+
+fn safe_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_control() || "<>:\"/\\|?*".contains(character) {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim().trim_matches('.').trim();
+    if sanitized.is_empty() {
+        "Unknown".to_owned()
+    } else {
+        sanitized.to_owned()
+    }
+}
+
+fn valid_file_name(file_name: &str, original_name: &str) -> bool {
+    if file_name.is_empty()
+        || file_name == "."
+        || file_name == ".."
+        || safe_component(file_name) != file_name
+    {
+        return false;
+    }
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str());
+    let original_extension = Path::new(original_name)
+        .extension()
+        .and_then(|extension| extension.to_str());
+    extension
+        .zip(original_extension)
+        .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
+fn valid_cabinet_destination(cabinet_destination: &str, file_name: &str) -> bool {
+    if cabinet_destination.is_empty()
+        || cabinet_destination.starts_with(['/', '\\'])
+        || cabinet_destination.contains('\\')
+    {
+        return false;
+    }
+    let components = cabinet_destination.split('/').collect::<Vec<_>>();
+    components.len() >= 2
+        && !components[0].eq_ignore_ascii_case("Incoming")
+        && components
+            .last()
+            .is_some_and(|component| *component == file_name)
+        && components.iter().all(|component| {
+            !component.is_empty()
+                && *component != "."
+                && *component != ".."
+                && safe_component(component) == *component
+        })
+}
+
+impl DocumentContextDirection {
+    fn normalized(self) -> Self {
+        let document_type = non_empty(self.document_type);
+        let service_provider = non_empty(self.service_provider);
+        let addressee = non_empty(self.addressee);
+        let property = non_empty(self.property);
+        let account = non_empty(self.account);
+        let amount = non_empty(self.amount);
+        Self {
+            document_type,
+            document_type_resolved: self.document_type_resolved,
+            service_provider_relevance: normalized_relevance(
+                self.service_provider_relevance,
+                service_provider.as_deref(),
+            ),
+            service_provider,
+            service_provider_resolved: self.service_provider_resolved,
+            addressee,
+            addressee_resolved: self.addressee_resolved,
+            property_relevance: normalized_relevance(self.property_relevance, property.as_deref()),
+            property,
+            property_resolved: self.property_resolved,
+            account,
+            account_resolved: self.account_resolved,
+            amount,
+            amount_resolved: self.amount_resolved,
+            relevant_dates: self
+                .relevant_dates
+                .into_iter()
+                .filter_map(|date| non_empty(Some(date)))
+                .collect(),
+            relevant_dates_resolved: self.relevant_dates_resolved,
+        }
+    }
+}
+
+fn normalized_relevance(
+    relevance: Option<ContextRelevanceDirection>,
+    current_subject: Option<&str>,
+) -> Option<ContextRelevanceDirection> {
+    let relevance = relevance?;
+    let subject = non_empty(Some(relevance.subject))?;
+    let explanation = non_empty(Some(relevance.explanation))?;
+    (current_subject == Some(subject.as_str())).then_some(ContextRelevanceDirection {
+        subject,
+        explanation,
+    })
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim().to_owned();
+        (!value.is_empty()).then_some(value)
+    })
+}
+
+fn review_field(value: &Option<String>, resolved: bool) -> ReviewField {
+    ReviewField {
+        value: value.clone(),
+        confidence_state: if resolved {
+            ConfidenceState::Confirmed
+        } else if value.is_some() {
+            ConfidenceState::LooksRight
+        } else {
+            ConfidenceState::Unknown
+        },
     }
 }
 

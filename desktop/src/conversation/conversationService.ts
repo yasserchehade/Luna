@@ -14,7 +14,7 @@ export type ConversationMessage = {
   body: string;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "dismissed";
+export type DocumentProcessingState = "needsMemberDirection" | "readyToFile" | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -23,11 +23,80 @@ export type ReviewEvidence = {
   value: string;
 };
 
+export type ReviewField = {
+  value: string | null;
+  confidenceState: ConfidenceState;
+};
+
+export type DocumentContextReview = {
+  documentType: ReviewField;
+  serviceProvider: ReviewField;
+  serviceProviderRelevance: ReviewField;
+  addressee: ReviewField;
+  property: ReviewField;
+  propertyRelevance: ReviewField;
+  account: ReviewField;
+  amount: ReviewField;
+  relevantDates: ReviewField[];
+};
+
+export type ClarificationQuestion = {
+  field:
+    | "documentType"
+    | "serviceProvider"
+    | "serviceProviderRelevance"
+    | "addressee"
+    | "property"
+    | "propertyRelevance"
+    | "account"
+    | "amount"
+    | "relevantDates";
+  prompt: string;
+};
+
+export type FilingDecisionReview = {
+  fileName: string;
+  cabinetDestination: string;
+  confirmed: boolean;
+};
+
+export type ContextRelevanceDirection = {
+  subject: string;
+  explanation: string;
+};
+
+export type DocumentContextDirection = {
+  documentType: string | null;
+  documentTypeResolved: boolean;
+  serviceProvider: string | null;
+  serviceProviderResolved: boolean;
+  addressee: string | null;
+  addresseeResolved: boolean;
+  property: string | null;
+  propertyResolved: boolean;
+  account: string | null;
+  accountResolved: boolean;
+  amount: string | null;
+  amountResolved: boolean;
+  relevantDates: string[];
+  relevantDatesResolved: boolean;
+  serviceProviderRelevance: ContextRelevanceDirection | null;
+  propertyRelevance: ContextRelevanceDirection | null;
+};
+
+export type FilingDecisionDirection = {
+  fileName: string;
+  cabinetDestination: string;
+};
+
 export type ReviewCard = {
   confidenceState: ConfidenceState;
   evidence: ReviewEvidence[];
   uncertainties: string[];
   proposedCabinetDestination: string | null;
+  context: DocumentContextReview;
+  questions: ClarificationQuestion[];
+  filingDecision: FilingDecisionReview | null;
 };
 
 export type DocumentArrival = {
@@ -65,6 +134,16 @@ export interface ConversationService {
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
   listTodoItems(householdId: string): Promise<TodoItem[]>;
   dismissDocumentArrival(householdId: string, arrivalId: number): Promise<void>;
+  recordMemberDirection(
+    householdId: string,
+    arrivalId: number,
+    direction: DocumentContextDirection,
+  ): Promise<DocumentArrival>;
+  confirmFilingDecision(
+    householdId: string,
+    arrivalId: number,
+    direction: FilingDecisionDirection,
+  ): Promise<DocumentArrival>;
 }
 
 export const tauriConversationService: ConversationService = {
@@ -107,5 +186,19 @@ export const tauriConversationService: ConversationService = {
   },
   dismissDocumentArrival(householdId, arrivalId) {
     return invoke("dismiss_document_arrival", { householdId, arrivalId });
+  },
+  recordMemberDirection(householdId, arrivalId, direction) {
+    return invoke<DocumentArrival>("record_member_direction", {
+      householdId,
+      arrivalId,
+      direction,
+    });
+  },
+  confirmFilingDecision(householdId, arrivalId, direction) {
+    return invoke<DocumentArrival>("confirm_filing_decision", {
+      householdId,
+      arrivalId,
+      direction,
+    });
   },
 };

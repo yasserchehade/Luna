@@ -7,7 +7,8 @@ use std::{
 };
 
 use luna_core::{
-    ConfidenceState, ConversationStore, CredentialVault, DocumentProcessingState, LocalOcr,
+    ConfidenceState, ContextField, ContextRelevanceDirection, ConversationStore, CredentialVault,
+    DocumentContextDirection, DocumentProcessingState, FilingDecisionDirection, LocalOcr,
     TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
@@ -678,6 +679,411 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
     assert!(evidence
         .iter()
         .any(|(label, value)| *label == "SHA-256" && value.len() == 64));
+}
+
+#[test]
+fn an_unfamiliar_document_review_represents_context_and_asks_only_filing_questions() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("electricity bill.pdf");
+    fs::write(&document, digital_pdf_with_text("AGL electricity bill")).expect("write digital PDF");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
+        .expect("attach digital PDF");
+
+    assert_eq!(arrival.review_card.context.document_type.value, None);
+    assert_eq!(arrival.review_card.context.service_provider.value, None);
+    assert_eq!(arrival.review_card.context.addressee.value, None);
+    assert_eq!(arrival.review_card.context.property.value, None);
+    assert_eq!(arrival.review_card.context.account.value, None);
+    assert_eq!(arrival.review_card.context.amount.value, None);
+    assert!(arrival.review_card.context.relevant_dates.is_empty());
+    assert_eq!(arrival.review_card.filing_decision, None);
+    assert_eq!(
+        arrival
+            .review_card
+            .questions
+            .iter()
+            .map(|question| question.field)
+            .collect::<Vec<_>>(),
+        vec![
+            ContextField::DocumentType,
+            ContextField::ServiceProvider,
+            ContextField::Addressee,
+            ContextField::Property,
+            ContextField::Account,
+            ContextField::Amount,
+            ContextField::RelevantDates,
+        ]
+    );
+}
+
+#[test]
+fn labelled_local_extraction_populates_editable_fields_for_member_correction() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("electricity bill.pdf");
+    fs::write(
+        &document,
+        digital_pdf_with_text(
+            "Document Type: Electricity statement; Service Provider: AGL; Addressee: S. Rivera; Property: 12 Seabreeze Ave; Account: 12345678; Amount: $184.72; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write digital PDF");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
+        .expect("attach digital PDF");
+
+    assert_eq!(
+        arrival.review_card.context.document_type.value.as_deref(),
+        Some("Electricity statement")
+    );
+    assert_eq!(
+        arrival
+            .review_card
+            .context
+            .service_provider
+            .value
+            .as_deref(),
+        Some("AGL")
+    );
+    assert_eq!(
+        arrival.review_card.context.addressee.value.as_deref(),
+        Some("S. Rivera")
+    );
+    assert_eq!(
+        arrival.review_card.context.document_type.confidence_state,
+        ConfidenceState::LooksRight
+    );
+    assert!(arrival
+        .review_card
+        .questions
+        .iter()
+        .any(|question| question.field == ContextField::Addressee));
+}
+
+#[test]
+fn a_new_service_provider_and_property_stay_unresolved_until_their_relevance_is_explained() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("electricity bill.pdf");
+    fs::write(&document, digital_pdf_with_text("AGL electricity bill")).expect("write digital PDF");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
+        .expect("attach digital PDF");
+
+    let reviewed = store
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("AGL".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: Some("$184.72".to_owned()),
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: None,
+                property_relevance: None,
+            },
+            "Household",
+        )
+        .expect("record Member Direction");
+
+    assert_eq!(
+        reviewed
+            .review_card
+            .questions
+            .iter()
+            .map(|question| question.field)
+            .collect::<Vec<_>>(),
+        vec![
+            ContextField::ServiceProviderRelevance,
+            ContextField::PropertyRelevance,
+        ]
+    );
+    assert_eq!(reviewed.review_card.filing_decision, None);
+    assert_eq!(
+        reviewed.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+}
+
+#[test]
+fn changed_context_cannot_reuse_relevance_for_a_previous_subject() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("electricity bill.pdf");
+    fs::write(&document, digital_pdf_with_text("AGL electricity bill")).expect("write digital PDF");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
+        .expect("attach digital PDF");
+
+    let reviewed = store
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("Origin Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: None,
+                property_resolved: true,
+                account: None,
+                account_resolved: true,
+                amount: None,
+                amount_resolved: true,
+                relevant_dates: Vec::new(),
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL".to_owned(),
+                    explanation: "Supplies electricity to our home".to_owned(),
+                }),
+                property_relevance: None,
+            },
+            "Household records",
+        )
+        .expect("record changed Service Provider");
+
+    assert_eq!(
+        reviewed
+            .review_card
+            .questions
+            .iter()
+            .map(|question| question.field)
+            .collect::<Vec<_>>(),
+        vec![ContextField::ServiceProviderRelevance]
+    );
+    assert_eq!(reviewed.review_card.filing_decision, None);
+}
+
+#[test]
+fn confirmed_context_corrections_produce_a_readable_destination_proposal() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("scan.pdf");
+    fs::write(&document, digital_pdf_with_text("Origin account notice"))
+        .expect("write digital PDF");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
+        .expect("attach digital PDF");
+
+    let reviewed = store
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("Origin Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: Some("$184.72".to_owned()),
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned(), "2026-08-02".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "Origin Energy".to_owned(),
+                    explanation: "Supplies electricity to our home".to_owned(),
+                }),
+                property_relevance: Some(ContextRelevanceDirection {
+                    subject: "12 Seabreeze Avenue".to_owned(),
+                    explanation: "Our primary residence".to_owned(),
+                }),
+            },
+            "Household records",
+        )
+        .expect("record corrected Member Direction");
+
+    assert_eq!(
+        reviewed
+            .review_card
+            .context
+            .service_provider
+            .value
+            .as_deref(),
+        Some("Origin Energy")
+    );
+    assert_eq!(
+        reviewed
+            .review_card
+            .context
+            .service_provider
+            .confidence_state,
+        ConfidenceState::Confirmed
+    );
+    assert!(reviewed.review_card.questions.is_empty());
+    assert_eq!(
+        reviewed.review_card.filing_decision,
+        Some(luna_core::FilingDecisionReview {
+            file_name:
+                "2026-07-15 - Origin Energy - Electricity bill - Sam Rivera.pdf".to_owned(),
+            cabinet_destination: "Household records/12 Seabreeze Avenue/Origin Energy/2026/2026-07-15 - Origin Energy - Electricity bill - Sam Rivera.pdf".to_owned(),
+            confirmed: false,
+        })
+    );
+    assert_eq!(
+        reviewed.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+}
+
+#[test]
+fn only_a_resolved_editable_filing_decision_can_be_confirmed() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let document = directory.path().join("scan.pdf");
+    fs::write(&document, digital_pdf_with_text("Origin account notice"))
+        .expect("write digital PDF");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            document,
+            directory.path(),
+        )
+        .expect("attach digital PDF");
+
+    assert!(store
+        .confirm_filing_decision(
+            "rivera-household",
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "Origin bill July 2026.pdf".to_owned(),
+                cabinet_destination: "Household records/Electricity/Origin bill July 2026.pdf"
+                    .to_owned(),
+            },
+        )
+        .is_err());
+
+    store
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("Origin Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: None,
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: Some("$184.72".to_owned()),
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "Origin Energy".to_owned(),
+                    explanation: "Our electricity retailer".to_owned(),
+                }),
+                property_relevance: None,
+            },
+            "Household records",
+        )
+        .expect("record Member Direction");
+    assert!(store
+        .confirm_filing_decision(
+            "rivera-household",
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "Origin bill July 2026.pdf".to_owned(),
+                cabinet_destination: "Incoming/Origin bill July 2026.pdf".to_owned(),
+            },
+        )
+        .is_err());
+    let confirmed = store
+        .confirm_filing_decision(
+            "rivera-household",
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "Origin bill July 2026.pdf".to_owned(),
+                cabinet_destination: "Household records/Electricity/Origin bill July 2026.pdf"
+                    .to_owned(),
+            },
+        )
+        .expect("confirm edited Filing Decision");
+
+    assert_eq!(
+        confirmed.processing_state,
+        DocumentProcessingState::ReadyToFile
+    );
+    assert_eq!(
+        confirmed.review_card.filing_decision,
+        Some(luna_core::FilingDecisionReview {
+            file_name: "Origin bill July 2026.pdf".to_owned(),
+            cabinet_destination: "Household records/Electricity/Origin bill July 2026.pdf"
+                .to_owned(),
+            confirmed: true,
+        })
+    );
+    assert!(store
+        .list_todo_items("rivera-household")
+        .expect("list To-do Items")
+        .is_empty());
 }
 
 #[test]

@@ -95,6 +95,16 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .review-card dl div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px; }
 .review-card dt { color: #687269; font-size: 10px; }
 .review-card dd { margin: 0; color: #34463b; font-size: 11px; white-space: pre-wrap; }
+.context-review-form { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 9px; padding-top: 9px; border-top: 1px solid #e4e7e0; }
+.context-review-form label, .filing-decision-form label { display: grid; gap: 4px; color: #687269; font-size: 10px; }
+.context-review-form input, .filing-decision-form input { min-width: 0; padding: 7px 8px; border: 1px solid #cbd3c9; border-radius: 7px; color: #34463b; background: #fff; }
+.context-review-form .wide-field, .filing-decision-form label { grid-column: 1 / -1; }
+.context-review-form button, .filing-decision-form button { justify-self: start; }
+.clarification-questions { display: grid; gap: 4px; padding: 9px; border-radius: 7px; background: #f7f3e8; }
+.clarification-questions small { color: #796a43; font-weight: 700; text-transform: none; }
+.clarification-questions p { color: #665a3a; }
+.filing-decision-form { display: grid; grid-template-columns: 1fr; gap: 9px; padding: 11px; border: 1px solid #cbdacb; border-radius: 8px; background: #f2f7f1; }
+.confirmed-destination { overflow-wrap: anywhere; color: #355f4a; font-weight: 650; }
 .attachment-zone { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 clamp(30px, 7vw, 92px) 12px; padding: 11px 14px; border: 1px dashed #bdc8bc; border-radius: 11px; color: #687269; background: #f5f7f2; font-size: 11px; }
 .attachment-zone p { margin: 0; }
 .todo-list { display: grid; align-content: start; gap: 12px; padding: 32px; }

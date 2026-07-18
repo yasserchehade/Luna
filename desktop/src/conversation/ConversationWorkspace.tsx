@@ -4,7 +4,9 @@ import type {
   Conversation,
   ConversationMessage,
   ConversationService,
+  DocumentContextDirection,
   DocumentArrival,
+  FilingDecisionDirection,
   TodoItem,
 } from "./conversationService";
 
@@ -17,9 +19,11 @@ type ConversationWorkspaceProps = {
   onTodoCountChange(count: number): void;
 };
 
-const stateLabel = (arrival: DocumentArrival) => arrival.processingState === "needsMemberDirection"
-  ? "Needs your direction"
-  : "Dismissed";
+const stateLabel = (arrival: DocumentArrival) => ({
+  needsMemberDirection: "Needs your direction",
+  readyToFile: "Ready to file",
+  dismissed: "Dismissed",
+})[arrival.processingState];
 
 const confidenceLabel = (arrival: DocumentArrival) => ({
   confirmed: "Confirmed",
@@ -27,6 +31,146 @@ const confidenceLabel = (arrival: DocumentArrival) => ({
   needsChecking: "Needs checking",
   unknown: "Unknown",
 })[arrival.reviewCard.confidenceState];
+
+type DocumentReviewEditorProps = {
+  arrival: DocumentArrival;
+  onConfirm(direction: FilingDecisionDirection): Promise<void>;
+  onRecord(direction: DocumentContextDirection): Promise<void>;
+};
+
+const directionFromReview = (arrival: DocumentArrival): DocumentContextDirection => {
+  const context = arrival.reviewCard.context;
+  const isConfirmed = (confidenceState: string) => confidenceState === "confirmed";
+  return {
+    documentType: context.documentType.value,
+    documentTypeResolved: isConfirmed(context.documentType.confidenceState),
+    serviceProvider: context.serviceProvider.value,
+    serviceProviderResolved: isConfirmed(context.serviceProvider.confidenceState),
+    serviceProviderRelevance: context.serviceProviderRelevance.value
+      ? {
+        subject: context.serviceProvider.value ?? "",
+        explanation: context.serviceProviderRelevance.value,
+      }
+      : null,
+    addressee: context.addressee.value,
+    addresseeResolved: isConfirmed(context.addressee.confidenceState),
+    property: context.property.value,
+    propertyResolved: isConfirmed(context.property.confidenceState),
+    propertyRelevance: context.propertyRelevance.value
+      ? {
+        subject: context.property.value ?? "",
+        explanation: context.propertyRelevance.value,
+      }
+      : null,
+    account: context.account.value,
+    accountResolved: isConfirmed(context.account.confidenceState),
+    amount: context.amount.value,
+    amountResolved: isConfirmed(context.amount.confidenceState),
+    relevantDates: context.relevantDates.flatMap(({ value }) => value ? [value] : []),
+    relevantDatesResolved: context.relevantDates.length > 0
+      ? context.relevantDates.every(({ confidenceState }) => isConfirmed(confidenceState))
+      : arrival.reviewCard.questions.every(({ field }) => field !== "relevantDates"),
+  };
+};
+
+function DocumentReviewEditor({
+  arrival,
+  onConfirm,
+  onRecord,
+}: DocumentReviewEditorProps) {
+  const context = arrival.reviewCard.context;
+  const [direction, setDirection] = useState<DocumentContextDirection>(
+    () => directionFromReview(arrival),
+  );
+  const [datesDraft, setDatesDraft] = useState(direction.relevantDates.join(", "));
+  const decision = arrival.reviewCard.filingDecision;
+  const [fileName, setFileName] = useState(decision?.fileName ?? "");
+  const [cabinetDestination, setCabinetDestination] = useState(
+    decision?.cabinetDestination ?? "",
+  );
+
+  useEffect(() => {
+    const refreshed = directionFromReview(arrival);
+    setDirection(refreshed);
+    setDatesDraft(refreshed.relevantDates.join(", "));
+  }, [arrival, context]);
+
+  useEffect(() => {
+    setFileName(decision?.fileName ?? "");
+    setCabinetDestination(decision?.cabinetDestination ?? "");
+  }, [decision]);
+
+  const setField = (
+    field: "documentType" | "serviceProvider" | "addressee" | "property" | "account" | "amount",
+    value: string,
+  ) => setDirection((current) => {
+    const next = { ...current, [field]: value || null };
+    if (field === "serviceProvider" && value !== current.serviceProvider) {
+      next.serviceProviderRelevance = null;
+    }
+    if (field === "property" && value !== current.property) {
+      next.propertyRelevance = null;
+    }
+    return next;
+  });
+
+  return <section className="review-card" aria-label={`Review card for ${arrival.originalName}`}>
+    <strong>{confidenceLabel(arrival)}</strong>
+    <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
+      <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
+    </div>)}</dl>
+    {arrival.processingState === "needsMemberDirection" && <form className="context-review-form" onSubmit={(event) => {
+      event.preventDefault();
+      void onRecord({
+        ...direction,
+        relevantDates: datesDraft.split(",").map((date) => date.trim()).filter(Boolean),
+        documentTypeResolved: true,
+        serviceProviderResolved: true,
+        addresseeResolved: true,
+        propertyResolved: true,
+        accountResolved: true,
+        amountResolved: true,
+        relevantDatesResolved: true,
+      });
+    }}>
+      <label>Document type<input aria-label="Document type" value={direction.documentType ?? ""} onChange={(event) => setField("documentType", event.target.value)} /></label>
+      <label>Service Provider<input aria-label="Service Provider" value={direction.serviceProvider ?? ""} onChange={(event) => setField("serviceProvider", event.target.value)} /></label>
+      <label>Why it is relevant<input aria-label="Service Provider relevance" value={direction.serviceProviderRelevance?.explanation ?? ""} onChange={(event) => setDirection((current) => ({
+        ...current,
+        serviceProviderRelevance: event.target.value ? {
+          subject: current.serviceProvider ?? "",
+          explanation: event.target.value,
+        } : null,
+      }))} /></label>
+      <label>Addressee<input aria-label="Addressee" value={direction.addressee ?? ""} onChange={(event) => setField("addressee", event.target.value)} /></label>
+      <label>Property address<input aria-label="Property address" value={direction.property ?? ""} onChange={(event) => setField("property", event.target.value)} /></label>
+      <label>Why it is relevant<input aria-label="Property relevance" value={direction.propertyRelevance?.explanation ?? ""} onChange={(event) => setDirection((current) => ({
+        ...current,
+        propertyRelevance: event.target.value ? {
+          subject: current.property ?? "",
+          explanation: event.target.value,
+        } : null,
+      }))} /></label>
+      <label>Account<input aria-label="Account" value={direction.account ?? ""} onChange={(event) => setField("account", event.target.value)} /></label>
+      <label>Amount<input aria-label="Amount" value={direction.amount ?? ""} onChange={(event) => setField("amount", event.target.value)} /></label>
+      <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
+      <button type="submit">Save Household Context</button>
+    </form>}
+    {arrival.reviewCard.questions.length > 0 && <div className="clarification-questions">
+      <small>Luna still needs to know</small>
+      {arrival.reviewCard.questions.map((question) => <p key={question.field}>{question.prompt}</p>)}
+    </div>}
+    {decision && !decision.confirmed && <form className="filing-decision-form" onSubmit={(event) => {
+      event.preventDefault();
+      void onConfirm({ fileName, cabinetDestination });
+    }}>
+      <label>Proposed filename<input aria-label="Proposed filename" value={fileName} onChange={(event) => setFileName(event.target.value)} /></label>
+      <label>Cabinet Destination<input aria-label="Cabinet Destination" value={cabinetDestination} onChange={(event) => setCabinetDestination(event.target.value)} /></label>
+      <button type="submit">Confirm Filing Decision</button>
+    </form>}
+    {decision?.confirmed && <p className="confirmed-destination">Confirmed destination: {decision.cabinetDestination}</p>}
+  </section>;
+}
 
 export function ConversationWorkspace({
   conversationService,
@@ -192,6 +336,33 @@ export function ConversationWorkspace({
     }
   };
 
+  const recordDirection = async (
+    arrivalId: number,
+    direction: DocumentContextDirection,
+  ) => {
+    try {
+      await conversationService.recordMemberDirection(householdId, arrivalId, direction);
+      setError("");
+      await loadHouseholdWork();
+    } catch (directionError) {
+      setError(String(directionError));
+    }
+  };
+
+  const confirmDecision = async (
+    arrivalId: number,
+    direction: FilingDecisionDirection,
+  ) => {
+    try {
+      await conversationService.confirmFilingDecision(householdId, arrivalId, direction);
+      setError("");
+      setFocusedArrivalId(null);
+      await loadHouseholdWork();
+    } catch (decisionError) {
+      setError(String(decisionError));
+    }
+  };
+
   const openTodo = async (todo: TodoItem) => {
     try {
       const availableConversations = await conversationService.listConversations(
@@ -283,14 +454,11 @@ export function ConversationWorkspace({
       >
         <div>
           <small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p>
-          <section className="review-card" aria-label={`Review card for ${arrival.originalName}`}>
-            <strong>{confidenceLabel(arrival)}</strong>
-            <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
-              <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
-            </div>)}</dl>
-            {arrival.reviewCard.uncertainties.map((uncertainty) => <p key={uncertainty}>{uncertainty}</p>)}
-            {arrival.reviewCard.proposedCabinetDestination && <p>Proposed destination: {arrival.reviewCard.proposedCabinetDestination}</p>}
-          </section>
+          <DocumentReviewEditor
+            arrival={arrival}
+            onConfirm={(direction) => confirmDecision(arrival.id, direction)}
+            onRecord={(direction) => recordDirection(arrival.id, direction)}
+          />
         </div>
         {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
       </article>)}
