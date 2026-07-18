@@ -9,7 +9,11 @@ import { TrustedDevicesOptions } from "./trusted-device/TrustedDevicesOptions";
 import { CabinetSetup } from "./cabinet/CabinetSetup";
 import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService";
 import { ConversationWorkspace } from "./conversation/ConversationWorkspace";
-import type { ConversationService } from "./conversation/conversationService";
+import type {
+  AuditEvent,
+  ConversationService,
+  FiledOriginal,
+} from "./conversation/conversationService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
 type TrustedDeviceMode = "first" | "recovery";
@@ -42,6 +46,9 @@ export default function App({ accountService, cabinetService, conversationServic
   const [activeDestination, setActiveDestination] = useState<(typeof destinations)[number]>("Luna");
   const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [todoCount, setTodoCount] = useState(0);
+  const [filedOriginals, setFiledOriginals] = useState<FiledOriginal[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [documentSurfaceError, setDocumentSurfaceError] = useState("");
 
   const lockLuna = async () => {
     if (!session) return;
@@ -162,6 +169,16 @@ export default function App({ accountService, cabinetService, conversationServic
       active = false;
     };
   }, [cabinetCheckAttempt, cabinetService, session?.householdId]);
+
+  useEffect(() => {
+    if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
+    const request = activeDestination === "Cabinet"
+      ? conversationService.listFiledOriginals(session.householdId).then(setFiledOriginals)
+      : conversationService.listAuditEvents(session.householdId).then(setAuditEvents);
+    void request
+      .then(() => setDocumentSurfaceError(""))
+      .catch(() => setDocumentSurfaceError(`Luna could not open ${activeDestination}.`));
+  }, [activeDestination, conversationService, session]);
 
   if (isRestoringSession) {
     return <main className="account-screen"><section className="account-card">
@@ -305,10 +322,27 @@ export default function App({ accountService, cabinetService, conversationServic
             <article><span aria-hidden="true">▰</span><strong>Incoming</strong></article>
             {cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}
           </div>
+          {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
+          {filedOriginals.length === 0
+            ? <p className="empty-state">No Originals have been filed yet.</p>
+            : <div className="filed-originals">{filedOriginals.map((filedOriginal) => <article key={filedOriginal.arrivalId}>
+              <strong>{filedOriginal.filingDecision.fileName}</strong>
+              <p>{filedOriginal.filingDecision.cabinetDestination}</p>
+              <small>SHA-256 {filedOriginal.checksum}</small>
+            </article>)}</div>}
         </section>
       </main> : activeDestination === "History" ? <main className="conversation">
         <header><div><small>Household history</small><h1>History</h1></div></header>
-        <section className="messages"><p>History will show durable Audit Events as Luna handles documents.</p></section>
+        <section className="messages">
+          {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
+          {auditEvents.length === 0
+            ? <p className="empty-state">No consequential document actions yet.</p>
+            : auditEvents.map((event) => <article className="history-event" key={event.id}>
+              <strong>Document filed</strong>
+              <p>{event.subject}</p>
+              <small>{event.outcome} · Verified SHA-256 {event.filedOriginal.checksum}</small>
+            </article>)}
+        </section>
       </main> : <>
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
         <ConversationWorkspace

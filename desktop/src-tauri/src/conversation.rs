@@ -32,6 +32,8 @@ pub struct Conversation {
 pub enum DocumentProcessingState {
     NeedsMemberDirection,
     ReadyToFile,
+    Filing,
+    Filed,
     Dismissed,
 }
 
@@ -115,6 +117,42 @@ pub struct FilingDecisionReview {
 pub struct FilingDecisionDirection {
     pub file_name: String,
     pub cabinet_destination: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiledOriginal {
+    pub arrival_id: i64,
+    pub conversation_id: i64,
+    pub original_name: String,
+    pub final_path: PathBuf,
+    pub checksum: String,
+    pub source_path: PathBuf,
+    pub filing_decision: FilingDecisionReview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditEventKind {
+    DocumentFiled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditAuthority {
+    MemberDirection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEvent {
+    pub id: i64,
+    pub household_id: String,
+    pub kind: AuditEventKind,
+    pub authority: AuditAuthority,
+    pub subject: String,
+    pub outcome: String,
+    pub filed_original: FiledOriginal,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +299,7 @@ pub struct DocumentArrival {
     pub extracted_text: Option<String>,
     pub review_card: ReviewCard,
     pub processing_state: DocumentProcessingState,
+    pub filed_original: Option<FiledOriginal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +349,17 @@ struct DocumentArrivalPayload {
     context_direction: DocumentContextDirection,
     #[serde(default)]
     filing_decision: Option<FilingDecisionReview>,
+    #[serde(default)]
+    filed_original: Option<FiledOriginal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AuditEventPayload {
+    kind: AuditEventKind,
+    authority: AuditAuthority,
+    subject: String,
+    outcome: String,
+    filed_original: FiledOriginal,
 }
 
 impl DocumentArrivalPayload {
@@ -334,6 +384,10 @@ pub enum ConversationError {
     InvalidDocument,
     #[error("A different Original already occupies this document's preserved location.")]
     OriginalConflict,
+    #[error("A different Original already occupies the Cabinet Destination.")]
+    CabinetDestinationConflict,
+    #[error("The staged or filed Original could not be verified.")]
+    OriginalVerificationFailed,
     #[error("Household Context must be resolved before confirming a Filing Decision.")]
     UnresolvedContext,
     #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
@@ -395,7 +449,17 @@ impl<V: CredentialVault> ConversationStore<V> {
                 protected_payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS document_arrivals_household
-                ON document_arrivals(household_id);",
+                ON document_arrivals(household_id);
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                household_id TEXT NOT NULL,
+                arrival_id INTEGER NOT NULL,
+                protected_payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS audit_events_household
+                ON audit_events(household_id, id);
+            CREATE UNIQUE INDEX IF NOT EXISTS audit_events_arrival
+                ON audit_events(arrival_id);",
         )?;
         Ok(store)
     }
@@ -580,6 +644,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             processing_state: DocumentProcessingState::NeedsMemberDirection,
             context_direction,
             filing_decision: None,
+            filed_original: None,
         };
         let protected = self.protect(household_id, &payload)?;
         let connection = self.connect()?;
@@ -588,20 +653,12 @@ impl<V: CredentialVault> ConversationStore<V> {
              VALUES (?1, ?2, ?3)",
             params![household_id, conversation_id, protected],
         )?;
-        let review_card = review_card(&payload);
-        Ok(DocumentArrival {
-            id: connection.last_insert_rowid(),
-            household_id: household_id.to_owned(),
+        self.document_arrival(
+            household_id,
+            connection.last_insert_rowid(),
             conversation_id,
-            original_name: payload.original_name,
-            original_path: payload.original_path,
-            source_path: payload.source_path,
-            checksum: payload.checksum,
-            media_type: payload.media_type,
-            extracted_text: payload.extracted_text,
-            review_card,
-            processing_state: payload.processing_state,
-        })
+            payload,
+        )
     }
 
     pub fn add_member_message(
@@ -691,20 +748,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                 let mut payload: DocumentArrivalPayload =
                     self.open_protected(household_id, &protected)?;
                 payload.restore_legacy_original_path();
-                let review_card = review_card(&payload);
-                Ok(DocumentArrival {
-                    id,
-                    household_id: household_id.to_owned(),
-                    conversation_id,
-                    original_name: payload.original_name,
-                    original_path: payload.original_path,
-                    source_path: payload.source_path,
-                    checksum: payload.checksum,
-                    media_type: payload.media_type,
-                    extracted_text: payload.extracted_text,
-                    review_card,
-                    processing_state: payload.processing_state,
-                })
+                self.document_arrival(household_id, id, conversation_id, payload)
             })
             .collect()
     }
@@ -725,6 +769,48 @@ impl<V: CredentialVault> ConversationStore<V> {
                     conversation_title: conversation.title,
                     conversation_deleted: conversation.deleted,
                     document_name: arrival.original_name,
+                })
+            })
+            .collect()
+    }
+
+    pub fn list_filed_originals(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<FiledOriginal>, ConversationError> {
+        Ok(self
+            .list_document_arrivals(household_id)?
+            .into_iter()
+            .filter_map(|arrival| arrival.filed_original)
+            .collect())
+    }
+
+    pub fn list_audit_events(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<AuditEvent>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, protected_payload FROM audit_events
+              WHERE household_id = ?1 ORDER BY id DESC",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected_rows
+            .into_iter()
+            .map(|(id, protected)| {
+                let payload: AuditEventPayload = self.open_protected(household_id, &protected)?;
+                Ok(AuditEvent {
+                    id,
+                    household_id: household_id.to_owned(),
+                    kind: payload.kind,
+                    authority: payload.authority,
+                    subject: payload.subject,
+                    outcome: payload.outcome,
+                    filed_original: payload.filed_original,
                 })
             })
             .collect()
@@ -810,6 +896,157 @@ impl<V: CredentialVault> ConversationStore<V> {
         self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
     }
 
+    pub fn file_document(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        cabinet_root: impl AsRef<Path>,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state == DocumentProcessingState::Filed {
+            let filed_original = payload
+                .filed_original
+                .as_ref()
+                .ok_or(ConversationError::OriginalVerificationFailed)?;
+            verify_existing_destination(&filed_original.final_path, &filed_original.checksum)?;
+            if payload.original_path.is_file() {
+                fs::remove_file(&payload.original_path)?;
+                remove_empty_staging_directory(&payload.original_path);
+            }
+            return self.document_arrival(household_id, arrival_id, conversation_id, payload);
+        }
+        let resuming = payload.processing_state == DocumentProcessingState::Filing;
+        if !matches!(
+            payload.processing_state,
+            DocumentProcessingState::ReadyToFile | DocumentProcessingState::Filing
+        ) {
+            return Err(ConversationError::NotFound);
+        }
+        let decision = payload
+            .filing_decision
+            .clone()
+            .filter(|decision| decision.confirmed)
+            .ok_or(ConversationError::UnresolvedContext)?;
+        let cabinet_root = cabinet_root.as_ref();
+        let destination = safe_cabinet_destination(cabinet_root, &decision.cabinet_destination)?;
+        let staged = fs::read(&payload.original_path)?;
+        if sha256(&staged) != payload.checksum {
+            return Err(ConversationError::OriginalVerificationFailed);
+        }
+
+        if destination.exists() && !resuming {
+            return Err(ConversationError::CabinetDestinationConflict);
+        }
+        if destination.exists() {
+            verify_existing_destination(&destination, &payload.checksum)?;
+        } else {
+            if !resuming {
+                payload.processing_state = DocumentProcessingState::Filing;
+                self.save_document_arrival_payload(
+                    household_id,
+                    arrival_id,
+                    conversation_id,
+                    payload.clone(),
+                )?;
+            }
+            let temporary = destination.with_file_name(format!(
+                ".luna-filing-{arrival_id}-{}.tmp",
+                payload.checksum
+            ));
+            if temporary.exists() && sha256(&fs::read(&temporary)?) != payload.checksum {
+                fs::remove_file(&temporary)?;
+            }
+            if !temporary.exists() {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?;
+                file.write_all(&staged)?;
+                file.sync_all()?;
+            }
+            if sha256(&fs::read(&temporary)?) != payload.checksum {
+                return Err(ConversationError::OriginalVerificationFailed);
+            }
+            match fs::hard_link(&temporary, &destination) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    return Err(ConversationError::CabinetDestinationConflict);
+                }
+                Err(error) => return Err(ConversationError::DocumentUnavailable(error)),
+            }
+            fs::remove_file(&temporary)?;
+        }
+        verify_existing_destination(&destination, &payload.checksum)?;
+
+        let filed_original = FiledOriginal {
+            arrival_id,
+            conversation_id,
+            original_name: payload.original_name.clone(),
+            final_path: destination,
+            checksum: payload.checksum.clone(),
+            source_path: payload.source_path.clone(),
+            filing_decision: decision.clone(),
+        };
+        payload.processing_state = DocumentProcessingState::Filed;
+        payload.filed_original = Some(filed_original.clone());
+        let protected_arrival = self.protect(household_id, &payload)?;
+        let protected_event = self.protect(
+            household_id,
+            &AuditEventPayload {
+                kind: AuditEventKind::DocumentFiled,
+                authority: AuditAuthority::MemberDirection,
+                subject: payload.original_name.clone(),
+                outcome: format!("Filed and verified at {}", decision.cabinet_destination),
+                filed_original,
+            },
+        )?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let updated = transaction.execute(
+            "UPDATE document_arrivals SET protected_payload = ?1
+              WHERE id = ?2 AND household_id = ?3",
+            params![protected_arrival, arrival_id, household_id],
+        )?;
+        if updated == 0 {
+            return Err(ConversationError::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO audit_events (household_id, arrival_id, protected_payload)
+             VALUES (?1, ?2, ?3)",
+            params![household_id, arrival_id, protected_event],
+        )?;
+        transaction.commit()?;
+
+        fs::remove_file(&payload.original_path)?;
+        remove_empty_staging_directory(&payload.original_path);
+        self.document_arrival(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn resume_document_filings(
+        &self,
+        household_id: &str,
+        cabinet_root: impl AsRef<Path>,
+    ) -> Result<(), ConversationError> {
+        let resumable = self
+            .list_document_arrivals(household_id)?
+            .into_iter()
+            .filter(|arrival| {
+                matches!(
+                    arrival.processing_state,
+                    DocumentProcessingState::ReadyToFile
+                        | DocumentProcessingState::Filing
+                        | DocumentProcessingState::Filed
+                )
+            })
+            .map(|arrival| arrival.id)
+            .collect::<Vec<_>>();
+        for arrival_id in resumable {
+            self.file_document(household_id, arrival_id, cabinet_root.as_ref())?;
+        }
+        Ok(())
+    }
+
     fn load_document_arrival_payload(
         &self,
         household_id: &str,
@@ -843,6 +1080,16 @@ impl<V: CredentialVault> ConversationStore<V> {
               WHERE id = ?2 AND household_id = ?3",
             params![protected, arrival_id, household_id],
         )?;
+        self.document_arrival(household_id, arrival_id, conversation_id, payload)
+    }
+
+    fn document_arrival(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        conversation_id: i64,
+        payload: DocumentArrivalPayload,
+    ) -> Result<DocumentArrival, ConversationError> {
         let review_card = review_card(&payload);
         Ok(DocumentArrival {
             id: arrival_id,
@@ -856,6 +1103,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             extracted_text: payload.extracted_text,
             review_card,
             processing_state: payload.processing_state,
+            filed_original: payload.filed_original,
         })
     }
 
@@ -976,6 +1224,59 @@ impl<V: CredentialVault> ConversationStore<V> {
         }
 
         Ok(original_path)
+    }
+}
+
+fn safe_cabinet_destination(
+    cabinet_root: &Path,
+    cabinet_destination: &str,
+) -> Result<PathBuf, ConversationError> {
+    let file_name = cabinet_destination
+        .rsplit('/')
+        .next()
+        .ok_or(ConversationError::InvalidCabinetDestination)?;
+    if !valid_cabinet_destination(cabinet_destination, file_name) || !cabinet_root.is_dir() {
+        return Err(ConversationError::InvalidCabinetDestination);
+    }
+    let canonical_root = cabinet_root
+        .canonicalize()
+        .map_err(ConversationError::DocumentUnavailable)?;
+    let components = cabinet_destination.split('/').collect::<Vec<_>>();
+    let mut parent = canonical_root.clone();
+    for component in &components[..components.len() - 1] {
+        let candidate = parent.join(component);
+        if !candidate.exists() {
+            fs::create_dir(&candidate)?;
+        }
+        let canonical_candidate = candidate.canonicalize()?;
+        if !canonical_candidate.is_dir() || !canonical_candidate.starts_with(&canonical_root) {
+            return Err(ConversationError::InvalidCabinetDestination);
+        }
+        parent = canonical_candidate;
+    }
+    let destination = parent.join(file_name);
+    if destination
+        .parent()
+        .is_none_or(|candidate| !candidate.starts_with(&canonical_root))
+    {
+        return Err(ConversationError::InvalidCabinetDestination);
+    }
+    Ok(destination)
+}
+
+fn verify_existing_destination(
+    destination: &Path,
+    expected_checksum: &str,
+) -> Result<(), ConversationError> {
+    if !destination.is_file() || sha256(&fs::read(destination)?) != expected_checksum {
+        return Err(ConversationError::CabinetDestinationConflict);
+    }
+    Ok(())
+}
+
+fn remove_empty_staging_directory(original_path: &Path) {
+    if let Some(directory) = original_path.parent() {
+        let _ = fs::remove_dir(directory);
     }
 }
 
@@ -1235,10 +1536,10 @@ fn propose_filing_decision(
         .unwrap_or_else(|| "pdf".to_owned());
     let file_name = format!(
         "{} - {} - {} - {}.{}",
-        safe_component(date),
-        safe_component(service_provider),
-        safe_component(document_type),
-        safe_component(addressee),
+        safe_generated_component(date),
+        safe_generated_component(service_provider),
+        safe_generated_component(document_type),
+        safe_generated_component(addressee),
         extension
     );
     let subject = context
@@ -1248,9 +1549,9 @@ fn propose_filing_decision(
         .unwrap_or(addressee);
     let cabinet_destination = [
         safe_component(cabinet_section),
-        safe_component(subject),
-        safe_component(service_provider),
-        safe_component(year),
+        safe_generated_component(subject),
+        safe_generated_component(service_provider),
+        safe_generated_component(year),
         file_name.clone(),
     ]
     .join("/");
@@ -1273,18 +1574,41 @@ fn safe_component(value: &str) -> String {
         })
         .collect::<String>();
     let sanitized = sanitized.trim().trim_matches('.').trim();
-    if sanitized.is_empty() {
-        "Unknown".to_owned()
+    let sanitized = if sanitized.is_empty() {
+        "Unknown"
+    } else {
+        sanitized
+    };
+    if reserved_windows_name(sanitized) {
+        match sanitized.rsplit_once('.') {
+            Some((stem, extension)) => format!("{stem}_.{extension}"),
+            None => format!("{sanitized}_"),
+        }
     } else {
         sanitized.to_owned()
     }
+}
+
+fn safe_generated_component(value: &str) -> String {
+    let safe = safe_component(value);
+    if safe.len() <= 48 {
+        return safe;
+    }
+    let mut shortened = String::new();
+    for character in safe.chars() {
+        if shortened.len() + character.len_utf8() > 48 {
+            break;
+        }
+        shortened.push(character);
+    }
+    safe_component(&shortened)
 }
 
 fn valid_file_name(file_name: &str, original_name: &str) -> bool {
     if file_name.is_empty()
         || file_name == "."
         || file_name == ".."
-        || safe_component(file_name) != file_name
+        || !valid_path_component(file_name)
     {
         return false;
     }
@@ -1316,8 +1640,52 @@ fn valid_cabinet_destination(cabinet_destination: &str, file_name: &str) -> bool
             !component.is_empty()
                 && *component != "."
                 && *component != ".."
-                && safe_component(component) == *component
+                && valid_path_component(component)
         })
+}
+
+fn valid_path_component(component: &str) -> bool {
+    component.len() <= 240
+        && safe_component(component) == component
+        && !reserved_windows_name(component)
+}
+
+fn reserved_windows_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or_default();
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "CONIN$"
+            | "CONOUT$"
+            | "CLOCK$"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "COM¹"
+            | "COM²"
+            | "COM³"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "LPT¹"
+            | "LPT²"
+            | "LPT³"
+    )
 }
 
 impl DocumentContextDirection {

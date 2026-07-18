@@ -57,11 +57,22 @@ describe("Luna Conversation desk", () => {
       "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
     );
     await review.$("button=Confirm Filing Decision").click();
-    await expect($(".document-arrival > div > p")).toHaveText("Ready to file");
+    await expect($(".document-arrival > div > p")).toHaveText("Filed");
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
+    await $("button[aria-label='Cabinet']").click();
+    await expect($(".filed-originals strong")).toHaveText("AGL bill July 2026.pdf");
+    await expect($(".filed-originals p")).toHaveText(
+      "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
+    );
+    await $("button[aria-label='History']").click();
+    await expect($(".history-event strong")).toHaveText("Document filed");
+    await expect($(".history-event small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
 
     await $("button[aria-label='Luna']").click();
+    await expect($(".attachment-zone p")).toHaveText(
+      "Drop a PDF, JPG, or PNG anywhere in Luna, or select a document.",
+    );
     const droppedDocument = join(tmpdir(), `luna-e2e-dropped-${Date.now()}.png`);
     writeFileSync(droppedDocument, Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
@@ -93,9 +104,11 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Luna']").click();
     await expect($$(".document-arrival > div > p")).toBeElementsArrayOfSize(2);
     await expect($$(".document-arrival > div > p")[0]).toHaveText("Dismissed");
-    await expect($$(".document-arrival > div > p")[1]).toHaveText("Ready to file");
+    await expect($$(".document-arrival > div > p")[1]).toHaveText("Filed");
 
     await $("button=Archive").click();
+    await expect($("h1=Conversations")).toBeDisplayed();
+    await $("label=Show archived").$("input").click();
     await expect($("button=Restore")).toBeDisplayed();
     await $("label=Show archived").$("input").click();
     await expect($("h1=Conversations")).toBeDisplayed();

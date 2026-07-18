@@ -22,6 +22,8 @@ type ConversationWorkspaceProps = {
 const stateLabel = (arrival: DocumentArrival) => ({
   needsMemberDirection: "Needs your direction",
   readyToFile: "Ready to file",
+  filing: "Filing",
+  filed: "Filed",
   dismissed: "Dismissed",
 })[arrival.processingState];
 
@@ -168,7 +170,9 @@ function DocumentReviewEditor({
       <label>Cabinet Destination<input aria-label="Cabinet Destination" value={cabinetDestination} onChange={(event) => setCabinetDestination(event.target.value)} /></label>
       <button type="submit">Confirm Filing Decision</button>
     </form>}
-    {decision?.confirmed && <p className="confirmed-destination">Confirmed destination: {decision.cabinetDestination}</p>}
+    {arrival.filedOriginal
+      ? <p className="confirmed-destination">Filed at: {arrival.filedOriginal.filingDecision.cabinetDestination}</p>
+      : decision?.confirmed && <p className="confirmed-destination">Confirmed destination: {decision.cabinetDestination}</p>}
   </section>;
 }
 
@@ -192,6 +196,7 @@ export function ConversationWorkspace({
   const [titleDraft, setTitleDraft] = useState("");
   const [focusedArrivalId, setFocusedArrivalId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [dropReady, setDropReady] = useState(false);
   const initialized = useRef(false);
   const lastNewRequest = useRef(newConversationRequest);
 
@@ -243,7 +248,8 @@ export function ConversationWorkspace({
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
-    void conversationService.listConversations(householdId, undefined, false)
+    void conversationService.resumeDocumentFilings(householdId)
+      .then(() => conversationService.listConversations(householdId, undefined, false))
       .then(async (loaded) => {
         if (loaded.length === 0) await createConversation();
         else {
@@ -296,13 +302,23 @@ export function ConversationWorkspace({
   }, [conversationService, householdId, loadHouseholdWork, selectedConversationId]);
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
+    setDropReady(false);
     void getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "drop") void attachPaths(event.payload.paths);
     }).then((stop) => {
+      if (disposed) {
+        stop();
+        return;
+      }
       unlisten = stop;
+      setDropReady(true);
     });
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [attachPaths]);
 
   useEffect(() => {
@@ -464,7 +480,9 @@ export function ConversationWorkspace({
       </article>)}
     </section>
     <div className="attachment-zone">
-      <p>Drop a PDF, JPG, or PNG anywhere in Luna, or select a document.</p>
+      <p>{dropReady
+        ? "Drop a PDF, JPG, or PNG anywhere in Luna, or select a document."
+        : "Preparing document drop… You can still select a document."}</p>
       <button type="button" aria-label="Attach document" disabled={!selectedConversation} onClick={() => void conversationService.selectDocumentFiles().then(attachPaths)}>Attach document</button>
     </div>
     <form className="composer" onSubmit={submitMessage}>
