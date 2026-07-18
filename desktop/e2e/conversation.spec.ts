@@ -36,8 +36,28 @@ describe("Luna Conversation desk", () => {
     await expect($("h1=AGL electricity bill")).toBeDisplayed();
     await expect($(".document-arrival[data-focused='true']")).toBeDisplayed();
 
-    await $(".document-arrival").$("button=Dismiss").click();
-    await expect($(".document-arrival p")).toHaveText("Dismissed");
+    const review = $(".document-arrival .review-card");
+    await review.$("input[aria-label='Document type']").setValue("Electricity bill");
+    await review.$("input[aria-label='Service Provider']").setValue("AGL");
+    await review.$("input[aria-label='Service Provider relevance']").setValue(
+      "Supplies electricity to our home",
+    );
+    await review.$("input[aria-label='Addressee']").setValue("Sam Rivera");
+    await review.$("input[aria-label='Property address']").setValue("12 Seabreeze Avenue");
+    await review.$("input[aria-label='Property relevance']").setValue("Our primary residence");
+    await review.$("input[aria-label='Account']").setValue("12345678");
+    await review.$("input[aria-label='Amount']").setValue("$184.72");
+    await review.$("input[aria-label='Relevant dates']").setValue("2026-07-15, 2026-08-02");
+    await review.$("button=Save Household Context").click();
+    await expect(review.$("input[aria-label='Proposed filename']")).toHaveValue(
+      "2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf",
+    );
+    await review.$("input[aria-label='Proposed filename']").setValue("AGL bill July 2026.pdf");
+    await review.$("input[aria-label='Cabinet Destination']").setValue(
+      "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
+    );
+    await review.$("button=Confirm Filing Decision").click();
+    await expect($(".document-arrival > div > p")).toHaveText("Ready to file");
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
 
@@ -72,7 +92,8 @@ describe("Luna Conversation desk", () => {
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
     await $("button[aria-label='Luna']").click();
     await expect($$(".document-arrival > div > p")).toBeElementsArrayOfSize(2);
-    for (const state of await $$(".document-arrival > div > p")) await expect(state).toHaveText("Dismissed");
+    await expect($$(".document-arrival > div > p")[0]).toHaveText("Dismissed");
+    await expect($$(".document-arrival > div > p")[1]).toHaveText("Ready to file");
 
     await $("button=Archive").click();
     await expect($("button=Restore")).toBeDisplayed();

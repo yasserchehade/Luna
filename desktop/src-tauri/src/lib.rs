@@ -10,9 +10,11 @@ pub use cabinet::{
     CabinetValidation,
 };
 pub use conversation::{
-    ConfidenceState, Conversation, ConversationError, ConversationMessage, ConversationStore,
-    DocumentArrival, DocumentProcessingState, LocalOcr, ReviewCard, ReviewEvidence, TesseractOcr,
-    TodoItem,
+    ClarificationQuestion, ConfidenceState, ContextField, ContextRelevanceDirection, Conversation,
+    ConversationError, ConversationMessage, ConversationStore, DocumentArrival,
+    DocumentContextDirection, DocumentContextReview, DocumentProcessingState,
+    FilingDecisionDirection, FilingDecisionReview, LocalOcr, ReviewCard, ReviewEvidence,
+    ReviewField, TesseractOcr, TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -346,6 +348,39 @@ fn dismiss_document_arrival(
 ) -> Result<(), String> {
     store
         .dismiss_document_arrival(&household_id, arrival_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_member_direction(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    arrival_id: i64,
+    direction: DocumentContextDirection,
+) -> Result<DocumentArrival, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before choosing a destination.".to_owned())?;
+    let cabinet_section = configuration
+        .sections
+        .first()
+        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
+    store
+        .record_member_direction(&household_id, arrival_id, direction, cabinet_section)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn confirm_filing_decision(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    arrival_id: i64,
+    direction: FilingDecisionDirection,
+) -> Result<DocumentArrival, String> {
+    store
+        .confirm_filing_decision(&household_id, arrival_id, direction)
         .map_err(|error| error.to_string())
 }
 
@@ -764,6 +799,8 @@ pub fn run() {
         list_document_arrivals,
         list_todo_items,
         dismiss_document_arrival,
+        record_member_direction,
+        confirm_filing_decision,
         select_document_files,
         get_account_session_item,
         set_account_session_item,
