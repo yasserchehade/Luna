@@ -3,7 +3,7 @@ import path from "node:path";
 const executable = process.platform === "win32" ? "luna-desktop.exe" : "luna-desktop";
 const application = process.env.LUNA_E2E_BINARY
   ? path.resolve(process.env.LUNA_E2E_BINARY)
-  : path.resolve("src-tauri", "target", "debug", executable);
+  : path.resolve("src-tauri", "target", "e2e", "debug", executable);
 const tauriServiceOptions = {
   appBinaryPath: application,
   driverProvider: "embedded",
