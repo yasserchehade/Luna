@@ -2,6 +2,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{self, Write},
+    panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
@@ -1307,12 +1308,17 @@ fn extract_digital_pdf_text(
     if media_type != "application/pdf" {
         return Ok(None);
     }
-    pdf_extract::extract_text_from_mem(original)
-        .map(|text| {
-            let text = text.trim().to_owned();
-            (!text.is_empty()).then_some(text)
-        })
-        .map_err(|_| ConversationError::InvalidDocument)
+    match catch_unwind(AssertUnwindSafe(|| {
+        pdf_extract::extract_text_from_mem(original)
+    })) {
+        Ok(result) => result
+            .map(|text| {
+                let text = text.trim().to_owned();
+                (!text.is_empty()).then_some(text)
+            })
+            .map_err(|_| ConversationError::InvalidDocument),
+        Err(_) => Ok(None),
+    }
 }
 
 fn extract_local_text(

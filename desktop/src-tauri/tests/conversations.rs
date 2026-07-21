@@ -753,6 +753,28 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
 }
 
 #[test]
+fn a_document_arrival_accepts_the_utility_bill_fixture() {
+    let directory = tempfile::tempdir().expect("temporary utility bill directory");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/bills/utility bill.pdf");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Utility bill")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &source,
+            directory.path(),
+        )
+        .expect("attach utility bill PDF");
+
+    assert_eq!(arrival.original_name, "utility bill.pdf");
+    assert_eq!(arrival.media_type, "application/pdf");
+}
+
+#[test]
 fn an_unfamiliar_document_review_represents_context_and_asks_only_filing_questions() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("electricity bill.pdf");
