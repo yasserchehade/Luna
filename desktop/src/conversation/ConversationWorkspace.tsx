@@ -15,6 +15,10 @@ type ConversationWorkspaceProps = {
   destination: "Luna" | "To do";
   householdId: string;
   newConversationRequest: number;
+  conversationSelectionRequest: { conversationId: number; request: number } | null;
+  onRecentConversationsChange(conversations: Conversation[]): void;
+  onActiveConversationChange(conversationId: number | null): void;
+  householdName: string;
   onOpenConversation(): void;
   onTodoCountChange(count: number): void;
 };
@@ -137,7 +141,7 @@ function DocumentReviewEditor({
     }}>
       <label>Document type<input aria-label="Document type" value={direction.documentType ?? ""} onChange={(event) => setField("documentType", event.target.value)} /></label>
       <label>Service Provider<input aria-label="Service Provider" value={direction.serviceProvider ?? ""} onChange={(event) => setField("serviceProvider", event.target.value)} /></label>
-      <label>Why it is relevant<input aria-label="Service Provider relevance" value={direction.serviceProviderRelevance?.explanation ?? ""} onChange={(event) => setDirection((current) => ({
+      <label>Service provider relevance<input aria-label="Service Provider relevance" value={direction.serviceProviderRelevance?.explanation ?? ""} onChange={(event) => setDirection((current) => ({
         ...current,
         serviceProviderRelevance: event.target.value ? {
           subject: current.serviceProvider ?? "",
@@ -146,7 +150,7 @@ function DocumentReviewEditor({
       }))} /></label>
       <label>Addressee<input aria-label="Addressee" value={direction.addressee ?? ""} onChange={(event) => setField("addressee", event.target.value)} /></label>
       <label>Property address<input aria-label="Property address" value={direction.property ?? ""} onChange={(event) => setField("property", event.target.value)} /></label>
-      <label>Why it is relevant<input aria-label="Property relevance" value={direction.propertyRelevance?.explanation ?? ""} onChange={(event) => setDirection((current) => ({
+      <label>Property relevance<input aria-label="Property relevance" value={direction.propertyRelevance?.explanation ?? ""} onChange={(event) => setDirection((current) => ({
         ...current,
         propertyRelevance: event.target.value ? {
           subject: current.property ?? "",
@@ -154,7 +158,7 @@ function DocumentReviewEditor({
         } : null,
       }))} /></label>
       <label>Account<input aria-label="Account" value={direction.account ?? ""} onChange={(event) => setField("account", event.target.value)} /></label>
-      <label>Amount<input aria-label="Amount" value={direction.amount ?? ""} onChange={(event) => setField("amount", event.target.value)} /></label>
+      <label>Amount (optional)<input aria-label="Amount" value={direction.amount ?? ""} onChange={(event) => setField("amount", event.target.value)} /></label>
       <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
       <button type="submit">Save Household Context</button>
     </form>}
@@ -181,6 +185,10 @@ export function ConversationWorkspace({
   destination,
   householdId,
   newConversationRequest,
+  conversationSelectionRequest,
+  onRecentConversationsChange,
+  onActiveConversationChange,
+  householdName,
   onOpenConversation,
   onTodoCountChange,
 }: ConversationWorkspaceProps) {
@@ -194,6 +202,7 @@ export function ConversationWorkspace({
   const [includeArchived, setIncludeArchived] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [focusedArrivalId, setFocusedArrivalId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [dropReady, setDropReady] = useState(false);
@@ -203,6 +212,10 @@ export function ConversationWorkspace({
   const selectedConversation = conversations.find(({ id }) => id === selectedConversationId) ?? null;
   const selectedArrivals = arrivals.filter(({ conversationId }) => conversationId === selectedConversationId);
 
+  useEffect(() => {
+    onActiveConversationChange(selectedConversationId);
+  }, [onActiveConversationChange, selectedConversationId]);
+
   const loadHouseholdWork = useCallback(async (preserveDeletedConversationId?: number) => {
     const [loadedConversations, loadedArrivals, loadedTodos] = await Promise.all([
       conversationService.listConversations(householdId, search, includeArchived),
@@ -210,6 +223,7 @@ export function ConversationWorkspace({
       conversationService.listTodoItems(householdId),
     ]);
     setConversations(loadedConversations);
+    if (!search) onRecentConversationsChange(loadedConversations.filter(({ archived }) => !archived));
     setArrivals(loadedArrivals);
     setTodos(loadedTodos);
     onTodoCountChange(loadedTodos.length);
@@ -225,7 +239,7 @@ export function ConversationWorkspace({
       )) return current;
       return loadedConversations[0]?.id ?? null;
     });
-  }, [conversationService, focusedArrivalId, householdId, includeArchived, onTodoCountChange, search]);
+  }, [conversationService, focusedArrivalId, householdId, includeArchived, onRecentConversationsChange, onTodoCountChange, search]);
 
   const createConversation = useCallback(async () => {
     const created = await conversationService.createConversation(householdId, "New conversation");
@@ -237,13 +251,14 @@ export function ConversationWorkspace({
     setSearch("");
     setIncludeArchived(false);
     setConversations(loadedConversations);
+    onRecentConversationsChange(loadedConversations);
     setArrivals(loadedArrivals);
     setTodos(loadedTodos);
     onTodoCountChange(loadedTodos.length);
     setSelectedConversationId(created.id);
     setFocusedArrivalId(null);
     onOpenConversation();
-  }, [conversationService, householdId, onOpenConversation, onTodoCountChange]);
+  }, [conversationService, householdId, onOpenConversation, onRecentConversationsChange, onTodoCountChange]);
 
   useEffect(() => {
     if (initialized.current) return;
@@ -254,7 +269,13 @@ export function ConversationWorkspace({
         if (loaded.length === 0) await createConversation();
         else {
           setConversations(loaded);
-          setSelectedConversationId(loaded[0].id);
+          onRecentConversationsChange(loaded);
+          const requestedId = conversationSelectionRequest?.conversationId;
+          setSelectedConversationId(
+            requestedId && loaded.some(({ id }) => id === requestedId)
+              ? requestedId
+              : loaded[0].id,
+          );
           const [loadedArrivals, loadedTodos] = await Promise.all([
             conversationService.listDocumentArrivals(householdId),
             conversationService.listTodoItems(householdId),
@@ -265,7 +286,15 @@ export function ConversationWorkspace({
         }
       })
       .catch(() => setError("Luna could not open this Household's Conversations."));
-  }, [conversationService, createConversation, householdId, onTodoCountChange]);
+  }, [conversationSelectionRequest, conversationService, createConversation, householdId, onRecentConversationsChange, onTodoCountChange]);
+
+  useEffect(() => {
+    if (!conversationSelectionRequest) return;
+    setSearch("");
+    setIncludeArchived(false);
+    setFocusedArrivalId(null);
+    setSelectedConversationId(conversationSelectionRequest.conversationId);
+  }, [conversationSelectionRequest]);
 
   useEffect(() => {
     if (!initialized.current) return;
@@ -389,6 +418,7 @@ export function ConversationWorkspace({
       setSearch("");
       setIncludeArchived(true);
       setConversations(availableConversations);
+      onRecentConversationsChange(availableConversations.filter(({ archived }) => !archived));
       setSelectedConversationId(todo.conversationId);
       setFocusedArrivalId(todo.arrivalId);
       onOpenConversation();
@@ -415,49 +445,70 @@ export function ConversationWorkspace({
   }
 
   return <main className="conversation conversation-workspace">
-    <header>
-      <div>
-        <small>Conversation</small>
-        {renaming && selectedConversation ? <form onSubmit={(event) => {
-          event.preventDefault();
-          void conversationService.renameConversation(householdId, selectedConversation.id, titleDraft)
-            .then(async () => {
-              setRenaming(false);
-              await loadHouseholdWork();
-            })
-            .catch(() => setError("Luna could not rename that Conversation."));
-        }}>
-          <input aria-label="Conversation title" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} />
-          <button type="submit">Save title</button>
-        </form> : <h1>{selectedConversation?.title ?? (selectedArrivals.length > 0 ? "Deleted Conversation" : "Conversations")}</h1>}
+    <header className="conversation-header">
+      <div className="conversation-heading">
+        <span className="conversation-folder" aria-hidden="true" />
+        <div className="conversation-title-wrap">
+          {renaming && selectedConversation ? <form onSubmit={(event) => {
+            event.preventDefault();
+            void conversationService.renameConversation(householdId, selectedConversation.id, titleDraft)
+              .then(async () => {
+                setRenaming(false);
+                await loadHouseholdWork();
+              })
+              .catch(() => setError("Luna could not rename that Conversation."));
+          }}>
+            <input aria-label="Conversation title" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} />
+            <button type="submit">Save title</button>
+          </form> : <h1 className="conversation-title">{selectedConversation?.title ?? (selectedArrivals.length > 0 ? "Deleted Conversation" : "Conversations")}</h1>}
+        </div>
       </div>
-      <span>Private Conversation</span>
+      <div className="conversation-header-meta">
+        <span className="conversation-privacy"><span className="conversation-privacy-dot" aria-hidden="true" />Private</span>
+        <button
+          type="button"
+          className="conversation-actions-trigger"
+          aria-label="Conversation actions"
+          aria-expanded={actionsOpen}
+          onClick={() => setActionsOpen((current) => !current)}
+        >
+          <span aria-hidden="true">•••</span>
+        </button>
+        {actionsOpen && <div className="conversation-actions-popover" aria-label="Conversation actions menu">
+          <div className="conversation-household-context"><small>Household</small><strong>{householdName}</strong></div>
+          <input aria-label="Search Conversations" placeholder="Search Conversations" value={search} onChange={(event) => {
+            setFocusedArrivalId(null);
+            setSearch(event.target.value);
+          }} />
+          <label className="conversation-actions-checkbox"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} /> Show archived</label>
+          <select aria-label="Conversations" value={selectedConversationId ?? ""} onChange={(event) => {
+            setFocusedArrivalId(null);
+            setSelectedConversationId(Number(event.target.value));
+          }}>
+            {conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}{conversation.archived ? " (archived)" : ""}</option>)}
+          </select>
+          {selectedConversation && <div className="conversation-actions-buttons">
+            <button type="button" onClick={() => {
+              setTitleDraft(selectedConversation.title);
+              setRenaming(true);
+              setActionsOpen(false);
+            }}>Rename</button>
+            <button type="button" onClick={() => {
+              setActionsOpen(false);
+              void conversationService.archiveConversation(householdId, selectedConversation.id, !selectedConversation.archived).then(() => loadHouseholdWork());
+            }}>
+              {selectedConversation.archived ? "Restore" : "Archive"}
+            </button>
+            <button type="button" className="conversation-delete-action" onClick={() => {
+              setActionsOpen(false);
+              void conversationService.deleteConversation(householdId, selectedConversation.id)
+                .then(() => loadHouseholdWork(selectedConversation.id));
+            }}>Delete</button>
+          </div>}
+        </div>}
+      </div>
     </header>
     {error && <p role="alert" className="session-notice">{error}</p>}
-    <section className="conversation-toolbar" aria-label="Conversation controls">
-      <input aria-label="Search Conversations" placeholder="Search Conversations" value={search} onChange={(event) => {
-        setFocusedArrivalId(null);
-        setSearch(event.target.value);
-      }} />
-      <label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} /> Show archived</label>
-      <select aria-label="Conversations" value={selectedConversationId ?? ""} onChange={(event) => {
-        setFocusedArrivalId(null);
-        setSelectedConversationId(Number(event.target.value));
-      }}>
-        {conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}{conversation.archived ? " (archived)" : ""}</option>)}
-      </select>
-      {selectedConversation && <>
-        <button type="button" onClick={() => {
-          setTitleDraft(selectedConversation.title);
-          setRenaming(true);
-        }}>Rename</button>
-        <button type="button" onClick={() => void conversationService.archiveConversation(householdId, selectedConversation.id, !selectedConversation.archived).then(() => loadHouseholdWork())}>
-          {selectedConversation.archived ? "Restore" : "Archive"}
-        </button>
-        <button type="button" onClick={() => void conversationService.deleteConversation(householdId, selectedConversation.id)
-          .then(() => loadHouseholdWork(selectedConversation.id))}>Delete</button>
-      </>}
-    </section>
     <section className="messages" aria-label="Conversation">
       <article className="luna-message"><span aria-hidden="true">L</span><p>What would you like me to take care of?</p></article>
       {messages.map((message) => <article className="member-message" key={message.id}><span aria-hidden="true">You</span><p>{message.body}</p></article>)}

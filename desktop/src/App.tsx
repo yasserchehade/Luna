@@ -11,6 +11,7 @@ import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService
 import { ConversationWorkspace } from "./conversation/ConversationWorkspace";
 import type {
   AuditEvent,
+  Conversation,
   ConversationService,
   FiledOriginal,
 } from "./conversation/conversationService";
@@ -46,6 +47,12 @@ export default function App({ accountService, cabinetService, conversationServic
   const [activeDestination, setActiveDestination] = useState<(typeof destinations)[number]>("Luna");
   const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [todoCount, setTodoCount] = useState(0);
+  const [recentConversations, setRecentConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  const [conversationSelectionRequest, setConversationSelectionRequest] = useState<{
+    conversationId: number;
+    request: number;
+  } | null>(null);
   const [filedOriginals, setFiledOriginals] = useState<FiledOriginal[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [documentSurfaceError, setDocumentSurfaceError] = useState("");
@@ -65,6 +72,11 @@ export default function App({ accountService, cabinetService, conversationServic
     setCabinetCheckFailed(false);
     setPendingUnlockSession(null);
     setPendingTrustedSession(null);
+    setRecentConversations([]);
+    setActiveConversationId(null);
+    setConversationSelectionRequest(null);
+    setActiveDestination("Luna");
+    setNewConversationRequest(0);
     setCoordinationNotice("");
     try {
       await accountService.signOut();
@@ -287,10 +299,10 @@ export default function App({ accountService, cabinetService, conversationServic
     <div className="luna-shell">
       <aside className="sidebar">
         <div className="brand"><span aria-hidden="true">L</span><strong>Luna</strong></div>
-        <button className="new-conversation" type="button" onClick={() => {
+        <button aria-label="New conversation" className="new-conversation" type="button" onClick={() => {
           setActiveDestination("Luna");
           setNewConversationRequest((request) => request + 1);
-        }}>＋ New Conversation</button>
+        }}>+ New conversation</button>
         <nav aria-label="Primary destinations">
           {destinations.map((destination) => (
             <button
@@ -306,6 +318,23 @@ export default function App({ accountService, cabinetService, conversationServic
             </button>
           ))}
         </nav>
+        <section className="conversation-list" aria-label="Recent conversations">
+          <small>Conversations</small>
+          {recentConversations.length === 0
+            ? <p>No conversations yet.</p>
+            : recentConversations.map((conversation) => <button
+              className={activeConversationId === conversation.id && activeDestination === "Luna" ? "selected" : undefined}
+              key={conversation.id}
+              onClick={() => {
+                setActiveDestination("Luna");
+                setConversationSelectionRequest({
+                  conversationId: conversation.id,
+                  request: Date.now(),
+                });
+              }}
+              type="button"
+            >{conversation.title}</button>)}
+        </section>
         <div className="member"><span>{initials}</span><div><strong>{session.organiserName}</strong><small>Household Organiser</small></div><button type="button" onClick={lockLuna}>Lock Luna</button></div>
       </aside>
 
@@ -349,18 +378,16 @@ export default function App({ accountService, cabinetService, conversationServic
           conversationService={conversationService}
           destination={activeDestination}
           householdId={session.householdId}
+          householdName={session.householdName}
           newConversationRequest={newConversationRequest}
+          conversationSelectionRequest={conversationSelectionRequest}
+          onRecentConversationsChange={setRecentConversations}
+          onActiveConversationChange={setActiveConversationId}
           onOpenConversation={() => setActiveDestination("Luna")}
           onTodoCountChange={setTodoCount}
         />
       </>}
 
-      <aside className="context-panel">
-        <header>Household context</header>
-        <div><small>Household</small><strong>{session.householdName}</strong></div>
-        <div><small>Desk status</small><strong>Ready</strong><p>{cabinetValidation.configuration.root}</p></div>
-        <div className="privacy"><small>Processing</small><strong>Local by default</strong><p>Luna will ask before using Cloud Assistance.</p></div>
-      </aside>
     </div>
   );
 }
