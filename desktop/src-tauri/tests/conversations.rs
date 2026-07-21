@@ -57,11 +57,15 @@ impl LocalOcr for FixedLocalOcr {
 }
 
 fn digital_pdf_with_text(text: &str) -> Vec<u8> {
+    pdf_with_text_and_font_resource(text, "/F1 5 0 R")
+}
+
+fn pdf_with_text_and_font_resource(text: &str, font_resource: &str) -> Vec<u8> {
     let content = format!("BT\n/F1 12 Tf\n72 720 Td\n({text}) Tj\nET\n");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
-        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_owned(),
+        format!("<< /Type /Page /Parent 2 0 R /Resources << /Font << {font_resource} >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>"),
         format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
     ];
@@ -753,9 +757,11 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
 }
 
 #[test]
-fn a_document_arrival_accepts_the_utility_bill_fixture() {
+fn a_document_arrival_survives_a_pdf_parser_font_panic() {
     let directory = tempfile::tempdir().expect("temporary utility bill directory");
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/bills/utility bill.pdf");
+    let source = directory.path().join("utility bill.pdf");
+    fs::write(&source, pdf_with_text_and_font_resource("Utility bill", ""))
+        .expect("write utility bill parser fixture");
     let (store, _) = open_conversation_store(directory.path().join("luna.db"));
     let conversation = store
         .create_conversation("rivera-household", "Utility bill")
