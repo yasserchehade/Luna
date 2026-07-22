@@ -39,8 +39,15 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Attach document']").click();
     await expect($(".document-arrival h2")).toHaveText(expect.stringContaining("luna-e2e-document"));
     await expect($(".document-arrival p")).toHaveText("Needs your direction");
+    await expect($(".document-arrival[data-focused='true']")).toBeDisplayed();
     await expect($("label=Service provider relevance")).toBeDisplayed();
     await expect($("label=Property relevance")).toBeDisplayed();
+    const reviewCard = $(".document-arrival .review-card");
+    await expect(reviewCard.$$("input[aria-label='Amount']")).toBeElementsArrayOfSize(1);
+    const clarificationPromptElements = await reviewCard.$$(".clarification-questions p");
+    const clarificationPrompts: string[] = [];
+    for (const prompt of clarificationPromptElements) clarificationPrompts.push(await prompt.getText());
+    expect(clarificationPrompts.some((prompt) => prompt.toLowerCase().includes("amount"))).toBe(false);
 
     await $("button[aria-label='To do']").click();
     await expect($("h1=To do")).toBeDisplayed();
@@ -110,14 +117,17 @@ describe("Luna Conversation desk", () => {
       throw new Error(`The dropped document was rejected: ${await attachmentError.getText()}`);
     }
     await expect($$(".document-arrival")).toBeElementsArrayOfSize(2);
+    const arrivalHeadings = await $$(".document-arrival h2");
+    await expect(arrivalHeadings[0]).toHaveText(expect.stringContaining("luna-e2e-document"));
+    await expect(arrivalHeadings[1]).toHaveText(expect.stringContaining("luna-e2e-dropped"));
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $(".todo-list article").$("button=Dismiss").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
     await $("button[aria-label='Luna']").click();
     await expect($$(".document-arrival > div > p")).toBeElementsArrayOfSize(2);
-    await expect($$(".document-arrival > div > p")[0]).toHaveText("Dismissed");
-    await expect($$(".document-arrival > div > p")[1]).toHaveText("Filed");
+    await expect($$(".document-arrival > div > p")[0]).toHaveText("Filed");
+    await expect($$(".document-arrival > div > p")[1]).toHaveText("Dismissed");
 
     await openConversationActions();
     await $("button=Archive").click();
