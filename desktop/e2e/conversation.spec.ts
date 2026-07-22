@@ -166,5 +166,45 @@ describe("Luna Conversation desk", () => {
     await $(".document-arrival[data-focused='true']").$("button=Dismiss").click();
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
+
+    await $("button[aria-label='New conversation']").click();
+    await expect($("h1=New conversation")).toBeDisplayed();
+    const matchingDocument = await browser.tauri.execute(({ core }) => (
+      core.invoke("select_e2e_context_document_file", { kind: "matching" })
+    )) as string;
+    await browser.execute((documentPath) => (
+      window as unknown as {
+        __TAURI_INTERNALS__: {
+          invoke(command: string, args: object): Promise<void>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "tauri://drag-drop",
+      payload: { paths: [documentPath], position: { x: 40, y: 40 } },
+    }), matchingDocument);
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Filed");
+    await $("button[aria-label='History']").click();
+    await expect($(".history-event strong")).toHaveText("Automatically filed by learned rule");
+    await $("button[aria-label='Luna']").click();
+    await expect($(".document-arrival > div > p")).toHaveText("Filed");
+    await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
+    const changedDocument = await browser.tauri.execute(({ core }) => (
+      core.invoke("select_e2e_context_document_file", { kind: "changed-provider" })
+    )) as string;
+    await browser.execute((documentPath) => (
+      window as unknown as {
+        __TAURI_INTERNALS__: {
+          invoke(command: string, args: object): Promise<void>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "tauri://drag-drop",
+      payload: { paths: [documentPath], position: { x: 40, y: 40 } },
+    }), changedDocument);
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    await $("button[aria-label='To do']").click();
+    await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
+    await $(".todo-list article").$("button=Dismiss").click();
+    await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
   });
 });

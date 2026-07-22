@@ -1675,25 +1675,71 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
     );
     assert_eq!(history[0].authority, AuditAuthority::FilingRule);
 
-    let changed_provider = directory.path().join("origin-august.pdf");
-    fs::write(
-        &changed_provider,
-        digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: Origin Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-09-15",
+    let changed_contexts = [
+        (
+            "provider",
+            "Electricity bill",
+            "Origin Energy",
+            "Sam Rivera",
+            "12 Seabreeze Avenue",
+            "12345678",
         ),
-    )
-    .expect("write changed-provider bill");
-    let changed = store
-        .attach_document(
-            "rivera-household",
-            conversation.id,
-            &changed_provider,
-            &cabinet,
+        (
+            "addressee",
+            "Electricity bill",
+            "AGL",
+            "Jordan Rivera",
+            "12 Seabreeze Avenue",
+            "12345678",
+        ),
+        (
+            "property",
+            "Electricity bill",
+            "AGL",
+            "Sam Rivera",
+            "14 Seabreeze Avenue",
+            "12345678",
+        ),
+        (
+            "account",
+            "Electricity bill",
+            "AGL",
+            "Sam Rivera",
+            "12 Seabreeze Avenue",
+            "98765432",
+        ),
+        (
+            "document type",
+            "Gas bill",
+            "AGL",
+            "Sam Rivera",
+            "12 Seabreeze Avenue",
+            "12345678",
+        ),
+    ];
+    for (index, (label, document_type, provider, addressee, property, account)) in
+        changed_contexts.into_iter().enumerate()
+    {
+        let source = directory.path().join(format!("changed-{index}.pdf"));
+        fs::write(
+            &source,
+            digital_pdf_with_text(&format!(
+                "Document Type: {document_type}; Service Provider: {provider}; Addressee: {addressee}; Property: {property}; Account: {account}; Relevant Date: 2026-09-{:02}",
+                index + 1,
+            )),
         )
-        .expect("attach changed-provider bill");
-    assert_eq!(
-        changed.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
-    );
-    assert!(changed.review_card.filing_decision.is_none());
+        .expect("write changed-context bill");
+        let changed = store
+            .attach_document("rivera-household", conversation.id, &source, &cabinet)
+            .unwrap_or_else(|_| panic!("attach changed-{label} bill"));
+        assert_eq!(
+            changed.processing_state,
+            DocumentProcessingState::NeedsMemberDirection,
+            "changed {label} must not inherit the learned rule",
+        );
+        assert!(
+            changed.review_card.filing_decision.is_none(),
+            "changed {label} must not receive an automatic destination",
+        );
+    }
 }

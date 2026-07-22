@@ -431,7 +431,12 @@ fn confirm_filing_decision(
 
 #[cfg(feature = "e2e")]
 fn e2e_digital_pdf() -> Vec<u8> {
-    let content = "BT\n/F1 12 Tf\n72 720 Td\n(Luna E2E fixture) Tj\nET\n";
+    e2e_pdf_with_text("Luna E2E fixture")
+}
+
+#[cfg(feature = "e2e")]
+fn e2e_pdf_with_text(text: &str) -> Vec<u8> {
+    let content = format!("BT\n/F1 12 Tf\n72 720 Td\n({text}) Tj\nET\n");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
@@ -460,6 +465,22 @@ fn e2e_digital_pdf() -> Vec<u8> {
         .as_bytes(),
     );
     pdf
+}
+
+#[cfg(feature = "e2e")]
+#[tauri::command]
+fn select_e2e_context_document_file(kind: String) -> Result<String, String> {
+    let text = match kind.as_str() {
+        "matching" => "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        "changed-provider" => "Document Type: Electricity bill; Service Provider: Origin Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-09-15",
+        _ => return Err("Unknown E2E context document kind.".to_owned()),
+    };
+    let document = std::env::temp_dir().join(format!(
+        "luna-e2e-context-{}-{kind}.pdf",
+        std::process::id()
+    ));
+    std::fs::write(&document, e2e_pdf_with_text(text)).map_err(|error| error.to_string())?;
+    Ok(document.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -850,6 +871,8 @@ pub fn run() {
         record_member_direction,
         confirm_filing_decision,
         select_document_files,
+        #[cfg(feature = "e2e")]
+        select_e2e_context_document_file,
         get_account_session_item,
         set_account_session_item,
         remove_account_session_item,
