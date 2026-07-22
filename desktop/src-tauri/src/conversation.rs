@@ -684,7 +684,11 @@ impl<V: CredentialVault> ConversationStore<V> {
             params![household_id, conversation_id, protected],
         )?;
         let arrival_id = connection.last_insert_rowid();
-        if let Some(rule) = self.matching_filing_rule(household_id, &payload.context_direction)? {
+        if let Some(rule) = self.matching_filing_rule(
+            household_id,
+            &payload.context_direction,
+            payload.extracted_text.as_deref(),
+        )? {
             payload.processing_state = DocumentProcessingState::ReadyToFile;
             payload.filing_decision = Some(automatic_filing_decision(&payload, &rule));
             payload.learned_rule = Some(rule.clone());
@@ -1123,6 +1127,7 @@ impl<V: CredentialVault> ConversationStore<V> {
         &self,
         household_id: &str,
         context: &DocumentContextDirection,
+        extracted_text: Option<&str>,
     ) -> Result<Option<FilingRule>, ConversationError> {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
@@ -1136,7 +1141,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             .into_iter()
             .map(|protected| self.open_protected::<FilingRule>(household_id, &protected))
             .find_map(|result| match result {
-                Ok(rule) if filing_rule_matches(&rule, context) => Some(Ok(rule)),
+                Ok(rule) if filing_rule_matches(&rule, context, extracted_text) => Some(Ok(rule)),
                 Ok(_) => None,
                 Err(error) => Some(Err(error)),
             })
@@ -1406,14 +1411,34 @@ fn extract_digital_pdf_text(
     match catch_unwind(AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(original)
     })) {
-        Ok(result) => result
-            .map(|text| {
-                let text = text.trim().to_owned();
-                (!text.is_empty()).then_some(text)
-            })
-            .map_err(|_| ConversationError::InvalidDocument),
-        Err(_) => Ok(None),
+        Ok(Ok(text)) => {
+            let text = text.trim().to_owned();
+            Ok((!text.is_empty()).then_some(text))
+        }
+        Ok(Err(_)) => lopdf_text(original)
+            .map(Some)
+            .ok_or(ConversationError::InvalidDocument),
+        Err(_) => Ok(lopdf_text(original)),
     }
+}
+
+fn lopdf_text(original: &[u8]) -> Option<String> {
+    if !original.windows(5).any(|window| window == b"%%EOF") {
+        return None;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let document = lopdf::Document::load_mem(original).ok()?;
+        let pages = document.get_pages();
+        if pages.is_empty() {
+            return None;
+        }
+        let page_numbers = pages.keys().copied().collect::<Vec<_>>();
+        document.extract_text(&page_numbers).ok()
+    }))
+    .ok()
+    .flatten()?;
+    let text = result.trim().to_owned();
+    (!text.is_empty()).then_some(text)
 }
 
 fn extract_local_text(
@@ -1571,12 +1596,73 @@ fn filing_rule_from_payload(
     })
 }
 
-fn filing_rule_matches(rule: &FilingRule, context: &DocumentContextDirection) -> bool {
-    rule.document_type == context.document_type.as_deref().unwrap_or_default()
+fn filing_rule_matches(
+    rule: &FilingRule,
+    context: &DocumentContextDirection,
+    extracted_text: Option<&str>,
+) -> bool {
+    let structured_match = rule.document_type
+        == context.document_type.as_deref().unwrap_or_default()
         && rule.service_provider == context.service_provider.as_deref().unwrap_or_default()
         && rule.addressee == context.addressee.as_deref().unwrap_or_default()
         && rule.property == context.property
-        && rule.account == context.account
+        && rule.account == context.account;
+    let context_is_unresolved = context.document_type.is_none()
+        && context.service_provider.is_none()
+        && context.addressee.is_none()
+        && context.property.is_none()
+        && context.account.is_none();
+    structured_match
+        || (context_is_unresolved
+            && extracted_text.is_some_and(|text| filing_rule_matches_text(rule, text)))
+}
+
+fn filing_rule_matches_text(rule: &FilingRule, extracted_text: &str) -> bool {
+    let text = comparison_tokens(extracted_text);
+    let matches_distinctive = |value: &str| {
+        let value = comparison_tokens(value);
+        value.len() >= 2
+            && contains_token_sequence(&text, &value)
+            && !contains_negated_token_sequence(&text, &value)
+    };
+    let matches_account = |value: &str| {
+        let value = comparison_tokens(value);
+        !value.is_empty()
+            && contains_token_sequence(&text, &value)
+            && !contains_negated_token_sequence(&text, &value)
+    };
+    matches_distinctive(&rule.document_type)
+        && matches_distinctive(&rule.service_provider)
+        && matches_distinctive(&rule.addressee)
+        && rule.property.as_deref().is_none_or(matches_distinctive)
+        && rule.account.as_deref().is_none_or(matches_account)
+}
+
+fn comparison_tokens(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn contains_token_sequence(text: &[String], value: &[String]) -> bool {
+    !value.is_empty() && text.windows(value.len()).any(|window| window == value)
+}
+
+fn contains_negated_token_sequence(text: &[String], value: &[String]) -> bool {
+    (0..=text.len().saturating_sub(value.len())).any(|start| {
+        if &text[start..start + value.len()] != value {
+            return false;
+        }
+        (1..=2).any(|distance| {
+            start >= distance
+                && matches!(
+                    text[start - distance].as_str(),
+                    "formerly" | "previously" | "from" | "not"
+                )
+        })
+    })
 }
 
 fn automatic_filing_decision(

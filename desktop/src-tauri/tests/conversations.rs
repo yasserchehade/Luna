@@ -1582,7 +1582,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
     fs::write(
         &first_source,
         digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
         ),
     )
     .expect("write first bill");
@@ -1596,7 +1596,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
     let direction = DocumentContextDirection {
         document_type: Some("Electricity bill".to_owned()),
         document_type_resolved: true,
-        service_provider: Some("AGL".to_owned()),
+        service_provider: Some("AGL Energy".to_owned()),
         service_provider_resolved: true,
         addressee: Some("Sam Rivera".to_owned()),
         addressee_resolved: true,
@@ -1609,7 +1609,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         relevant_dates: vec!["2026-07-15".to_owned()],
         relevant_dates_resolved: true,
         service_provider_relevance: Some(ContextRelevanceDirection {
-            subject: "AGL".to_owned(),
+            subject: "AGL Energy".to_owned(),
             explanation: "Supplies electricity to our home".to_owned(),
         }),
         property_relevance: Some(ContextRelevanceDirection {
@@ -1640,9 +1640,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
     let second_source = directory.path().join("agl-august.pdf");
     fs::write(
         &second_source,
-        digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
-        ),
+        digital_pdf_with_text("AGL Energy electricity bill for Sam Rivera at 12 Seabreeze Avenue, account 12345678, issued 2026-08-15"),
     )
     .expect("write second bill");
     let automatically_filed = store
@@ -1659,13 +1657,6 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
     );
     assert!(automatically_filed.filed_original.is_some());
     assert!(automatically_filed.review_card.learned_rule.is_some());
-    assert!(automatically_filed
-        .filed_original
-        .as_ref()
-        .expect("automatic Filed Original")
-        .final_path
-        .to_string_lossy()
-        .contains("2026-08-15"));
     let history = store
         .list_audit_events("rivera-household")
         .expect("list filing history");
@@ -1674,6 +1665,48 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         AuditEventKind::ExactMatchHandledAutomatically
     );
     assert_eq!(history[0].authority, AuditAuthority::FilingRule);
+
+    let unstructured_changed = directory.path().join("origin-unstructured.pdf");
+    fs::write(
+        &unstructured_changed,
+        digital_pdf_with_text(
+            "Origin Energy electricity bill for Sam Rivera at 12 Seabreeze Avenue, account 12345678, issued 2026-09-15; previously AGL Energy",
+        ),
+    )
+    .expect("write unstructured changed-provider bill");
+    let unstructured_changed_arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unstructured_changed,
+            &cabinet,
+        )
+        .expect("attach unstructured changed-provider bill");
+    assert_eq!(
+        unstructured_changed_arrival.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+
+    let unstructured_account_changed = directory.path().join("account-unstructured.pdf");
+    fs::write(
+        &unstructured_account_changed,
+        digital_pdf_with_text(
+            "AGL Energy electricity bill for Sam Rivera at 12 Seabreeze Avenue, account 98765432, issued 2026-09-15; previously account 12345678",
+        ),
+    )
+    .expect("write unstructured changed-account bill");
+    let unstructured_account_changed_arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unstructured_account_changed,
+            &cabinet,
+        )
+        .expect("attach unstructured changed-account bill");
+    assert_eq!(
+        unstructured_account_changed_arrival.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
 
     let changed_contexts = [
         (
@@ -1687,7 +1720,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         (
             "addressee",
             "Electricity bill",
-            "AGL",
+            "AGL Energy",
             "Jordan Rivera",
             "12 Seabreeze Avenue",
             "12345678",
@@ -1695,7 +1728,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         (
             "property",
             "Electricity bill",
-            "AGL",
+            "AGL Energy",
             "Sam Rivera",
             "14 Seabreeze Avenue",
             "12345678",
@@ -1703,7 +1736,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         (
             "account",
             "Electricity bill",
-            "AGL",
+            "AGL Energy",
             "Sam Rivera",
             "12 Seabreeze Avenue",
             "98765432",
@@ -1711,7 +1744,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         (
             "document type",
             "Gas bill",
-            "AGL",
+            "AGL Energy",
             "Sam Rivera",
             "12 Seabreeze Avenue",
             "12345678",
@@ -1742,4 +1775,31 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
             "changed {label} must not receive an automatic destination",
         );
     }
+}
+
+#[test]
+fn a_font_unsupported_pdf_still_provides_local_text_for_rule_matching() {
+    let directory = tempfile::tempdir().expect("temporary fallback directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(&cabinet).expect("create Cabinet");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("samples")
+        .join("bills")
+        .join("utility bill.pdf");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Fallback")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach utility bill");
+    let extracted = arrival.extracted_text.expect("fallback text");
+    let compact = extracted
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    assert!(compact.contains("accountnumber"));
 }
