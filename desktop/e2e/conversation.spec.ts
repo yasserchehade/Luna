@@ -91,6 +91,9 @@ describe("Luna Conversation desk", () => {
     await expect($(".history-event small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
 
     await $("button[aria-label='Options']").click();
+    await expect($("h1=Options")).toBeDisplayed();
+    await $("button[aria-label='Learned Filing Rules options']").click();
+    await expect($("h2=Learned Filing Rules")).toBeDisplayed();
     await expect($("section[aria-label='Learned Filing Rules']")).toBeDisplayed();
     const learnedRule = $(".filing-rule-card");
     await expect(learnedRule).toHaveText(expect.stringContaining("Electricity bill from AGL"));

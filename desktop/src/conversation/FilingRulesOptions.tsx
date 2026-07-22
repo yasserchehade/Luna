@@ -98,8 +98,8 @@ export function FilingRulesOptions({
       .catch(() => setError("Luna could not delete that Filing Rule."));
   };
 
-  return <section className="filing-rules" aria-label="Learned Filing Rules">
-    <div className="section-heading"><div><small>Household learning</small><h2>Learned Filing Rules</h2></div><span>{rules.filter(({ deleted }) => !deleted).length} active</span></div>
+  return <section className="filing-rules options-section" aria-label="Learned Filing Rules">
+    <div className="options-section-heading"><div><small>Household learning</small><h2>Learned Filing Rules</h2></div><span>{rules.filter(({ deleted }) => !deleted).length} active</span></div>
     <p>These visible rules are the narrow permissions Luna earned from your Filing Decisions. Changes apply to future Document Arrivals; historical Originals stay where they are.</p>
     {error && <p className="account-error" role="alert">{error}</p>}
     {moveCandidates.length > 0 && <section className="manual-move-prompts" aria-label="Manual Cabinet moves">

@@ -5,7 +5,7 @@ import { AccountFlow } from "./account/AccountFlow";
 import { TrustedDeviceFlow, TrustedDeviceUnlock } from "./trusted-device/TrustedDeviceFlow";
 import type { TrustedDeviceService } from "./trusted-device/trustedDeviceService";
 import { synchronizeTrustedDevice } from "./trusted-device/trustedDeviceCoordinator";
-import { TrustedDevicesOptions } from "./trusted-device/TrustedDevicesOptions";
+import { OptionsWorkspace } from "./options/OptionsWorkspace";
 import { CabinetSetup } from "./cabinet/CabinetSetup";
 import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService";
 import { ConversationWorkspace } from "./conversation/ConversationWorkspace";
@@ -346,7 +346,7 @@ export default function App({ accountService, cabinetService, conversationServic
         <div className="member"><span>{initials}</span><div><strong>{session.organiserName}</strong><small>Household Organiser</small></div><button type="button" onClick={lockLuna}>Lock Luna</button></div>
       </aside>
 
-      {activeDestination === "Options" ? <TrustedDevicesOptions
+      {activeDestination === "Options" ? <OptionsWorkspace
         accountService={accountService}
         conversationService={conversationService}
         onSignOut={() => signOut(session)}
