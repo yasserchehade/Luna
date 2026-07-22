@@ -78,6 +78,7 @@ describe("Luna Conversation desk", () => {
     );
     await review.$("button=Confirm Filing Decision").click();
     await expect($(".document-arrival > div > p")).toHaveText("Filed");
+    await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
     await $("button[aria-label='Cabinet']").click();

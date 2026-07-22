@@ -103,6 +103,9 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .clarification-questions p { color: #665a3a; }
 .filing-decision-form { display: grid; grid-template-columns: 1fr; gap: 9px; padding: 11px; border: 1px solid #cbdacb; border-radius: 8px; background: #f2f7f1; }
 .confirmed-destination { overflow-wrap: anywhere; color: #355f4a; font-weight: 650; }
+.learned-rule { display: grid; gap: 4px; margin: 0; padding: 9px; border-radius: 7px; color: #4e604f; background: #edf5ed; }
+.learned-rule small { color: #52705a; font-size: 9px; font-weight: 750; text-transform: uppercase; }
+.learned-rule p { color: #4e604f; }
 .attachment-zone { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 clamp(30px, 7vw, 92px) 12px; padding: 11px 14px; border: 1px dashed #bdc8bc; border-radius: 11px; color: #687269; background: #f5f7f2; font-size: 11px; }
 .attachment-zone p { margin: 0; }
 .todo-list { display: grid; align-content: start; gap: 12px; padding: 32px; }

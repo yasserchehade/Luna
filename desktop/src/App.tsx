@@ -367,7 +367,7 @@ export default function App({ accountService, cabinetService, conversationServic
           {auditEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
             : auditEvents.map((event) => <article className="history-event" key={event.id}>
-              <strong>Document filed</strong>
+              <strong>{event.kind === "exactMatchHandledAutomatically" ? "Automatically filed by learned rule" : "Document filed"}</strong>
               <p>{event.subject}</p>
               <small>{event.outcome} · Verified SHA-256 {event.filedOriginal.checksum}</small>
             </article>)}

@@ -60,6 +60,17 @@ export type FilingDecisionReview = {
   confirmed: boolean;
 };
 
+export type FilingRule = {
+  id: number;
+  documentType: string;
+  serviceProvider: string;
+  addressee: string;
+  property: string | null;
+  account: string | null;
+  fileName: string;
+  cabinetDestination: string;
+};
+
 export type ContextRelevanceDirection = {
   subject: string;
   explanation: string;
@@ -102,8 +113,8 @@ export type FiledOriginal = {
 export type AuditEvent = {
   id: number;
   householdId: string;
-  kind: "documentFiled";
-  authority: "memberDirection";
+  kind: "documentFiled" | "exactMatchHandledAutomatically";
+  authority: "memberDirection" | "filingRule";
   subject: string;
   outcome: string;
   filedOriginal: FiledOriginal;
@@ -117,6 +128,7 @@ export type ReviewCard = {
   context: DocumentContextReview;
   questions: ClarificationQuestion[];
   filingDecision: FilingDecisionReview | null;
+  learnedRule: FilingRule | null;
 };
 
 export type DocumentArrival = {

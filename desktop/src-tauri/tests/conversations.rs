@@ -1572,3 +1572,128 @@ fn conversation_content_is_protected_and_requires_an_unlocked_trusted_device() {
         .is_err());
     assert!(store.list_todo_items("rivera-household").is_err());
 }
+
+#[test]
+fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automatically() {
+    let directory = tempfile::tempdir().expect("temporary rule directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("agl-july.pdf");
+    fs::write(
+        &first_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write first bill");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bills")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first bill");
+    let direction = DocumentContextDirection {
+        document_type: Some("Electricity bill".to_owned()),
+        document_type_resolved: true,
+        service_provider: Some("AGL".to_owned()),
+        service_provider_resolved: true,
+        addressee: Some("Sam Rivera".to_owned()),
+        addressee_resolved: true,
+        property: Some("12 Seabreeze Avenue".to_owned()),
+        property_resolved: true,
+        account: Some("12345678".to_owned()),
+        account_resolved: true,
+        amount: None,
+        amount_resolved: true,
+        relevant_dates: vec!["2026-07-15".to_owned()],
+        relevant_dates_resolved: true,
+        service_provider_relevance: Some(ContextRelevanceDirection {
+            subject: "AGL".to_owned(),
+            explanation: "Supplies electricity to our home".to_owned(),
+        }),
+        property_relevance: Some(ContextRelevanceDirection {
+            subject: "12 Seabreeze Avenue".to_owned(),
+            explanation: "Our primary residence".to_owned(),
+        }),
+    };
+    store
+        .record_member_direction("rivera-household", first.id, direction, "Household records")
+        .expect("record first Member Direction");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            first.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill July 2026.pdf".to_owned(),
+                cabinet_destination:
+                    "Household records/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf"
+                        .to_owned(),
+            },
+        )
+        .expect("confirm first Filing Decision");
+    let filed = store
+        .file_document("rivera-household", first.id, &cabinet)
+        .expect("file first bill");
+    assert!(filed.review_card.learned_rule.is_some());
+
+    let second_source = directory.path().join("agl-august.pdf");
+    fs::write(
+        &second_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write second bill");
+    let automatically_filed = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach exact contextual match");
+    assert_eq!(
+        automatically_filed.processing_state,
+        DocumentProcessingState::Filed
+    );
+    assert!(automatically_filed.filed_original.is_some());
+    assert!(automatically_filed.review_card.learned_rule.is_some());
+    assert!(automatically_filed
+        .filed_original
+        .as_ref()
+        .expect("automatic Filed Original")
+        .final_path
+        .to_string_lossy()
+        .contains("2026-08-15"));
+    let history = store
+        .list_audit_events("rivera-household")
+        .expect("list filing history");
+    assert_eq!(
+        history[0].kind,
+        AuditEventKind::ExactMatchHandledAutomatically
+    );
+    assert_eq!(history[0].authority, AuditAuthority::FilingRule);
+
+    let changed_provider = directory.path().join("origin-august.pdf");
+    fs::write(
+        &changed_provider,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: Origin Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-09-15",
+        ),
+    )
+    .expect("write changed-provider bill");
+    let changed = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &changed_provider,
+            &cabinet,
+        )
+        .expect("attach changed-provider bill");
+    assert_eq!(
+        changed.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert!(changed.review_card.filing_decision.is_none());
+}

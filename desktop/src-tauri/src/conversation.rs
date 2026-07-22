@@ -122,6 +122,19 @@ pub struct FilingDecisionDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FilingRule {
+    pub id: i64,
+    pub document_type: String,
+    pub service_provider: String,
+    pub addressee: String,
+    pub property: Option<String>,
+    pub account: Option<String>,
+    pub file_name: String,
+    pub cabinet_destination: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FiledOriginal {
     pub arrival_id: i64,
     pub conversation_id: i64,
@@ -136,12 +149,14 @@ pub struct FiledOriginal {
 #[serde(rename_all = "camelCase")]
 pub enum AuditEventKind {
     DocumentFiled,
+    ExactMatchHandledAutomatically,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AuditAuthority {
     MemberDirection,
+    FilingRule,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +216,7 @@ pub struct ReviewCard {
     pub context: DocumentContextReview,
     pub questions: Vec<ClarificationQuestion>,
     pub filing_decision: Option<FilingDecisionReview>,
+    pub learned_rule: Option<FilingRule>,
 }
 
 pub trait LocalOcr: Send + Sync {
@@ -351,6 +367,10 @@ struct DocumentArrivalPayload {
     #[serde(default)]
     filing_decision: Option<FilingDecisionReview>,
     #[serde(default)]
+    learned_rule: Option<FilingRule>,
+    #[serde(default)]
+    automatic_rule_id: Option<i64>,
+    #[serde(default)]
     filed_original: Option<FiledOriginal>,
 }
 
@@ -457,6 +477,13 @@ impl<V: CredentialVault> ConversationStore<V> {
                 arrival_id INTEGER NOT NULL,
                 protected_payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS filing_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                household_id TEXT NOT NULL,
+                protected_payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS filing_rules_household
+                ON filing_rules(household_id, id);
             CREATE INDEX IF NOT EXISTS audit_events_household
                 ON audit_events(household_id, id);
             CREATE UNIQUE INDEX IF NOT EXISTS audit_events_arrival
@@ -635,7 +662,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             &*self.local_ocr,
         );
         let context_direction = local_context_direction(extracted_text.as_deref());
-        let payload = DocumentArrivalPayload {
+        let mut payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
             original_path,
             source_path: path.to_owned(),
@@ -645,6 +672,8 @@ impl<V: CredentialVault> ConversationStore<V> {
             processing_state: DocumentProcessingState::NeedsMemberDirection,
             context_direction,
             filing_decision: None,
+            learned_rule: None,
+            automatic_rule_id: None,
             filed_original: None,
         };
         let protected = self.protect(household_id, &payload)?;
@@ -654,12 +683,20 @@ impl<V: CredentialVault> ConversationStore<V> {
              VALUES (?1, ?2, ?3)",
             params![household_id, conversation_id, protected],
         )?;
-        self.document_arrival(
-            household_id,
-            connection.last_insert_rowid(),
-            conversation_id,
-            payload,
-        )
+        let arrival_id = connection.last_insert_rowid();
+        if let Some(rule) = self.matching_filing_rule(household_id, &payload.context_direction)? {
+            payload.processing_state = DocumentProcessingState::ReadyToFile;
+            payload.filing_decision = Some(automatic_filing_decision(&payload, &rule));
+            payload.learned_rule = Some(rule.clone());
+            payload.automatic_rule_id = Some(rule.id);
+            let protected = self.protect(household_id, &payload)?;
+            connection.execute(
+                "UPDATE document_arrivals SET protected_payload = ?1 WHERE id = ?2 AND household_id = ?3",
+                params![protected, arrival_id, household_id],
+            )?;
+            return self.file_document(household_id, arrival_id, cabinet_root);
+        }
+        self.document_arrival(household_id, arrival_id, conversation_id, payload)
     }
 
     pub fn add_member_message(
@@ -991,19 +1028,53 @@ impl<V: CredentialVault> ConversationStore<V> {
         };
         payload.processing_state = DocumentProcessingState::Filed;
         payload.filed_original = Some(filed_original.clone());
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let mut learned_rule = payload.learned_rule.clone();
+        if learned_rule.is_none() {
+            if let Some(mut rule) = filing_rule_from_payload(&payload, &decision) {
+                let protected_placeholder = self.protect(household_id, &rule)?;
+                transaction.execute(
+                    "INSERT INTO filing_rules (household_id, protected_payload) VALUES (?1, ?2)",
+                    params![household_id, protected_placeholder],
+                )?;
+                rule.id = transaction.last_insert_rowid();
+                let protected_rule = self.protect(household_id, &rule)?;
+                transaction.execute(
+                    "UPDATE filing_rules SET protected_payload = ?1 WHERE id = ?2 AND household_id = ?3",
+                    params![protected_rule, rule.id, household_id],
+                )?;
+                learned_rule = Some(rule);
+            }
+        }
+        payload.learned_rule = learned_rule;
         let protected_arrival = self.protect(household_id, &payload)?;
+        let automatic = payload.automatic_rule_id.is_some();
         let protected_event = self.protect(
             household_id,
             &AuditEventPayload {
-                kind: AuditEventKind::DocumentFiled,
-                authority: AuditAuthority::MemberDirection,
+                kind: if automatic {
+                    AuditEventKind::ExactMatchHandledAutomatically
+                } else {
+                    AuditEventKind::DocumentFiled
+                },
+                authority: if automatic {
+                    AuditAuthority::FilingRule
+                } else {
+                    AuditAuthority::MemberDirection
+                },
                 subject: payload.original_name.clone(),
-                outcome: format!("Filed and verified at {}", decision.cabinet_destination),
+                outcome: if automatic {
+                    format!(
+                        "Automatically filed and verified at {}",
+                        decision.cabinet_destination
+                    )
+                } else {
+                    format!("Filed and verified at {}", decision.cabinet_destination)
+                },
                 filed_original,
             },
         )?;
-        let mut connection = self.connect()?;
-        let transaction = connection.transaction()?;
         let updated = transaction.execute(
             "UPDATE document_arrivals SET protected_payload = ?1
               WHERE id = ?2 AND household_id = ?3",
@@ -1046,6 +1117,30 @@ impl<V: CredentialVault> ConversationStore<V> {
             self.file_document(household_id, arrival_id, cabinet_root.as_ref())?;
         }
         Ok(())
+    }
+
+    fn matching_filing_rule(
+        &self,
+        household_id: &str,
+        context: &DocumentContextDirection,
+    ) -> Result<Option<FilingRule>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT protected_payload FROM filing_rules
+              WHERE household_id = ?1 ORDER BY id DESC",
+        )?;
+        let rules = statement
+            .query_map(params![household_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rules
+            .into_iter()
+            .map(|protected| self.open_protected::<FilingRule>(household_id, &protected))
+            .find_map(|result| match result {
+                Ok(rule) if filing_rule_matches(&rule, context) => Some(Ok(rule)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .transpose()
     }
 
     fn load_document_arrival_payload(
@@ -1449,6 +1544,54 @@ fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
         },
         questions,
         filing_decision: payload.filing_decision.clone(),
+        learned_rule: payload.learned_rule.clone(),
+    }
+}
+
+fn filing_rule_from_payload(
+    payload: &DocumentArrivalPayload,
+    decision: &FilingDecisionReview,
+) -> Option<FilingRule> {
+    let context = &payload.context_direction;
+    let document_type = context.document_type.clone()?;
+    let service_provider = context.service_provider.clone()?;
+    let addressee = context.addressee.clone()?;
+    if context.property.is_none() && context.account.is_none() {
+        return None;
+    }
+    Some(FilingRule {
+        id: 0,
+        document_type,
+        service_provider,
+        addressee,
+        property: context.property.clone(),
+        account: context.account.clone(),
+        file_name: decision.file_name.clone(),
+        cabinet_destination: decision.cabinet_destination.clone(),
+    })
+}
+
+fn filing_rule_matches(rule: &FilingRule, context: &DocumentContextDirection) -> bool {
+    rule.document_type == context.document_type.as_deref().unwrap_or_default()
+        && rule.service_provider == context.service_provider.as_deref().unwrap_or_default()
+        && rule.addressee == context.addressee.as_deref().unwrap_or_default()
+        && rule.property == context.property
+        && rule.account == context.account
+}
+
+fn automatic_filing_decision(
+    payload: &DocumentArrivalPayload,
+    rule: &FilingRule,
+) -> FilingDecisionReview {
+    let parent = Path::new(&rule.cabinet_destination)
+        .parent()
+        .and_then(Path::to_str)
+        .unwrap_or_default();
+    let generated = propose_filing_decision(payload, parent);
+    FilingDecisionReview {
+        file_name: generated.file_name,
+        cabinet_destination: generated.cabinet_destination,
+        confirmed: true,
     }
 }
 
