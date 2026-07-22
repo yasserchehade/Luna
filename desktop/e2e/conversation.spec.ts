@@ -157,7 +157,11 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Attach document']").click();
     await openConversationActions();
     await $("button=Delete").click();
-    await expect($("h1=Deleted Conversation")).toBeDisplayed();
+    await expect($("h1=New conversation")).toBeDisplayed();
+    const recoveredMessage = "The recovered conversation is writable.";
+    await $("#message-composer").setValue(recoveredMessage);
+    await $("button[aria-label='Send message']").click();
+    await expect($(".member-message p")).toHaveText(recoveredMessage);
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $("button=Open Conversation item").click();
