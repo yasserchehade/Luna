@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use image::ImageFormat;
@@ -131,6 +132,90 @@ pub struct FilingRule {
     pub account: Option<String>,
     pub file_name: String,
     pub cabinet_destination: String,
+    #[serde(default)]
+    pub teacher: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingRuleSummary {
+    pub id: i64,
+    pub document_type: String,
+    pub service_provider: String,
+    pub addressee: String,
+    pub property: Option<String>,
+    pub account: Option<String>,
+    pub file_name: String,
+    pub cabinet_destination: String,
+    pub teacher: String,
+    pub created_at: String,
+    pub paused: bool,
+    pub deleted: bool,
+    pub affected_documents: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingRuleUpdate {
+    pub document_type: String,
+    pub service_provider: String,
+    pub addressee: String,
+    pub property: Option<String>,
+    pub account: Option<String>,
+    pub file_name: String,
+    pub cabinet_destination: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilingRuleAuditKind {
+    Updated,
+    Paused,
+    Resumed,
+    Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingRuleAuditEvent {
+    pub id: i64,
+    pub household_id: String,
+    pub rule_id: i64,
+    pub kind: FilingRuleAuditKind,
+    pub subject: String,
+    pub outcome: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingRuleReorganizationDocument {
+    pub arrival_id: i64,
+    pub original_name: String,
+    pub current_destination: String,
+    pub proposed_destination: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingRuleReorganizationPreview {
+    pub rule_id: i64,
+    pub proposed_directory: String,
+    pub documents: Vec<FilingRuleReorganizationDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualMoveCandidate {
+    pub arrival_id: i64,
+    pub original_name: String,
+    pub previous_destination: String,
+    pub current_destination: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,6 +468,13 @@ struct AuditEventPayload {
     filed_original: FiledOriginal,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FilingRuleAuditPayload {
+    kind: FilingRuleAuditKind,
+    subject: String,
+    outcome: String,
+}
+
 impl DocumentArrivalPayload {
     fn restore_legacy_original_path(&mut self) {
         if self.original_path.as_os_str().is_empty() {
@@ -484,6 +576,14 @@ impl<V: CredentialVault> ConversationStore<V> {
             );
             CREATE INDEX IF NOT EXISTS filing_rules_household
                 ON filing_rules(household_id, id);
+            CREATE TABLE IF NOT EXISTS filing_rule_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                household_id TEXT NOT NULL,
+                rule_id INTEGER NOT NULL,
+                protected_payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS filing_rule_events_household
+                ON filing_rule_events(household_id, id);
             CREATE INDEX IF NOT EXISTS audit_events_household
                 ON audit_events(household_id, id);
             CREATE UNIQUE INDEX IF NOT EXISTS audit_events_arrival
@@ -858,6 +958,272 @@ impl<V: CredentialVault> ConversationStore<V> {
             .collect()
     }
 
+    pub fn list_filing_rules(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<FilingRuleSummary>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, protected_payload FROM filing_rules
+              WHERE household_id = ?1 ORDER BY id DESC",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected_rows
+            .into_iter()
+            .map(|(id, protected)| {
+                let mut rule: FilingRule = self.open_protected(household_id, &protected)?;
+                rule.id = id;
+                self.filing_rule_summary(household_id, rule)
+            })
+            .collect()
+    }
+
+    pub fn update_filing_rule(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+        update: FilingRuleUpdate,
+    ) -> Result<FilingRuleSummary, ConversationError> {
+        let (mut rule, _) = self.load_filing_rule(household_id, rule_id)?;
+        let update = update.normalized();
+        if update.document_type.is_empty()
+            || update.service_provider.is_empty()
+            || update.addressee.is_empty()
+            || (update.property.is_none() && update.account.is_none())
+            || !valid_file_name(&update.file_name, &rule.file_name)
+            || !valid_cabinet_destination(&update.cabinet_destination, &update.file_name)
+        {
+            return Err(ConversationError::InvalidCabinetDestination);
+        }
+        rule.document_type = update.document_type;
+        rule.service_provider = update.service_provider;
+        rule.addressee = update.addressee;
+        rule.property = update.property;
+        rule.account = update.account;
+        rule.file_name = update.file_name;
+        rule.cabinet_destination = update.cabinet_destination;
+        self.save_filing_rule(
+            household_id,
+            rule_id,
+            &rule,
+            FilingRuleAuditKind::Updated,
+            "updated prospectively",
+        )?;
+        self.filing_rule_summary(household_id, rule)
+    }
+
+    pub fn pause_filing_rule(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+        paused: bool,
+    ) -> Result<FilingRuleSummary, ConversationError> {
+        let (mut rule, _) = self.load_filing_rule(household_id, rule_id)?;
+        if rule.deleted {
+            return Err(ConversationError::NotFound);
+        }
+        rule.paused = paused;
+        self.save_filing_rule(
+            household_id,
+            rule_id,
+            &rule,
+            if paused {
+                FilingRuleAuditKind::Paused
+            } else {
+                FilingRuleAuditKind::Resumed
+            },
+            if paused { "paused" } else { "resumed" },
+        )?;
+        self.filing_rule_summary(household_id, rule)
+    }
+
+    pub fn delete_filing_rule(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+    ) -> Result<FilingRuleSummary, ConversationError> {
+        let (mut rule, _) = self.load_filing_rule(household_id, rule_id)?;
+        if rule.deleted {
+            return Err(ConversationError::NotFound);
+        }
+        rule.deleted = true;
+        rule.paused = true;
+        self.save_filing_rule(
+            household_id,
+            rule_id,
+            &rule,
+            FilingRuleAuditKind::Deleted,
+            "deleted for future arrivals; historical Originals were left unchanged",
+        )?;
+        self.filing_rule_summary(household_id, rule)
+    }
+
+    pub fn list_filing_rule_audit_events(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<FilingRuleAuditEvent>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, rule_id, protected_payload FROM filing_rule_events
+              WHERE household_id = ?1 ORDER BY id DESC",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected_rows
+            .into_iter()
+            .map(|(id, rule_id, protected)| {
+                let payload: FilingRuleAuditPayload =
+                    self.open_protected(household_id, &protected)?;
+                Ok(FilingRuleAuditEvent {
+                    id,
+                    household_id: household_id.to_owned(),
+                    rule_id,
+                    kind: payload.kind,
+                    subject: payload.subject,
+                    outcome: payload.outcome,
+                })
+            })
+            .collect()
+    }
+
+    pub fn preview_filing_rule_reorganization(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+        proposed_directory: &str,
+    ) -> Result<FilingRuleReorganizationPreview, ConversationError> {
+        let (rule, _) = self.load_filing_rule(household_id, rule_id)?;
+        let proposed_directory = proposed_directory.trim().trim_matches('/');
+        if !valid_rule_directory(proposed_directory) {
+            return Err(ConversationError::InvalidCabinetDestination);
+        }
+        let documents = self
+            .list_document_arrivals(household_id)?
+            .into_iter()
+            .filter_map(|arrival| {
+                let learned = arrival.review_card.learned_rule.as_ref()?;
+                if learned.id != rule.id {
+                    return None;
+                }
+                let filed = arrival.filed_original?;
+                let file_name = filed.filing_decision.file_name;
+                Some(FilingRuleReorganizationDocument {
+                    arrival_id: arrival.id,
+                    original_name: arrival.original_name,
+                    current_destination: filed.filing_decision.cabinet_destination,
+                    proposed_destination: format!("{proposed_directory}/{file_name}"),
+                })
+            })
+            .collect();
+        Ok(FilingRuleReorganizationPreview {
+            rule_id,
+            proposed_directory: proposed_directory.to_owned(),
+            documents,
+        })
+    }
+
+    pub fn list_manual_move_candidates(
+        &self,
+        household_id: &str,
+        cabinet_root: impl AsRef<Path>,
+    ) -> Result<Vec<ManualMoveCandidate>, ConversationError> {
+        let cabinet_root = cabinet_root.as_ref();
+        self.list_document_arrivals(household_id)?
+            .into_iter()
+            .filter_map(|arrival| {
+                let filed = arrival.filed_original?;
+                if filed.final_path.exists() {
+                    return None;
+                }
+                let current_path = find_checksum_file(cabinet_root, &filed.checksum)?;
+                let relative = current_path.strip_prefix(cabinet_root).ok()?;
+                let current_destination = relative
+                    .iter()
+                    .map(|part| part.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                Some(Ok(ManualMoveCandidate {
+                    arrival_id: arrival.id,
+                    original_name: arrival.original_name,
+                    previous_destination: filed.filing_decision.cabinet_destination,
+                    current_destination,
+                }))
+            })
+            .collect()
+    }
+
+    pub fn record_manual_move_decision(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        cabinet_root: impl AsRef<Path>,
+        teaches_rule: bool,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let candidate = self
+            .list_manual_move_candidates(household_id, cabinet_root.as_ref())?
+            .into_iter()
+            .find(|candidate| candidate.arrival_id == arrival_id)
+            .ok_or(ConversationError::NotFound)?;
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        let filed = payload
+            .filed_original
+            .as_mut()
+            .ok_or(ConversationError::NotFound)?;
+        filed.final_path = cabinet_root.as_ref().join(&candidate.current_destination);
+        filed.filing_decision.file_name = Path::new(&candidate.current_destination)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(ConversationError::InvalidCabinetDestination)?
+            .to_owned();
+        filed.filing_decision.cabinet_destination = candidate.current_destination.clone();
+        let rule_id = payload
+            .learned_rule
+            .as_ref()
+            .map(|rule| rule.id)
+            .ok_or(ConversationError::NotFound)?;
+        let saved =
+            self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)?;
+        let (mut rule, _) = self.load_filing_rule(household_id, rule_id)?;
+        if teaches_rule {
+            rule.file_name = saved
+                .review_card
+                .filing_decision
+                .as_ref()
+                .ok_or(ConversationError::NotFound)?
+                .file_name
+                .clone();
+            rule.cabinet_destination = candidate.current_destination.clone();
+            self.save_filing_rule(
+                household_id,
+                rule_id,
+                &rule,
+                FilingRuleAuditKind::Updated,
+                "learned from the owner's manual Cabinet move",
+            )?;
+        } else {
+            self.insert_filing_rule_event(
+                household_id,
+                rule_id,
+                &rule,
+                FilingRuleAuditKind::Updated,
+                "kept as a one-off exception; Luna will not reverse the owner's move",
+            )?;
+        }
+        Ok(saved)
+    }
+
     pub fn dismiss_document_arrival(
         &self,
         household_id: &str,
@@ -1141,11 +1507,141 @@ impl<V: CredentialVault> ConversationStore<V> {
             .into_iter()
             .map(|protected| self.open_protected::<FilingRule>(household_id, &protected))
             .find_map(|result| match result {
-                Ok(rule) if filing_rule_matches(&rule, context, extracted_text) => Some(Ok(rule)),
+                Ok(rule)
+                    if !rule.paused
+                        && !rule.deleted
+                        && filing_rule_matches(&rule, context, extracted_text) =>
+                {
+                    Some(Ok(rule))
+                }
                 Ok(_) => None,
                 Err(error) => Some(Err(error)),
             })
             .transpose()
+    }
+
+    fn load_filing_rule(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+    ) -> Result<(FilingRule, String), ConversationError> {
+        let protected: Option<String> = self
+            .connect()?
+            .query_row(
+                "SELECT protected_payload FROM filing_rules
+                  WHERE id = ?1 AND household_id = ?2",
+                params![rule_id, household_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let protected = protected.ok_or(ConversationError::NotFound)?;
+        let mut rule: FilingRule = self.open_protected(household_id, &protected)?;
+        rule.id = rule_id;
+        Ok((rule, protected))
+    }
+
+    fn filing_rule_summary(
+        &self,
+        household_id: &str,
+        rule: FilingRule,
+    ) -> Result<FilingRuleSummary, ConversationError> {
+        let affected_documents = self
+            .list_document_arrivals(household_id)?
+            .into_iter()
+            .filter(|arrival| {
+                arrival
+                    .review_card
+                    .learned_rule
+                    .as_ref()
+                    .is_some_and(|learned| learned.id == rule.id)
+            })
+            .map(|arrival| arrival.original_name)
+            .collect();
+        Ok(FilingRuleSummary {
+            id: rule.id,
+            document_type: rule.document_type,
+            service_provider: rule.service_provider,
+            addressee: rule.addressee,
+            property: rule.property,
+            account: rule.account,
+            file_name: rule.file_name,
+            cabinet_destination: rule.cabinet_destination,
+            teacher: if rule.teacher.is_empty() {
+                "Member Direction".to_owned()
+            } else {
+                rule.teacher
+            },
+            created_at: rule.created_at,
+            paused: rule.paused,
+            deleted: rule.deleted,
+            affected_documents,
+        })
+    }
+
+    fn save_filing_rule(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+        rule: &FilingRule,
+        kind: FilingRuleAuditKind,
+        outcome: &str,
+    ) -> Result<(), ConversationError> {
+        let protected_rule = self.protect(household_id, rule)?;
+        let protected_event = self.protect(
+            household_id,
+            &FilingRuleAuditPayload {
+                kind,
+                subject: format!(
+                    "{} from {} for {}",
+                    rule.document_type, rule.service_provider, rule.addressee
+                ),
+                outcome: outcome.to_owned(),
+            },
+        )?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let updated = transaction.execute(
+            "UPDATE filing_rules SET protected_payload = ?1
+              WHERE id = ?2 AND household_id = ?3",
+            params![protected_rule, rule_id, household_id],
+        )?;
+        if updated == 0 {
+            return Err(ConversationError::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO filing_rule_events (household_id, rule_id, protected_payload)
+             VALUES (?1, ?2, ?3)",
+            params![household_id, rule_id, protected_event],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn insert_filing_rule_event(
+        &self,
+        household_id: &str,
+        rule_id: i64,
+        rule: &FilingRule,
+        kind: FilingRuleAuditKind,
+        outcome: &str,
+    ) -> Result<(), ConversationError> {
+        let protected_event = self.protect(
+            household_id,
+            &FilingRuleAuditPayload {
+                kind,
+                subject: format!(
+                    "{} from {} for {}",
+                    rule.document_type, rule.service_provider, rule.addressee
+                ),
+                outcome: outcome.to_owned(),
+            },
+        )?;
+        self.connect()?.execute(
+            "INSERT INTO filing_rule_events (household_id, rule_id, protected_payload)
+             VALUES (?1, ?2, ?3)",
+            params![household_id, rule_id, protected_event],
+        )?;
+        Ok(())
     }
 
     fn load_document_arrival_payload(
@@ -1381,6 +1877,28 @@ fn remove_empty_staging_directory(original_path: &Path) {
     }
 }
 
+fn find_checksum_file(root: &Path, checksum: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().is_some_and(|name| name == ".luna") {
+            continue;
+        }
+        if path.is_dir() {
+            if let Some(found) = find_checksum_file(&path, checksum) {
+                return Some(found);
+            }
+        } else if path.is_file()
+            && fs::read(&path)
+                .ok()
+                .is_some_and(|contents| sha256(&contents) == checksum)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
 fn detected_media_type(original: &[u8]) -> Result<&'static str, ConversationError> {
     if original.starts_with(b"%PDF-") {
         Ok("application/pdf")
@@ -1593,7 +2111,38 @@ fn filing_rule_from_payload(
         account: context.account.clone(),
         file_name: decision.file_name.clone(),
         cabinet_destination: decision.cabinet_destination.clone(),
+        teacher: "Member Direction".to_owned(),
+        created_at: current_timestamp(),
+        paused: false,
+        deleted: false,
     })
+}
+
+fn current_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_owned())
+}
+
+impl FilingRuleUpdate {
+    fn normalized(self) -> Self {
+        Self {
+            document_type: self.document_type.trim().to_owned(),
+            service_provider: self.service_provider.trim().to_owned(),
+            addressee: self.addressee.trim().to_owned(),
+            property: self
+                .property
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            account: self
+                .account
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            file_name: self.file_name.trim().to_owned(),
+            cabinet_destination: self.cabinet_destination.trim().to_owned(),
+        }
+    }
 }
 
 fn filing_rule_matches(
@@ -1871,6 +2420,21 @@ fn valid_cabinet_destination(cabinet_destination: &str, file_name: &str) -> bool
         && components
             .last()
             .is_some_and(|component| *component == file_name)
+        && components.iter().all(|component| {
+            !component.is_empty()
+                && *component != "."
+                && *component != ".."
+                && valid_path_component(component)
+        })
+}
+
+fn valid_rule_directory(directory: &str) -> bool {
+    if directory.is_empty() || directory.starts_with(['/', '\\']) || directory.contains('\\') {
+        return false;
+    }
+    let components = directory.split('/').collect::<Vec<_>>();
+    !components.is_empty()
+        && !components[0].eq_ignore_ascii_case("Incoming")
         && components.iter().all(|component| {
             !component.is_empty()
                 && *component != "."

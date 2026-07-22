@@ -9,7 +9,7 @@ use std::{
 use luna_core::{
     AuditAuthority, AuditEventKind, ConfidenceState, ContextField, ContextRelevanceDirection,
     ConversationStore, CredentialVault, DocumentContextDirection, DocumentProcessingState,
-    FilingDecisionDirection, LocalOcr, TrustedDeviceManager, VaultError,
+    FilingDecisionDirection, FilingRuleSummary, LocalOcr, TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -1812,4 +1812,211 @@ fn a_font_unsupported_pdf_still_provides_local_text_for_rule_matching() {
         .flat_map(char::to_lowercase)
         .collect::<String>();
     assert!(compact.contains("accountnumber"));
+}
+
+#[test]
+fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
+    let directory = tempfile::tempdir().expect("temporary rulebook directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("agl-july.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write bill");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bills")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach bill");
+    store
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("AGL Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: None,
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL Energy".to_owned(),
+                    explanation: "Supplies electricity to our home".to_owned(),
+                }),
+                property_relevance: Some(ContextRelevanceDirection {
+                    subject: "12 Seabreeze Avenue".to_owned(),
+                    explanation: "Our primary residence".to_owned(),
+                }),
+                ..Default::default()
+            },
+            "Household records",
+        )
+        .expect("record Member Direction");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill July 2026.pdf".to_owned(),
+                cabinet_destination:
+                    "Household records/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf"
+                        .to_owned(),
+            },
+        )
+        .expect("confirm Filing Decision");
+    let filed = store
+        .file_document("rivera-household", arrival.id, &cabinet)
+        .expect("file bill");
+
+    let rules: Vec<FilingRuleSummary> = store
+        .list_filing_rules("rivera-household")
+        .expect("list Filing Rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].teacher, "Member Direction");
+    assert!(!rules[0].created_at.is_empty());
+    assert_eq!(rules[0].affected_documents, vec![filed.original_name]);
+    assert_eq!(
+        rules[0].cabinet_destination,
+        filed
+            .review_card
+            .filing_decision
+            .expect("filed decision")
+            .cabinet_destination,
+    );
+
+    let updated = store
+        .update_filing_rule(
+            "rivera-household",
+            rules[0].id,
+            luna_core::FilingRuleUpdate {
+                document_type: "Electricity bill".to_owned(),
+                service_provider: "AGL Energy".to_owned(),
+                addressee: "Sam Rivera".to_owned(),
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                account: Some("12345678".to_owned()),
+                file_name: "AGL bill July 2026.pdf".to_owned(),
+                cabinet_destination:
+                    "Household records/12 Seabreeze Avenue/AGL/2026-updated/AGL bill July 2026.pdf"
+                        .to_owned(),
+            },
+        )
+        .expect("update Filing Rule");
+    assert_eq!(
+        updated.cabinet_destination,
+        "Household records/12 Seabreeze Avenue/AGL/2026-updated/AGL bill July 2026.pdf"
+    );
+    assert_eq!(updated.affected_documents, vec!["agl-july.pdf"]);
+    let preview = store
+        .preview_filing_rule_reorganization(
+            "rivera-household",
+            rules[0].id,
+            "Household records/12 Seabreeze Avenue/AGL/2027",
+        )
+        .expect("preview historical reorganisation");
+    assert_eq!(preview.documents.len(), 1);
+    assert_eq!(
+        preview.documents[0].current_destination,
+        "Household records/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf"
+    );
+    assert_eq!(
+        preview.documents[0].proposed_destination,
+        "Household records/12 Seabreeze Avenue/AGL/2027/AGL bill July 2026.pdf"
+    );
+
+    store
+        .pause_filing_rule("rivera-household", rules[0].id, true)
+        .expect("pause Filing Rule");
+    let paused_source = directory.path().join("agl-august-paused.pdf");
+    fs::write(
+        &paused_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write paused match");
+    assert_eq!(
+        store
+            .attach_document(
+                "rivera-household",
+                conversation.id,
+                &paused_source,
+                &cabinet,
+            )
+            .expect("attach paused match")
+            .processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+
+    store
+        .pause_filing_rule("rivera-household", rules[0].id, false)
+        .expect("resume Filing Rule");
+    let resumed_source = directory.path().join("agl-august-resumed.pdf");
+    fs::write(
+        &resumed_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write resumed match");
+    let resumed = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &resumed_source,
+            &cabinet,
+        )
+        .expect("attach resumed match");
+    assert_eq!(resumed.processing_state, DocumentProcessingState::Filed);
+    let moved_destination = cabinet.join("Household records/manual/AGL bill August 2026.pdf");
+    fs::create_dir_all(moved_destination.parent().expect("manual move directory"))
+        .expect("create manual move directory");
+    fs::rename(
+        resumed
+            .filed_original
+            .as_ref()
+            .expect("filed August bill")
+            .final_path
+            .clone(),
+        &moved_destination,
+    )
+    .expect("move filed Original manually");
+    let candidates = store
+        .list_manual_move_candidates("rivera-household", &cabinet)
+        .expect("list manual moves");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].current_destination,
+        "Household records/manual/AGL bill August 2026.pdf"
+    );
+    store
+        .record_manual_move_decision("rivera-household", resumed.id, &cabinet, false)
+        .expect("keep manual move as one-off");
+    assert!(store
+        .list_manual_move_candidates("rivera-household", &cabinet)
+        .expect("list resolved manual moves")
+        .is_empty());
+
+    let deleted = store
+        .delete_filing_rule("rivera-household", rules[0].id)
+        .expect("delete Filing Rule");
+    assert!(deleted.deleted);
+    let events = store
+        .list_filing_rule_audit_events("rivera-household")
+        .expect("list Filing Rule history");
+    assert_eq!(events.len(), 5);
+    assert_eq!(events[0].kind, luna_core::FilingRuleAuditKind::Deleted);
 }

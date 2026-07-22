@@ -90,6 +90,19 @@ describe("Luna Conversation desk", () => {
     await expect($(".history-event strong")).toHaveText("Document filed");
     await expect($(".history-event small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
 
+    await $("button[aria-label='Options']").click();
+    await expect($("section[aria-label='Learned Filing Rules']")).toBeDisplayed();
+    const learnedRule = $(".filing-rule-card");
+    await expect(learnedRule).toHaveText(expect.stringContaining("Electricity bill from AGL"));
+    await learnedRule.$("button=Edit rule").click();
+    await $("button=Preview historical impact").click();
+    await expect($("section[aria-label='Historical Filing Rule preview']")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
+    await $("button=Cancel").click();
+    await learnedRule.$("button=Pause rule").click();
+    await expect(learnedRule).toHaveText(expect.stringContaining("Paused rule"));
+    await learnedRule.$("button=Resume rule").click();
+    await expect(learnedRule).toHaveText(expect.stringContaining("Active rule"));
+
     await $("button[aria-label='Luna']").click();
     await expect($(".attachment-zone p")).toHaveText(
       "Drop a PDF, JPG, or PNG anywhere in Luna, or select a document.",

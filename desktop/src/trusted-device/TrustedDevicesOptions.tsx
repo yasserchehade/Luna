@@ -2,14 +2,18 @@ import { FormEvent, useEffect, useState } from "react";
 import type { AccountService, HouseholdSession, TrustedDeviceRecord } from "../account/accountService";
 import { RecoveryKeyReplacementOptions } from "./RecoveryKeyReplacementOptions";
 import type { TrustedDeviceService } from "./trustedDeviceService";
+import { FilingRulesOptions } from "../conversation/FilingRulesOptions";
+import type { ConversationService } from "../conversation/conversationService";
 
 export function TrustedDevicesOptions({
   accountService,
+  conversationService,
   onSignOut,
   session,
   trustedDeviceService,
 }: {
   accountService: AccountService;
+  conversationService: ConversationService;
   onSignOut: () => void | Promise<void>;
   session: HouseholdSession;
   trustedDeviceService: TrustedDeviceService;
@@ -95,6 +99,10 @@ export function TrustedDevicesOptions({
           </li>;
         })}
       </ul>
+      <FilingRulesOptions
+        conversationService={conversationService}
+        householdId={session.householdId}
+      />
       <RecoveryKeyReplacementOptions
         accountService={accountService}
         currentDevicePublicKey={currentPublicKey}

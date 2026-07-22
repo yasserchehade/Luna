@@ -14,6 +14,7 @@ import type {
   Conversation,
   ConversationService,
   FiledOriginal,
+  FilingRuleAuditEvent,
 } from "./conversation/conversationService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
@@ -55,6 +56,7 @@ export default function App({ accountService, cabinetService, conversationServic
   } | null>(null);
   const [filedOriginals, setFiledOriginals] = useState<FiledOriginal[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [filingRuleAuditEvents, setFilingRuleAuditEvents] = useState<FilingRuleAuditEvent[]>([]);
   const [documentSurfaceError, setDocumentSurfaceError] = useState("");
 
   const lockLuna = async () => {
@@ -186,7 +188,13 @@ export default function App({ accountService, cabinetService, conversationServic
     if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
     const request = activeDestination === "Cabinet"
       ? conversationService.listFiledOriginals(session.householdId).then(setFiledOriginals)
-      : conversationService.listAuditEvents(session.householdId).then(setAuditEvents);
+      : Promise.all([
+        conversationService.listAuditEvents(session.householdId),
+        conversationService.listFilingRuleAuditEvents(session.householdId),
+      ]).then(([events, ruleEvents]) => {
+        setAuditEvents(events);
+        setFilingRuleAuditEvents(ruleEvents);
+      });
     void request
       .then(() => setDocumentSurfaceError(""))
       .catch(() => setDocumentSurfaceError(`Luna could not open ${activeDestination}.`));
@@ -340,6 +348,7 @@ export default function App({ accountService, cabinetService, conversationServic
 
       {activeDestination === "Options" ? <TrustedDevicesOptions
         accountService={accountService}
+        conversationService={conversationService}
         onSignOut={() => signOut(session)}
         session={session}
         trustedDeviceService={trustedDeviceService}
@@ -364,13 +373,17 @@ export default function App({ accountService, cabinetService, conversationServic
         <header><div><small>Household history</small><h1>History</h1></div></header>
         <section className="messages">
           {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
-          {auditEvents.length === 0
+          {auditEvents.length === 0 && filingRuleAuditEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
-            : auditEvents.map((event) => <article className="history-event" key={event.id}>
+            : <>{auditEvents.map((event) => <article className="history-event" key={event.id}>
               <strong>{event.kind === "exactMatchHandledAutomatically" ? "Automatically filed by learned rule" : "Document filed"}</strong>
               <p>{event.subject}</p>
               <small>{event.outcome} · Verified SHA-256 {event.filedOriginal.checksum}</small>
-            </article>)}
+            </article>)}{filingRuleAuditEvents.map((event) => <article className="history-event rule-history-event" key={`rule-${event.id}`}>
+              <strong>{event.kind === "updated" ? "Filing Rule updated" : event.kind === "deleted" ? "Filing Rule deleted" : event.kind === "paused" ? "Filing Rule paused" : "Filing Rule resumed"}</strong>
+              <p>{event.subject}</p>
+              <small>{event.outcome}</small>
+            </article>)}</>}
         </section>
       </main> : <>
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
