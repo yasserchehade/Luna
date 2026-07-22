@@ -183,14 +183,14 @@ describe("Luna Conversation desk", () => {
     await $("button=Open Conversation item").click();
     await expect($("h1=Deleted Conversation")).toBeDisplayed();
     await expect($(".document-arrival[data-focused='true']")).toBeDisplayed();
-    await $(".document-arrival[data-focused='true']").$("button=Dismiss").click();
+    await $(".document-arrival[data-focused='true']").$("button=Discard new").click();
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
 
     await $("button[aria-label='New conversation']").click();
     await expect($("h1=New conversation")).toBeDisplayed();
     const matchingDocument = await browser.tauri.execute(({ core }) => (
-      core.invoke("select_e2e_context_document_file", { kind: "matching" })
+      core.invoke("select_e2e_context_document_file", { kind: "rule-match" })
     )) as string;
     await browser.execute((documentPath) => (
       window as unknown as {
@@ -204,7 +204,7 @@ describe("Luna Conversation desk", () => {
     }), matchingDocument);
     await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Filed");
     await $("button[aria-label='History']").click();
-    await expect($(".history-event strong")).toHaveText("Automatically filed by learned rule");
+    await expect($(".history-event:not(.duplicate-history-event):not(.rule-history-event) strong")).toHaveText("Automatically filed by learned rule");
     await $("button[aria-label='Luna']").click();
     await expect($(".document-arrival > div > p")).toHaveText("Filed");
     await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
@@ -226,5 +226,42 @@ describe("Luna Conversation desk", () => {
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $(".todo-list article").$("button=Dismiss").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
+  });
+
+  it("asks the Household Organiser to resolve an exact duplicate before filing it", async () => {
+    await onboardTestHousehold();
+    await $("button[aria-label='Luna']").click();
+    const attachMatchingDocument = async () => {
+      const documentPath = await browser.tauri.execute(({ core }) => (
+        core.invoke("select_e2e_context_document_file", { kind: "matching" })
+      )) as string;
+      await browser.execute((path) => (
+        window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke(command: string, args: object): Promise<void>;
+          };
+        }
+      ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+        event: "tauri://drag-drop",
+        payload: { paths: [path], position: { x: 40, y: 40 } },
+      }), documentPath);
+    };
+
+    await attachMatchingDocument();
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    await attachMatchingDocument();
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs duplicate decision");
+    await expect($("section[aria-label^='Duplicate review for']")).toBeDisplayed();
+    await expect($("section[aria-label^='Duplicate review for']")).toHaveText(expect.stringContaining("Exact byte duplicate"));
+    await expect($("button=Keep both")).toBeDisplayed();
+    await expect($("button=Link copies")).toBeDisplayed();
+    await expect($("button=Discard new")).toBeDisplayed();
+    await expect($("button=Updated version")).toBeDisplayed();
+    await $("button=Keep both").click();
+    await expect($("[aria-label='Duplicate resolution']")).toHaveText(expect.stringContaining("Kept both Originals"));
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    await $("button[aria-label='History']").click();
+    await expect($(".duplicate-history-event strong")).toHaveText("Duplicate decision recorded");
+    await expect($(".duplicate-history-event small")).toHaveText(expect.stringContaining("kept both Originals"));
   });
 });

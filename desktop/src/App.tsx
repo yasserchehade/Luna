@@ -13,6 +13,7 @@ import type {
   AuditEvent,
   Conversation,
   ConversationService,
+  DuplicateAuditEvent,
   FiledOriginal,
   FilingRuleAuditEvent,
 } from "./conversation/conversationService";
@@ -56,6 +57,7 @@ export default function App({ accountService, cabinetService, conversationServic
   } | null>(null);
   const [filedOriginals, setFiledOriginals] = useState<FiledOriginal[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [duplicateAuditEvents, setDuplicateAuditEvents] = useState<DuplicateAuditEvent[]>([]);
   const [filingRuleAuditEvents, setFilingRuleAuditEvents] = useState<FilingRuleAuditEvent[]>([]);
   const [documentSurfaceError, setDocumentSurfaceError] = useState("");
 
@@ -76,6 +78,9 @@ export default function App({ accountService, cabinetService, conversationServic
     setPendingTrustedSession(null);
     setRecentConversations([]);
     setActiveConversationId(null);
+    setAuditEvents([]);
+    setDuplicateAuditEvents([]);
+    setFilingRuleAuditEvents([]);
     setConversationSelectionRequest(null);
     setActiveDestination("Luna");
     setNewConversationRequest(0);
@@ -190,9 +195,11 @@ export default function App({ accountService, cabinetService, conversationServic
       ? conversationService.listFiledOriginals(session.householdId).then(setFiledOriginals)
       : Promise.all([
         conversationService.listAuditEvents(session.householdId),
+        conversationService.listDuplicateAuditEvents(session.householdId),
         conversationService.listFilingRuleAuditEvents(session.householdId),
-      ]).then(([events, ruleEvents]) => {
+      ]).then(([events, duplicateEvents, ruleEvents]) => {
         setAuditEvents(events);
+        setDuplicateAuditEvents(duplicateEvents);
         setFilingRuleAuditEvents(ruleEvents);
       });
     void request
@@ -373,9 +380,13 @@ export default function App({ accountService, cabinetService, conversationServic
         <header><div><small>Household history</small><h1>History</h1></div></header>
         <section className="messages">
           {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
-          {auditEvents.length === 0 && filingRuleAuditEvents.length === 0
+          {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && filingRuleAuditEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
-            : <>{auditEvents.map((event) => <article className="history-event" key={event.id}>
+            : <>{duplicateAuditEvents.map((event) => <article className="history-event duplicate-history-event" key={`duplicate-${event.id}`}>
+              <strong>{event.kind === "duplicatePreferenceApplied" ? "Duplicate preference applied" : "Duplicate decision recorded"}</strong>
+              <p>{event.subject}</p>
+              <small>{event.outcome}</small>
+            </article>)}{auditEvents.map((event) => <article className="history-event" key={event.id}>
               <strong>{event.kind === "exactMatchHandledAutomatically" ? "Automatically filed by learned rule" : "Document filed"}</strong>
               <p>{event.subject}</p>
               <small>{event.outcome} · Verified SHA-256 {event.filedOriginal.checksum}</small>

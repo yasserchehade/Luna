@@ -13,7 +13,9 @@ pub use conversation::{
     AuditAuthority, AuditEvent, AuditEventKind, ClarificationQuestion, ConfidenceState,
     ContextField, ContextRelevanceDirection, Conversation, ConversationError, ConversationMessage,
     ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
-    DocumentProcessingState, FiledOriginal, FilingDecisionDirection, FilingDecisionReview,
+    DocumentProcessingState, DuplicateAuditEvent, DuplicateAuditKind, DuplicateCandidate,
+    DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
+    FilingDecisionDirection, FilingDecisionReview,
     FilingRuleAuditEvent, FilingRuleAuditKind, FilingRuleReorganizationDocument,
     FilingRuleReorganizationPreview, FilingRuleSummary, FilingRuleUpdate, LocalOcr,
     ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
@@ -380,6 +382,36 @@ fn list_audit_events(
 }
 
 #[tauri::command]
+fn list_duplicate_audit_events(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<DuplicateAuditEvent>, String> {
+    store
+        .list_duplicate_audit_events(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_duplicate(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    arrival_id: i64,
+    related_arrival_id: i64,
+    decision: DuplicateDecision,
+    remember_preference: bool,
+) -> Result<DocumentArrival, String> {
+    store
+        .resolve_duplicate(
+            &household_id,
+            arrival_id,
+            related_arrival_id,
+            decision,
+            remember_preference,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn dismiss_document_arrival(
     store: State<'_, ConversationState>,
     household_id: String,
@@ -572,7 +604,8 @@ fn e2e_pdf_with_text(text: &str) -> Vec<u8> {
 #[tauri::command]
 fn select_e2e_context_document_file(kind: String) -> Result<String, String> {
     let text = match kind.as_str() {
-        "matching" => "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        "matching" => "Document Type: Electricity bill; Service Provider: Mercury Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        "rule-match" => "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-16",
         "changed-provider" => "Document Type: Electricity bill; Service Provider: Origin Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-09-15",
         _ => return Err("Unknown E2E context document kind.".to_owned()),
     };
@@ -968,6 +1001,8 @@ pub fn run() {
         list_todo_items,
         list_filed_originals,
         list_audit_events,
+        list_duplicate_audit_events,
+        resolve_duplicate,
         list_filing_rules,
         update_filing_rule,
         pause_filing_rule,
