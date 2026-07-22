@@ -32,6 +32,7 @@ describe("Luna Conversation desk", () => {
     await expect($(".conversation-title")).toHaveText("AGL electricity bill");
     await expect($(".conversation-list")).toBeDisplayed();
     await expect($(".conversation-list")).toHaveText(expect.stringContaining("AGL electricity bill"));
+    await expect((await $(".conversation-list button").getSize()).height).toBeLessThan(60);
     await $(".conversation-list button").click();
     await expect($("h1=AGL electricity bill")).toBeDisplayed();
 
