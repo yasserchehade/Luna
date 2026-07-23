@@ -4,10 +4,13 @@ import type {
   Conversation,
   ConversationMessage,
   ConversationService,
+  CloudConsentDecision,
+  CloudConsentScope,
   DocumentContextDirection,
   DocumentArrival,
   DuplicateDecision,
   FilingDecisionDirection,
+  IntelligenceProviderStatus,
   TodoItem,
 } from "./conversationService";
 
@@ -56,9 +59,74 @@ const duplicateResolutionLabels: Record<DuplicateDecision, string> = {
 
 type DocumentReviewEditorProps = {
   arrival: DocumentArrival;
+  conversationService: ConversationService;
+  householdId: string;
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
   onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
+};
+
+const cloudContextFields = [
+  "documentType",
+  "serviceProvider",
+  "serviceProviderRelevance",
+  "addressee",
+  "property",
+  "propertyRelevance",
+  "account",
+  "amount",
+  "relevantDates",
+] as const;
+
+const cloudEvidence = (arrival: DocumentArrival): Array<{ field: string; value: string }> => [
+  { field: "documentName", value: arrival.originalName },
+  { field: "mediaType", value: arrival.mediaType },
+  ...(arrival.extractedText ? [{ field: "extractedText", value: arrival.extractedText }] : []),
+  ...cloudContextFields.flatMap((field): Array<{ field: string; value: string }> => {
+    const context = arrival.reviewCard.context;
+    if (field === "relevantDates") {
+      const value = context.relevantDates.flatMap(({ value }) => value ? [value] : []).join(", ");
+      return value ? [{ field, value }] : [];
+    }
+    const value = context[field].value;
+    return value ? [{ field, value }] : [];
+  }),
+];
+
+const applyCloudFields = (
+  current: DocumentContextDirection,
+  fields: Record<string, string>,
+): DocumentContextDirection => {
+  const next = { ...current };
+  const assign = (field: "documentType" | "serviceProvider" | "addressee" | "property" | "account" | "amount", value: string | undefined) => {
+    const normalized = value?.trim();
+    if (!normalized) return;
+    next[field] = normalized;
+    next[`${field}Resolved`] = true;
+  };
+  assign("documentType", fields.documentType);
+  assign("serviceProvider", fields.serviceProvider);
+  assign("addressee", fields.addressee);
+  assign("property", fields.property);
+  assign("account", fields.account);
+  assign("amount", fields.amount);
+  if (fields.serviceProviderRelevance?.trim()) {
+    next.serviceProviderRelevance = {
+      subject: next.serviceProvider ?? "",
+      explanation: fields.serviceProviderRelevance.trim(),
+    };
+  }
+  if (fields.propertyRelevance?.trim()) {
+    next.propertyRelevance = {
+      subject: next.property ?? "",
+      explanation: fields.propertyRelevance.trim(),
+    };
+  }
+  if (fields.relevantDates?.trim()) {
+    next.relevantDates = fields.relevantDates.split(",").map((date) => date.trim()).filter(Boolean);
+    next.relevantDatesResolved = next.relevantDates.length > 0;
+  }
+  return next;
 };
 
 const directionFromReview = (arrival: DocumentArrival): DocumentContextDirection => {
@@ -98,6 +166,8 @@ const directionFromReview = (arrival: DocumentArrival): DocumentContextDirection
 
 function DocumentReviewEditor({
   arrival,
+  conversationService,
+  householdId,
   onConfirm,
   onRecord,
   onResolveDuplicate,
@@ -113,9 +183,28 @@ function DocumentReviewEditor({
     decision?.cabinetDestination ?? "",
   );
   const [rememberDuplicatePreference, setRememberDuplicatePreference] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(false);
+  const [cloudProviders, setCloudProviders] = useState<IntelligenceProviderStatus[]>([]);
+  const [cloudScopes, setCloudScopes] = useState<CloudConsentScope[]>([]);
+  const [cloudProviderId, setCloudProviderId] = useState("");
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudMessage, setCloudMessage] = useState("");
+  const [cloudError, setCloudError] = useState("");
   const clarificationQuestions = arrival.processingState === "needsMemberDirection"
     ? arrival.reviewCard.questions.filter(({ field }) => field !== "amount")
     : arrival.reviewCard.questions;
+  const unresolvedFields = arrival.reviewCard.questions.map(({ field }) => field);
+  const cloudScopeFields = Array.from(new Set([
+    ...unresolvedFields,
+    ...cloudEvidence(arrival).map(({ field }) => field),
+  ]));
+  const selectedCloudProvider = cloudProviders.find(({ descriptor }) => descriptor.id === cloudProviderId);
+  const existingCloudScope = cloudScopes.find((scope) => (
+    !scope.revoked
+    && scope.providerId === cloudProviderId
+    && scope.purpose === "document-evaluation"
+    && cloudScopeFields.every((field) => scope.fields.includes(field))
+  ));
 
   useEffect(() => {
     const refreshed = directionFromReview(arrival);
@@ -127,6 +216,74 @@ function DocumentReviewEditor({
     setFileName(decision?.fileName ?? "");
     setCabinetDestination(decision?.cabinetDestination ?? "");
   }, [decision]);
+
+  useEffect(() => {
+    setCloudOpen(false);
+    setCloudProviders([]);
+    setCloudScopes([]);
+    setCloudProviderId("");
+    setCloudMessage("");
+    setCloudError("");
+  }, [arrival.id]);
+
+  const openCloudAssistance = async () => {
+    setCloudOpen(true);
+    setCloudBusy(true);
+    setCloudError("");
+    try {
+      const [providers, scopes] = await Promise.all([
+        conversationService.listIntelligenceProviderStatuses(householdId),
+        conversationService.listCloudConsentScopes(householdId),
+      ]);
+      setCloudProviders(providers);
+      setCloudScopes(scopes);
+      setCloudProviderId((current) => current || providers.find(({ configured }) => configured)?.descriptor.id || providers[0]?.descriptor.id || "");
+    } catch (reason) {
+      setCloudError(String(reason));
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const askCloudProvider = async (consent: CloudConsentDecision) => {
+    if (!cloudProviderId) return;
+    setCloudBusy(true);
+    setCloudError("");
+    setCloudMessage("");
+    try {
+      const result = await conversationService.evaluateCloudRequest(
+        householdId,
+        {
+          purpose: "document-evaluation",
+          documentName: arrival.originalName,
+          mediaType: arrival.mediaType,
+          evidence: cloudEvidence(arrival),
+          unresolvedFields,
+        },
+        cloudProviderId,
+        consent,
+      );
+      const suggestedFields = Object.keys(result.fields);
+      if (suggestedFields.length === 0) {
+        setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The provider"} returned no usable suggestions. Luna kept this review local.`);
+      } else {
+        setDirection((current) => applyCloudFields(current, result.fields));
+        setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The provider"} suggested ${suggestedFields.join(", ")}. Review the fields, then save Household Context.`);
+      }
+      if (consent === "allowForScope") {
+        const scopes = await conversationService.listCloudConsentScopes(householdId);
+        setCloudScopes(scopes);
+      }
+    } catch (reason) {
+      if (consent === "keepLocal") {
+        setCloudMessage("Kept local. No document data was sent to a provider.");
+      } else {
+        setCloudError(String(reason));
+      }
+    } finally {
+      setCloudBusy(false);
+    }
+  };
 
   const setField = (
     field: "documentType" | "serviceProvider" | "addressee" | "property" | "account" | "amount",
@@ -207,6 +364,30 @@ function DocumentReviewEditor({
       <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
       <button type="submit">Save Household Context</button>
     </form>}
+    {arrival.processingState === "needsMemberDirection" && unresolvedFields.length > 0 && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
+      <div className="cloud-assistance-inline-heading">
+        <div><strong>Need help with these fields?</strong><small>Luna can ask a connected provider for suggestions. You review them before saving or filing.</small></div>
+        {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>Ask a provider</button>}
+      </div>
+      {cloudOpen && <div className="cloud-assistance-inline-panel">
+        {cloudBusy && <p className="muted">Preparing provider consent…</p>}
+        {!cloudBusy && <>
+          <label>Provider<select value={cloudProviderId} onChange={(event) => setCloudProviderId(event.target.value)}>
+            {cloudProviders.map(({ descriptor, configured }) => <option key={descriptor.id} value={descriptor.id}>{descriptor.name}{configured ? " · connected" : " · not connected"}</option>)}
+          </select></label>
+          {!selectedCloudProvider?.configured && <p className="muted">Connect this provider in Options before allowing it to evaluate a document.</p>}
+          <div className="cloud-assistance-inline-actions">
+            {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing consent</button>}
+            <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowOnce")}>Allow once</button>
+            <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowForScope")}>Allow future evaluations</button>
+            <button type="button" disabled={cloudBusy} onClick={() => cloudProviderId ? void askCloudProvider("keepLocal") : setCloudMessage("Kept local. No document data was sent to a provider.")}>Keep local</button>
+            <button type="button" onClick={() => setCloudOpen(false)}>Close</button>
+          </div>
+        </>}
+        {cloudMessage && <p className="cloud-assistance-inline-message">{cloudMessage}</p>}
+        {cloudError && <p role="alert" className="error">{cloudError}</p>}
+      </div>}
+    </section>}
     {clarificationQuestions.length > 0 && <div className="clarification-questions">
       <small>Luna still needs to know</small>
       {clarificationQuestions.map((question) => <p key={question.field}>{question.prompt}</p>)}
@@ -620,6 +801,8 @@ export function ConversationWorkspace({
           <small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p>
           <DocumentReviewEditor
             arrival={arrival}
+            conversationService={conversationService}
+            householdId={householdId}
             onConfirm={(direction) => confirmDecision(arrival.id, direction)}
             onRecord={(direction) => recordDirection(arrival.id, direction)}
             onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}

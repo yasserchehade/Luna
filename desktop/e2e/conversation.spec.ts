@@ -44,6 +44,12 @@ describe("Luna Conversation desk", () => {
     await expect($("label=Property relevance")).toBeDisplayed();
     const reviewCard = $(".document-arrival .review-card");
     await expect(reviewCard.$$("input[aria-label='Amount']")).toBeElementsArrayOfSize(1);
+    const cloudAssistance = $("section[aria-label='Cloud assistance for this document']");
+    await expect(cloudAssistance.$("button=Ask a provider")).toBeDisplayed();
+    await cloudAssistance.$("button=Ask a provider").click();
+    await expect(cloudAssistance.$("button=Keep local")).toBeDisplayed();
+    await cloudAssistance.$("button=Keep local").click();
+    await expect(cloudAssistance).toHaveText(expect.stringContaining("Kept local"));
     const clarificationPromptElements = await reviewCard.$$(".clarification-questions p");
     const clarificationPrompts: string[] = [];
     for (const prompt of clarificationPromptElements) clarificationPrompts.push(await prompt.getText());

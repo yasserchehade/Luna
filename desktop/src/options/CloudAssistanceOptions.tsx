@@ -6,6 +6,9 @@ import type {
 } from "../conversation/conversationService";
 
 const evaluationFields = [
+  "documentName",
+  "mediaType",
+  "extractedText",
   "documentType",
   "serviceProvider",
   "addressee",

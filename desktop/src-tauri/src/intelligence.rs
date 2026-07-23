@@ -9,7 +9,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -134,7 +134,12 @@ impl ProviderTransport for ReqwestProviderTransport {
         headers: &[(&str, String)],
         body: &serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError> {
-        let mut request = reqwest::blocking::Client::new().post(endpoint);
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|_| ProviderError::Unavailable)?;
+        let mut request = client.post(endpoint);
         for (name, value) in headers {
             request = request.header(*name, value);
         }
@@ -165,9 +170,8 @@ pub enum ProviderError {
     RequestRejected,
 }
 
-/// The first Luna-managed adapter. It is intentionally deterministic until a
-/// managed endpoint is configured; this keeps the consent and contract seam
-/// testable without silently choosing a vendor or sending household data.
+/// The local Luna-managed adapter. It is deterministic and does not require a
+/// credential, so the consent and contract seam remains usable offline.
 #[derive(Default)]
 pub struct LunaManagedProvider;
 
@@ -184,15 +188,18 @@ impl IntelligenceProvider for LunaManagedProvider {
     fn evaluate(
         &self,
         request: &IntelligenceRequest,
-        credential: Option<&[u8]>,
+        _credential: Option<&[u8]>,
     ) -> Result<IntelligenceResult, ProviderError> {
-        if credential.is_none() {
-            return Err(ProviderError::NotConfigured);
-        }
         let fields = request
             .evidence
             .iter()
-            .filter(|evidence| !evidence.value.trim().is_empty())
+            .filter(|evidence| {
+                !evidence.value.trim().is_empty()
+                    && request
+                        .unresolved_fields
+                        .iter()
+                        .any(|field| field == &evidence.field)
+            })
             .map(|evidence| (evidence.field.clone(), evidence.value.clone()))
             .collect::<BTreeMap<_, _>>();
         Ok(IntelligenceResult {
@@ -396,7 +403,16 @@ fn parse_provider_json(
     content: &str,
 ) -> Result<IntelligenceResult, ProviderError> {
     let fields = serde_json::from_str::<BTreeMap<String, String>>(content)
-        .map_err(|_| ProviderError::InvalidResult)?;
+        .map_err(|_| ProviderError::InvalidResult)?
+        .into_iter()
+        .filter(|(field, value)| {
+            request
+                .unresolved_fields
+                .iter()
+                .any(|allowed| allowed == field)
+                && !value.trim().is_empty()
+        })
+        .collect();
     Ok(IntelligenceResult {
         provider_id: provider_id.to_owned(),
         evidence: request.evidence.clone(),
@@ -517,11 +533,12 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         self.providers()
             .into_iter()
             .map(|descriptor| {
-                let configured = self
-                    .trusted_device
-                    .vault()
-                    .get_secret(&credential_key(household_id, &descriptor.id))?
-                    .is_some();
+                let configured = descriptor.id == MANAGED_PROVIDER_ID
+                    || self
+                        .trusted_device
+                        .vault()
+                        .get_secret(&credential_key(household_id, &descriptor.id))?
+                        .is_some();
                 Ok(IntelligenceProviderStatus {
                     descriptor,
                     configured,
@@ -647,7 +664,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                 household_id,
                 provider_id,
                 &request.purpose,
-                &request.unresolved_fields,
+                &consent_fields(request),
             )?,
             CloudConsentDecision::KeepLocal => false,
         };
@@ -670,7 +687,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                 household_id,
                 provider_id,
                 &request.purpose,
-                request.unresolved_fields.clone(),
+                consent_fields(request),
             )?;
         }
         let credential = self
@@ -838,6 +855,17 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
 fn credential_key(household_id: &str, provider_id: &str) -> String {
     format!("luna.cloud.{household_id}.{provider_id}")
 }
+
+fn consent_fields(request: &IntelligenceRequest) -> Vec<String> {
+    request
+        .unresolved_fields
+        .iter()
+        .chain(request.evidence.iter().map(|evidence| &evidence.field))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
 fn now() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -977,7 +1005,7 @@ mod tests {
             store.evaluate(
                 "household",
                 &request,
-                MANAGED_PROVIDER_ID,
+                OPENAI_PROVIDER_ID,
                 CloudConsentDecision::AllowOnce
             ),
             Err(IntelligenceError::ProviderFailure {
@@ -994,6 +1022,29 @@ mod tests {
             ),
             Err(IntelligenceError::KeptLocal)
         ));
+    }
+
+    #[test]
+    fn local_managed_provider_is_available_without_a_credential() {
+        let store = store();
+        let result = store
+            .evaluate(
+                "household",
+                &IntelligenceRequest {
+                    purpose: "document-evaluation".into(),
+                    document_name: "bill.pdf".into(),
+                    media_type: "application/pdf".into(),
+                    evidence: vec![IntelligenceEvidence {
+                        field: "documentType".into(),
+                        value: "bill".into(),
+                    }],
+                    unresolved_fields: vec!["documentType".into()],
+                },
+                MANAGED_PROVIDER_ID,
+                CloudConsentDecision::AllowOnce,
+            )
+            .unwrap();
+        assert_eq!(result.fields.get("documentType"), Some(&"bill".to_owned()));
     }
 
     #[test]
@@ -1021,6 +1072,23 @@ mod tests {
             store.evaluate(
                 "household",
                 &request,
+                MANAGED_PROVIDER_ID,
+                CloudConsentDecision::UseExistingScope,
+            ),
+            Err(IntelligenceError::ConsentRequired)
+        ));
+        let evidence_request = IntelligenceRequest {
+            evidence: vec![IntelligenceEvidence {
+                field: "extractedText".into(),
+                value: "private document text".into(),
+            }],
+            unresolved_fields: vec!["documentType".into()],
+            ..request.clone()
+        };
+        assert!(matches!(
+            store.evaluate(
+                "household",
+                &evidence_request,
                 MANAGED_PROVIDER_ID,
                 CloudConsentDecision::UseExistingScope,
             ),
@@ -1069,7 +1137,7 @@ mod tests {
             "test-model",
             Arc::new(MockTransport {
                 response: serde_json::json!({
-                    "choices": [{"message": {"content": "{\"serviceProvider\":\"AGL\"}"}}]
+                    "choices": [{"message": {"content": "{\"serviceProvider\":\"AGL\",\"account\":\"not-requested\"}"}}]
                 }),
             }),
         );
@@ -1082,13 +1150,13 @@ mod tests {
                 }),
             }),
         );
+        let openai_result = openai.evaluate(&request, Some(b"openai-key")).unwrap();
+        assert_eq!(openai_result.provider_id, OPENAI_PROVIDER_ID);
         assert_eq!(
-            openai
-                .evaluate(&request, Some(b"openai-key"))
-                .unwrap()
-                .provider_id,
-            OPENAI_PROVIDER_ID
+            openai_result.fields.get("serviceProvider"),
+            Some(&"AGL".to_owned())
         );
+        assert!(!openai_result.fields.contains_key("account"));
         assert_eq!(
             anthropic
                 .evaluate(&request, Some(b"anthropic-key"))

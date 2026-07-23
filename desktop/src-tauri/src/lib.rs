@@ -489,9 +489,16 @@ fn set_cloud_provider_credential(
 #[tauri::command]
 fn clear_cloud_provider_credential(
     store: State<'_, IntelligenceState>,
+    device: State<'_, DeviceManager>,
     household_id: String,
     provider_id: String,
 ) -> Result<(), String> {
+    if !device
+        .is_current_device_unlocked(&household_id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("Unlock this Trusted Device before changing provider credentials.".to_owned());
+    }
     store
         .clear_provider_credential(&household_id, &provider_id)
         .map_err(|error| error.to_string())

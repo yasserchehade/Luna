@@ -171,6 +171,16 @@ export type CloudConsentScope = {
   revoked: boolean;
 };
 
+export type CloudAssistanceAuditEvent = {
+  id: number;
+  householdId: string;
+  providerId: string;
+  purpose: string;
+  consent: CloudConsentDecision;
+  outcome: "completed" | "denied" | "waitingForConnectivity";
+  reason: string;
+};
+
 export type ManualMoveCandidate = {
   arrivalId: number;
   originalName: string;
@@ -280,6 +290,7 @@ export interface ConversationService {
   listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
   listAuditEvents(householdId: string): Promise<AuditEvent[]>;
   listDuplicateAuditEvents(householdId: string): Promise<DuplicateAuditEvent[]>;
+  listCloudAssistanceAuditEvents(householdId: string): Promise<CloudAssistanceAuditEvent[]>;
   resolveDuplicate(
     householdId: string,
     arrivalId: number,
@@ -365,6 +376,9 @@ export const tauriConversationService: ConversationService = {
   },
   listDuplicateAuditEvents(householdId) {
     return invoke<DuplicateAuditEvent[]>("list_duplicate_audit_events", { householdId });
+  },
+  listCloudAssistanceAuditEvents(householdId) {
+    return invoke<CloudAssistanceAuditEvent[]>("list_cloud_assistance_audit_events", { householdId });
   },
   resolveDuplicate(householdId, arrivalId, relatedArrivalId, decision, rememberPreference) {
     return invoke<DocumentArrival>("resolve_duplicate", {
