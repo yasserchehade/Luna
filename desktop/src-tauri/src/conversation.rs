@@ -1747,6 +1747,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                     arrival.processing_state,
                     DocumentProcessingState::ReadyToFile
                         | DocumentProcessingState::Filing
+                        | DocumentProcessingState::CabinetUnavailable
                         | DocumentProcessingState::Filed
                 )
             })

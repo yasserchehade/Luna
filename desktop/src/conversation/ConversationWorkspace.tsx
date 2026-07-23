@@ -741,7 +741,7 @@ export function ConversationWorkspace({
       <section className="todo-list" aria-label="To-do Items">
         {todos.length === 0 && <p className="empty-state">Nothing needs your attention.</p>}
         {todos.map((todo) => <article key={todo.arrivalId} data-arrival-id={todo.arrivalId}>
-          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : "Needs your direction"}</p></div>
+          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : todo.processingState === "waitingForConnectivity" ? "Waiting for provider" : "Needs your direction"}</p></div>
           <div>
             <button type="button" onClick={() => void openTodo(todo)}>Open Conversation item</button>
             {todo.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>}

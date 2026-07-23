@@ -1361,9 +1361,15 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         1
     );
 
-    let filed = store
-        .file_document("rivera-household", ready.id, &cabinet)
+    store
+        .resume_document_filings("rivera-household", &cabinet)
         .expect("retry after Cabinet returns");
+    let filed = store
+        .list_document_arrivals("rivera-household")
+        .expect("list retried filing")
+        .into_iter()
+        .find(|arrival| arrival.id == ready.id)
+        .expect("retried arrival");
     assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
     assert!(!ready.original_path.exists());
 }
