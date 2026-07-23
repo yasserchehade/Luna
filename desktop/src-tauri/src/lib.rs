@@ -1,6 +1,7 @@
 mod account_session;
 mod cabinet;
 mod conversation;
+mod intelligence;
 mod settings;
 mod trusted_device;
 
@@ -15,10 +16,15 @@ pub use conversation::{
     ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
     DocumentProcessingState, DuplicateAuditEvent, DuplicateAuditKind, DuplicateCandidate,
     DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
-    FilingDecisionDirection, FilingDecisionReview,
-    FilingRuleAuditEvent, FilingRuleAuditKind, FilingRuleReorganizationDocument,
-    FilingRuleReorganizationPreview, FilingRuleSummary, FilingRuleUpdate, LocalOcr,
-    ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    FilingDecisionDirection, FilingDecisionReview, FilingRuleAuditEvent, FilingRuleAuditKind,
+    FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
+    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
+    TesseractOcr, TodoItem,
+};
+pub use intelligence::{
+    CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
+    CloudIntelligenceStore, IntelligenceEvidence, IntelligenceProviderDescriptor,
+    IntelligenceRequest, IntelligenceResult, LunaManagedProvider, ProviderError,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -53,6 +59,11 @@ type CabinetState = CabinetManager;
 type ConversationState = ConversationStore<OsCredentialVault>;
 #[cfg(feature = "e2e")]
 type ConversationState = ConversationStore<E2eCredentialVault>;
+
+#[cfg(not(feature = "e2e"))]
+type IntelligenceState = CloudIntelligenceStore<OsCredentialVault>;
+#[cfg(feature = "e2e")]
+type IntelligenceState = CloudIntelligenceStore<E2eCredentialVault>;
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -388,6 +399,87 @@ fn list_duplicate_audit_events(
 ) -> Result<Vec<DuplicateAuditEvent>, String> {
     store
         .list_duplicate_audit_events(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_intelligence_providers(
+    store: State<'_, IntelligenceState>,
+) -> Vec<IntelligenceProviderDescriptor> {
+    store.providers()
+}
+
+#[tauri::command]
+fn list_cloud_consent_scopes(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+) -> Result<Vec<CloudConsentScope>, String> {
+    store
+        .list_consent_scopes(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn grant_cloud_consent_scope(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+    provider_id: String,
+    purpose: String,
+    fields: Vec<String>,
+) -> Result<CloudConsentScope, String> {
+    store
+        .grant_scope(&household_id, &provider_id, &purpose, fields)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn revoke_cloud_consent_scope(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+    scope_id: i64,
+) -> Result<(), String> {
+    store
+        .revoke_scope(&household_id, scope_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_cloud_provider_credential(
+    store: State<'_, IntelligenceState>,
+    device: State<'_, DeviceManager>,
+    household_id: String,
+    provider_id: String,
+    credential: String,
+) -> Result<(), String> {
+    if !device
+        .is_current_device_unlocked(&household_id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("Unlock this Trusted Device before changing provider credentials.".to_owned());
+    }
+    store
+        .set_provider_credential(&household_id, &provider_id, credential.as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_cloud_provider_credential(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+    provider_id: String,
+) -> Result<(), String> {
+    store
+        .clear_provider_credential(&household_id, &provider_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_cloud_assistance_audit_events(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+) -> Result<Vec<CloudAssistanceAuditEvent>, String> {
+    store
+        .list_audit_events(&household_id)
         .map_err(|error| error.to_string())
 }
 
@@ -964,6 +1056,10 @@ pub fn run() {
             let trusted_device =
                 TrustedDeviceManager::new(OsCredentialVault::new("app.luna.household"));
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
+            app.manage(CloudIntelligenceStore::open(
+                &database,
+                trusted_device.clone(),
+            )?);
             app.manage(trusted_device);
         }
         #[cfg(not(feature = "e2e"))]
@@ -974,6 +1070,10 @@ pub fn run() {
         {
             let trusted_device = TrustedDeviceManager::new(E2eCredentialVault::default());
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
+            app.manage(CloudIntelligenceStore::open(
+                &database,
+                trusted_device.clone(),
+            )?);
             app.manage(trusted_device);
         }
         #[cfg(feature = "e2e")]
@@ -1002,6 +1102,13 @@ pub fn run() {
         list_filed_originals,
         list_audit_events,
         list_duplicate_audit_events,
+        list_intelligence_providers,
+        list_cloud_consent_scopes,
+        grant_cloud_consent_scope,
+        revoke_cloud_consent_scope,
+        set_cloud_provider_credential,
+        clear_cloud_provider_credential,
+        list_cloud_assistance_audit_events,
         resolve_duplicate,
         list_filing_rules,
         update_filing_rule,

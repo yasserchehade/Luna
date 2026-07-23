@@ -133,6 +133,22 @@ export type DuplicateAuditEvent = {
   relatedArrivalId: number;
 };
 
+export type IntelligenceProviderDescriptor = {
+  id: string;
+  name: string;
+  description: string;
+};
+
+export type CloudConsentScope = {
+  id: number;
+  householdId: string;
+  providerId: string;
+  purpose: string;
+  fields: string[];
+  createdAt: string;
+  revoked: boolean;
+};
+
 export type ManualMoveCandidate = {
   arrivalId: number;
   originalName: string;
@@ -268,6 +284,10 @@ export interface ConversationService {
     arrivalId: number,
     direction: FilingDecisionDirection,
   ): Promise<DocumentArrival>;
+  listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
+  listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
+  grantCloudConsentScope(householdId: string, providerId: string, purpose: string, fields: string[]): Promise<CloudConsentScope>;
+  revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
 }
 
 export const tauriConversationService: ConversationService = {
@@ -377,5 +397,22 @@ export const tauriConversationService: ConversationService = {
       arrivalId,
       direction,
     });
+  },
+  listIntelligenceProviders() {
+    return invoke<IntelligenceProviderDescriptor[]>("list_intelligence_providers");
+  },
+  listCloudConsentScopes(householdId) {
+    return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
+  },
+  grantCloudConsentScope(householdId, providerId, purpose, fields) {
+    return invoke<CloudConsentScope>("grant_cloud_consent_scope", {
+      householdId,
+      providerId,
+      purpose,
+      fields,
+    });
+  },
+  revokeCloudConsentScope(householdId, scopeId) {
+    return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
   },
 };

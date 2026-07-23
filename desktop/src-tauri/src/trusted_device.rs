@@ -164,6 +164,13 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         }
     }
 
+    /// Returns a clone of the OS-backed credential vault handle. Callers use
+    /// this only for provider credentials; protected Household state still
+    /// goes through this manager's encryption boundary.
+    pub fn vault(&self) -> V {
+        self.vault.clone()
+    }
+
     pub fn is_current_device_trusted(
         &self,
         household_id: &str,
