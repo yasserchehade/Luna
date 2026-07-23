@@ -148,7 +148,12 @@ impl ProviderTransport for ReqwestProviderTransport {
             .send()
             .map_err(|_| ProviderError::Unavailable)?;
         if !response.status().is_success() {
-            return Err(ProviderError::RequestRejected);
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(ProviderError::RequestRejected(provider_error_message(
+                status.as_u16(),
+                &body,
+            )));
         }
         response
             .json::<serde_json::Value>()
@@ -166,8 +171,58 @@ pub enum ProviderError {
     InvalidResult,
     #[error("the provider credential is invalid")]
     InvalidCredential,
-    #[error("the provider rejected the request")]
-    RequestRejected,
+    #[error("the provider rejected the request: {0}")]
+    RequestRejected(String),
+}
+
+/// Extracts a useful, bounded diagnostic from a provider's error response.
+///
+/// Provider responses can contain request details or key-like values. Only the
+/// documented error message/type/code are surfaced, and known API-key prefixes
+/// are redacted before the text reaches the UI or audit event.
+fn provider_error_message(status: u16, body: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    let error = parsed.as_ref().and_then(|value| value.get("error"));
+    let message = error
+        .and_then(|value| value.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            error
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            error
+                .and_then(|value| value.get("code"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("");
+    let message = redact_secret_like_text(message);
+    if message.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        format!("HTTP {status}: {message}")
+    }
+}
+
+fn redact_secret_like_text(value: &str) -> String {
+    let mut redacted = value.to_owned();
+    for prefix in ["sk-proj-", "sk-ant-", "sk-"] {
+        loop {
+            let Some(start) = redacted.find(prefix) else {
+                break;
+            };
+            let end = redacted[start..]
+                .find(|character: char| {
+                    character.is_whitespace()
+                        || matches!(character, '"' | '\'' | ')' | ']' | ',' | '.' | ';')
+                })
+                .map(|offset| start + offset)
+                .unwrap_or(redacted.len());
+            redacted.replace_range(start..end, "[redacted]");
+        }
+    }
+    redacted.chars().take(240).collect()
 }
 
 /// The local Luna-managed adapter. It is deterministic and does not require a
@@ -1163,6 +1218,27 @@ mod tests {
                 .unwrap()
                 .provider_id,
             ANTHROPIC_PROVIDER_ID
+        );
+    }
+
+    #[test]
+    fn provider_error_message_preserves_actionable_diagnostics_without_secrets() {
+        let message = provider_error_message(
+            429,
+            r#"{"error":{"message":"You exceeded your current quota for sk-proj-secret-value.","type":"insufficient_quota","code":"insufficient_quota"}}"#,
+        );
+        assert_eq!(
+            message,
+            "HTTP 429: You exceeded your current quota for [redacted]."
+        );
+        assert!(!message.contains("sk-proj-secret-value"));
+    }
+
+    #[test]
+    fn provider_error_message_falls_back_to_status_for_unstructured_errors() {
+        assert_eq!(
+            provider_error_message(502, "upstream unavailable"),
+            "HTTP 502"
         );
     }
 }
