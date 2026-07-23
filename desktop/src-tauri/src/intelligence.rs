@@ -155,9 +155,9 @@ impl ProviderTransport for ReqwestProviderTransport {
                 &body,
             )));
         }
-        response
-            .json::<serde_json::Value>()
-            .map_err(|_| ProviderError::InvalidResult)
+        response.json::<serde_json::Value>().map_err(|_| {
+            ProviderError::InvalidResult("response body was not valid JSON".to_owned())
+        })
     }
 }
 
@@ -167,8 +167,8 @@ pub enum ProviderError {
     NotConfigured,
     #[error("the provider is unavailable")]
     Unavailable,
-    #[error("the provider returned an invalid result")]
-    InvalidResult,
+    #[error("the provider returned an invalid result: {0}")]
+    InvalidResult(String),
     #[error("the provider credential is invalid")]
     InvalidCredential,
     #[error("the provider rejected the request: {0}")]
@@ -434,7 +434,21 @@ fn parse_chat_completion(
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
         .and_then(serde_json::Value::as_str)
-        .ok_or(ProviderError::InvalidResult)?;
+        .ok_or_else(|| {
+            let refusal = response
+                .get("choices")
+                .and_then(|choices| choices.get(0))
+                .and_then(|choice| choice.get("message"))
+                .and_then(|message| message.get("refusal"))
+                .and_then(serde_json::Value::as_str);
+            ProviderError::InvalidResult(match refusal {
+                Some(refusal) => format!(
+                    "the provider refused to return fields: {}",
+                    redact_secret_like_text(refusal)
+                ),
+                None => "response did not contain assistant text".to_owned(),
+            })
+        })?;
     parse_provider_json(provider_id, request, content)
 }
 
@@ -448,7 +462,9 @@ fn parse_anthropic_response(
         .and_then(|content| content.get(0))
         .and_then(|block| block.get("text"))
         .and_then(serde_json::Value::as_str)
-        .ok_or(ProviderError::InvalidResult)?;
+        .ok_or_else(|| {
+            ProviderError::InvalidResult("response did not contain assistant text".to_owned())
+        })?;
     parse_provider_json(provider_id, request, content)
 }
 
@@ -457,22 +473,51 @@ fn parse_provider_json(
     request: &IntelligenceRequest,
     content: &str,
 ) -> Result<IntelligenceResult, ProviderError> {
-    let fields = serde_json::from_str::<BTreeMap<String, String>>(content)
-        .map_err(|_| ProviderError::InvalidResult)?
-        .into_iter()
-        .filter(|(field, value)| {
-            request
-                .unresolved_fields
-                .iter()
-                .any(|allowed| allowed == field)
-                && !value.trim().is_empty()
-        })
-        .collect();
+    let fields = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+        normalized_json_content(content),
+    )
+    .map_err(|_| ProviderError::InvalidResult("assistant text was not a JSON object".to_owned()))?
+    .into_iter()
+    .filter_map(|(field, value)| scalar_text(&value).map(|value| (field, value)))
+    .filter(|(field, value)| {
+        request
+            .unresolved_fields
+            .iter()
+            .any(|allowed| allowed == field)
+            && !value.trim().is_empty()
+    })
+    .collect();
     Ok(IntelligenceResult {
         provider_id: provider_id.to_owned(),
         evidence: request.evidence.clone(),
         fields,
     })
+}
+
+fn normalized_json_content(content: &str) -> &str {
+    let trimmed = content.trim();
+    let Some(fenced) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let fenced = fenced
+        .strip_prefix("json")
+        .or_else(|| fenced.strip_prefix("JSON"))
+        .unwrap_or(fenced)
+        .trim_start();
+    fenced.strip_suffix("```").unwrap_or(fenced).trim()
+}
+
+fn scalar_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Array(values) => {
+            let values = values.iter().filter_map(scalar_text).collect::<Vec<_>>();
+            (!values.is_empty()).then(|| values.join(", "))
+        }
+        serde_json::Value::Null | serde_json::Value::Object(_) => None,
+    }
 }
 
 #[derive(Debug, Error)]
@@ -1185,14 +1230,14 @@ mod tests {
                 field: "documentType".into(),
                 value: "bill".into(),
             }],
-            unresolved_fields: vec!["serviceProvider".into()],
+            unresolved_fields: vec!["serviceProvider".into(), "amount".into()],
         };
         let openai = OpenAiProvider::new(
             "https://example.invalid/openai",
             "test-model",
             Arc::new(MockTransport {
                 response: serde_json::json!({
-                    "choices": [{"message": {"content": "{\"serviceProvider\":\"AGL\",\"account\":\"not-requested\"}"}}]
+                    "choices": [{"message": {"content": "```json\n{\"serviceProvider\":\"AGL\",\"amount\":42.5,\"account\":\"not-requested\"}\n```"}}]
                 }),
             }),
         );
@@ -1211,6 +1256,7 @@ mod tests {
             openai_result.fields.get("serviceProvider"),
             Some(&"AGL".to_owned())
         );
+        assert_eq!(openai_result.fields.get("amount"), Some(&"42.5".to_owned()));
         assert!(!openai_result.fields.contains_key("account"));
         assert_eq!(
             anthropic
