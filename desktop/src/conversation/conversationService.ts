@@ -137,7 +137,29 @@ export type IntelligenceProviderDescriptor = {
   id: string;
   name: string;
   description: string;
+  authUrl: string | null;
 };
+
+export type IntelligenceProviderStatus = {
+  descriptor: IntelligenceProviderDescriptor;
+  configured: boolean;
+};
+
+export type IntelligenceRequest = {
+  purpose: string;
+  documentName: string;
+  mediaType: string;
+  evidence: Array<{ field: string; value: string }>;
+  unresolvedFields: string[];
+};
+
+export type IntelligenceResult = {
+  providerId: string;
+  fields: Record<string, string>;
+  evidence: Array<{ field: string; value: string }>;
+};
+
+export type CloudConsentDecision = "allowOnce" | "allowForScope" | "keepLocal" | "useExistingScope";
 
 export type CloudConsentScope = {
   id: number;
@@ -285,9 +307,13 @@ export interface ConversationService {
     direction: FilingDecisionDirection,
   ): Promise<DocumentArrival>;
   listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
+  listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
   grantCloudConsentScope(householdId: string, providerId: string, purpose: string, fields: string[]): Promise<CloudConsentScope>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
+  setCloudProviderCredential(householdId: string, providerId: string, credential: string): Promise<void>;
+  clearCloudProviderCredential(householdId: string, providerId: string): Promise<void>;
+  evaluateCloudRequest(householdId: string, request: IntelligenceRequest, providerId: string, consent: CloudConsentDecision): Promise<IntelligenceResult>;
 }
 
 export const tauriConversationService: ConversationService = {
@@ -401,6 +427,9 @@ export const tauriConversationService: ConversationService = {
   listIntelligenceProviders() {
     return invoke<IntelligenceProviderDescriptor[]>("list_intelligence_providers");
   },
+  listIntelligenceProviderStatuses(householdId) {
+    return invoke<IntelligenceProviderStatus[]>("list_intelligence_provider_statuses", { householdId });
+  },
   listCloudConsentScopes(householdId) {
     return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
   },
@@ -414,5 +443,14 @@ export const tauriConversationService: ConversationService = {
   },
   revokeCloudConsentScope(householdId, scopeId) {
     return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
+  },
+  setCloudProviderCredential(householdId, providerId, credential) {
+    return invoke("set_cloud_provider_credential", { householdId, providerId, credential });
+  },
+  clearCloudProviderCredential(householdId, providerId) {
+    return invoke("clear_cloud_provider_credential", { householdId, providerId });
+  },
+  evaluateCloudRequest(householdId, request, providerId, consent) {
+    return invoke<IntelligenceResult>("evaluate_cloud_request", { householdId, request, providerId, consent });
   },
 };

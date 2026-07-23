@@ -24,7 +24,8 @@ pub use conversation::{
 pub use intelligence::{
     CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
     CloudIntelligenceStore, IntelligenceEvidence, IntelligenceProviderDescriptor,
-    IntelligenceRequest, IntelligenceResult, LunaManagedProvider, ProviderError,
+    IntelligenceProviderStatus, IntelligenceRequest, IntelligenceResult, LunaManagedProvider,
+    ProviderError,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -407,6 +408,29 @@ fn list_intelligence_providers(
     store: State<'_, IntelligenceState>,
 ) -> Vec<IntelligenceProviderDescriptor> {
     store.providers()
+}
+
+#[tauri::command]
+fn list_intelligence_provider_statuses(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+) -> Result<Vec<IntelligenceProviderStatus>, String> {
+    store
+        .provider_statuses(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn evaluate_cloud_request(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+    request: IntelligenceRequest,
+    provider_id: String,
+    consent: CloudConsentDecision,
+) -> Result<IntelligenceResult, String> {
+    store
+        .evaluate(&household_id, &request, &provider_id, consent)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1103,6 +1127,8 @@ pub fn run() {
         list_audit_events,
         list_duplicate_audit_events,
         list_intelligence_providers,
+        list_intelligence_provider_statuses,
+        evaluate_cloud_request,
         list_cloud_consent_scopes,
         grant_cloud_consent_scope,
         revoke_cloud_consent_scope,

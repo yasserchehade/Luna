@@ -1,24 +1,66 @@
 import { useEffect, useState } from "react";
-import type { CloudConsentScope, ConversationService } from "../conversation/conversationService";
+import type {
+  CloudConsentScope,
+  ConversationService,
+  IntelligenceProviderStatus,
+} from "../conversation/conversationService";
+
+const evaluationFields = [
+  "documentType",
+  "serviceProvider",
+  "addressee",
+  "property",
+  "account",
+  "amount",
+  "relevantDates",
+];
 
 export function CloudAssistanceOptions({ conversationService, householdId }: { conversationService: ConversationService; householdId: string }) {
+  const [providers, setProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [scopes, setScopes] = useState<CloudConsentScope[]>([]);
-  const [provider, setProvider] = useState<{ id: string; name: string } | null>(null);
+  const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
 
-  const refresh = () => conversationService.listCloudConsentScopes(householdId).then(setScopes).catch((reason) => setError(String(reason)));
-  useEffect(() => {
-    void refresh();
-    void conversationService.listIntelligenceProviders().then((providers) => {
-      if (providers[0]) setProvider({ id: providers[0].id, name: providers[0].name });
-    }).catch(() => undefined);
-  }, [conversationService, householdId]);
-
-  const grant = async () => {
-    setError("");
+  const refresh = async () => {
     try {
-      if (!provider) return;
-      await conversationService.grantCloudConsentScope(householdId, provider.id, "document-evaluation", ["documentType", "serviceProvider", "addressee", "property", "account", "amount", "relevantDates"]);
+      const [providerStatuses, consentScopes] = await Promise.all([
+        conversationService.listIntelligenceProviderStatuses(householdId),
+        conversationService.listCloudConsentScopes(householdId),
+      ]);
+      setProviders(providerStatuses);
+      setScopes(consentScopes);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  useEffect(() => { void refresh(); }, [conversationService, householdId]);
+
+  const saveCredential = async (providerId: string) => {
+    const credential = credentialDrafts[providerId]?.trim();
+    if (!credential) return;
+    try {
+      await conversationService.setCloudProviderCredential(householdId, providerId, credential);
+      setCredentialDrafts((current) => ({ ...current, [providerId]: "" }));
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  const clearCredential = async (providerId: string) => {
+    try {
+      await conversationService.clearCloudProviderCredential(householdId, providerId);
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  const grant = async (providerId: string) => {
+    try {
+      await conversationService.grantCloudConsentScope(householdId, providerId, "document-evaluation", evaluationFields);
       await refresh();
     } catch (reason) {
       setError(String(reason));
@@ -26,7 +68,6 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
   };
 
   const revoke = async (scopeId: number) => {
-    setError("");
     try {
       await conversationService.revokeCloudConsentScope(householdId, scopeId);
       await refresh();
@@ -37,11 +78,21 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
 
   return <section className="cloud-assistance-options" aria-label="Cloud assistance">
     <h2>Cloud assistance</h2>
-    <p className="muted">Luna stays local by default. A scoped grant is limited to one named provider and purpose, and can be revoked here.</p>
-    <div className="cloud-provider-card">
-      <strong>{provider?.name ?? "No provider available"}</strong>
-      <span>Document evaluation</span>
-      <button type="button" disabled={!provider} onClick={() => void grant}>Allow future document evaluations</button>
+    <p className="muted">Luna stays local by default. Bring your own provider key; it is kept in this device&apos;s credential vault and never written to Household history.</p>
+    <div className="cloud-provider-list">
+      {providers.map(({ descriptor, configured }) => <article className="cloud-provider-card" key={descriptor.id}>
+        <div className="cloud-provider-heading">
+          <div><strong>{descriptor.name}</strong><span>{descriptor.description}</span></div>
+          <small>{configured ? "Connected" : "Not connected"}</small>
+        </div>
+        {descriptor.authUrl && <a href={descriptor.authUrl} target="_blank" rel="noreferrer">Open {descriptor.name} API keys</a>}
+        {descriptor.authUrl && !configured && <div className="cloud-credential-entry">
+          <label>API key<input type="password" value={credentialDrafts[descriptor.id] ?? ""} onChange={(event) => setCredentialDrafts((current) => ({ ...current, [descriptor.id]: event.target.value }))} autoComplete="off" /></label>
+          <button type="button" disabled={!credentialDrafts[descriptor.id]?.trim()} onClick={() => void saveCredential(descriptor.id)}>Save in vault</button>
+        </div>}
+        {descriptor.authUrl && configured && <button type="button" onClick={() => void clearCredential(descriptor.id)}>Disconnect and remove key</button>}
+        <button type="button" onClick={() => void grant(descriptor.id)}>Allow future document evaluations</button>
+      </article>)}
     </div>
     <h3>Consent scopes</h3>
     {scopes.length === 0

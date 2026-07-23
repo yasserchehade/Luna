@@ -22,6 +22,8 @@ use crate::trusted_device::{
 
 const MANAGED_PROVIDER_ID: &str = "luna-managed";
 const MANAGED_PROVIDER_NAME: &str = "Luna-managed provider";
+const OPENAI_PROVIDER_ID: &str = "openai";
+const ANTHROPIC_PROVIDER_ID: &str = "anthropic";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +31,14 @@ pub struct IntelligenceProviderDescriptor {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub auth_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntelligenceProviderStatus {
+    pub descriptor: IntelligenceProviderDescriptor,
+    pub configured: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +116,41 @@ pub trait IntelligenceProvider: Send + Sync {
     ) -> Result<IntelligenceResult, ProviderError>;
 }
 
+trait ProviderTransport: Send + Sync {
+    fn post_json(
+        &self,
+        endpoint: &str,
+        headers: &[(&str, String)],
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError>;
+}
+
+struct ReqwestProviderTransport;
+
+impl ProviderTransport for ReqwestProviderTransport {
+    fn post_json(
+        &self,
+        endpoint: &str,
+        headers: &[(&str, String)],
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let mut request = reqwest::blocking::Client::new().post(endpoint);
+        for (name, value) in headers {
+            request = request.header(*name, value);
+        }
+        let response = request
+            .json(body)
+            .send()
+            .map_err(|_| ProviderError::Unavailable)?;
+        if !response.status().is_success() {
+            return Err(ProviderError::RequestRejected);
+        }
+        response
+            .json::<serde_json::Value>()
+            .map_err(|_| ProviderError::InvalidResult)
+    }
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ProviderError {
     #[error("the provider is not configured")]
@@ -114,6 +159,10 @@ pub enum ProviderError {
     Unavailable,
     #[error("the provider returned an invalid result")]
     InvalidResult,
+    #[error("the provider credential is invalid")]
+    InvalidCredential,
+    #[error("the provider rejected the request")]
+    RequestRejected,
 }
 
 /// The first Luna-managed adapter. It is intentionally deterministic until a
@@ -128,6 +177,7 @@ impl IntelligenceProvider for LunaManagedProvider {
             id: MANAGED_PROVIDER_ID.to_owned(),
             name: MANAGED_PROVIDER_NAME.to_owned(),
             description: "A Luna-managed structured reasoning provider.".to_owned(),
+            auth_url: None,
         }
     }
 
@@ -151,6 +201,207 @@ impl IntelligenceProvider for LunaManagedProvider {
             fields,
         })
     }
+}
+
+pub struct OpenAiProvider {
+    endpoint: String,
+    model: String,
+    transport: Arc<dyn ProviderTransport>,
+}
+
+impl Default for OpenAiProvider {
+    fn default() -> Self {
+        Self::new(
+            "https://api.openai.com/v1/chat/completions",
+            "gpt-4o-mini",
+            Arc::new(ReqwestProviderTransport),
+        )
+    }
+}
+
+impl OpenAiProvider {
+    fn new(
+        endpoint: impl Into<String>,
+        model: impl Into<String>,
+        transport: Arc<dyn ProviderTransport>,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            model: model.into(),
+            transport,
+        }
+    }
+}
+
+impl IntelligenceProvider for OpenAiProvider {
+    fn descriptor(&self) -> IntelligenceProviderDescriptor {
+        IntelligenceProviderDescriptor {
+            id: OPENAI_PROVIDER_ID.to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Use your own OpenAI API key for document evaluation.".to_owned(),
+            auth_url: Some("https://platform.openai.com/api-keys".to_owned()),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        request: &IntelligenceRequest,
+        credential: Option<&[u8]>,
+    ) -> Result<IntelligenceResult, ProviderError> {
+        let credential = credential.ok_or(ProviderError::NotConfigured)?;
+        let response = self.transport.post_json(
+            &self.endpoint,
+            &[
+                (
+                    "Authorization",
+                    format!("Bearer {}", credential_text(credential)?),
+                ),
+                ("Content-Type", "application/json".to_owned()),
+            ],
+            &chat_completion_body(&self.model, request),
+        )?;
+        parse_chat_completion(OPENAI_PROVIDER_ID, request, &response)
+    }
+}
+
+pub struct AnthropicProvider {
+    endpoint: String,
+    model: String,
+    transport: Arc<dyn ProviderTransport>,
+}
+
+impl Default for AnthropicProvider {
+    fn default() -> Self {
+        Self::new(
+            "https://api.anthropic.com/v1/messages",
+            "claude-3-5-haiku-latest",
+            Arc::new(ReqwestProviderTransport),
+        )
+    }
+}
+
+impl AnthropicProvider {
+    fn new(
+        endpoint: impl Into<String>,
+        model: impl Into<String>,
+        transport: Arc<dyn ProviderTransport>,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            model: model.into(),
+            transport,
+        }
+    }
+}
+
+impl IntelligenceProvider for AnthropicProvider {
+    fn descriptor(&self) -> IntelligenceProviderDescriptor {
+        IntelligenceProviderDescriptor {
+            id: ANTHROPIC_PROVIDER_ID.to_owned(),
+            name: "Anthropic".to_owned(),
+            description: "Use your own Anthropic API key for document evaluation.".to_owned(),
+            auth_url: Some("https://console.anthropic.com/settings/keys".to_owned()),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        request: &IntelligenceRequest,
+        credential: Option<&[u8]>,
+    ) -> Result<IntelligenceResult, ProviderError> {
+        let credential = credential.ok_or(ProviderError::NotConfigured)?;
+        let response = self.transport.post_json(
+            &self.endpoint,
+            &[
+                ("x-api-key", credential_text(credential)?),
+                ("anthropic-version", "2023-06-01".to_owned()),
+                ("Content-Type", "application/json".to_owned()),
+            ],
+            &anthropic_body(&self.model, request),
+        )?;
+        parse_anthropic_response(ANTHROPIC_PROVIDER_ID, request, &response)
+    }
+}
+
+fn credential_text(credential: &[u8]) -> Result<String, ProviderError> {
+    let value = std::str::from_utf8(credential)
+        .map_err(|_| ProviderError::InvalidCredential)?
+        .trim();
+    (!value.is_empty())
+        .then_some(value.to_owned())
+        .ok_or(ProviderError::InvalidCredential)
+}
+
+fn evaluation_prompt(request: &IntelligenceRequest) -> String {
+    format!(
+        "Return only a JSON object whose keys are the unresolved Household Context fields. Preserve evidence values when useful and do not invent values. Request: {}",
+        serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned())
+    )
+}
+
+fn chat_completion_body(model: &str, request: &IntelligenceRequest) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": "You are Luna's document evaluation provider. Return structured JSON only."},
+            {"role": "user", "content": evaluation_prompt(request)}
+        ]
+    })
+}
+
+fn anthropic_body(model: &str, request: &IntelligenceRequest) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "max_tokens": 512,
+        "temperature": 0,
+        "system": "You are Luna's document evaluation provider. Return a JSON object only.",
+        "messages": [{"role": "user", "content": evaluation_prompt(request)}]
+    })
+}
+
+fn parse_chat_completion(
+    provider_id: &str,
+    request: &IntelligenceRequest,
+    response: &serde_json::Value,
+) -> Result<IntelligenceResult, ProviderError> {
+    let content = response
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ProviderError::InvalidResult)?;
+    parse_provider_json(provider_id, request, content)
+}
+
+fn parse_anthropic_response(
+    provider_id: &str,
+    request: &IntelligenceRequest,
+    response: &serde_json::Value,
+) -> Result<IntelligenceResult, ProviderError> {
+    let content = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|block| block.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ProviderError::InvalidResult)?;
+    parse_provider_json(provider_id, request, content)
+}
+
+fn parse_provider_json(
+    provider_id: &str,
+    request: &IntelligenceRequest,
+    content: &str,
+) -> Result<IntelligenceResult, ProviderError> {
+    let fields = serde_json::from_str::<BTreeMap<String, String>>(content)
+        .map_err(|_| ProviderError::InvalidResult)?;
+    Ok(IntelligenceResult {
+        provider_id: provider_id.to_owned(),
+        evidence: request.evidence.clone(),
+        fields,
+    })
 }
 
 #[derive(Debug, Error)]
@@ -198,7 +449,7 @@ struct AuditPayload {
 pub struct CloudIntelligenceStore<V: CredentialVault> {
     database: PathBuf,
     trusted_device: TrustedDeviceManager<V>,
-    provider: Arc<dyn IntelligenceProvider>,
+    providers: Arc<Vec<Arc<dyn IntelligenceProvider>>>,
 }
 
 impl<V: CredentialVault> CloudIntelligenceStore<V> {
@@ -206,7 +457,15 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         database: impl AsRef<Path>,
         trusted_device: TrustedDeviceManager<V>,
     ) -> Result<Self, IntelligenceError> {
-        Self::open_with_provider(database, trusted_device, LunaManagedProvider)
+        Self::open_with_providers(
+            database,
+            trusted_device,
+            vec![
+                Arc::new(LunaManagedProvider),
+                Arc::new(OpenAiProvider::default()),
+                Arc::new(AnthropicProvider::default()),
+            ],
+        )
     }
 
     pub fn open_with_provider<P: IntelligenceProvider + 'static>(
@@ -214,10 +473,18 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         trusted_device: TrustedDeviceManager<V>,
         provider: P,
     ) -> Result<Self, IntelligenceError> {
+        Self::open_with_providers(database, trusted_device, vec![Arc::new(provider)])
+    }
+
+    fn open_with_providers(
+        database: impl AsRef<Path>,
+        trusted_device: TrustedDeviceManager<V>,
+        providers: Vec<Arc<dyn IntelligenceProvider>>,
+    ) -> Result<Self, IntelligenceError> {
         let store = Self {
             database: database.as_ref().to_owned(),
             trusted_device,
-            provider: Arc::new(provider),
+            providers: Arc::new(providers),
         };
         store.connect()?.execute_batch(
             "CREATE TABLE IF NOT EXISTS cloud_consents (
@@ -237,7 +504,30 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
     }
 
     pub fn providers(&self) -> Vec<IntelligenceProviderDescriptor> {
-        vec![self.provider.descriptor()]
+        self.providers
+            .iter()
+            .map(|provider| provider.descriptor())
+            .collect()
+    }
+
+    pub fn provider_statuses(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<IntelligenceProviderStatus>, IntelligenceError> {
+        self.providers()
+            .into_iter()
+            .map(|descriptor| {
+                let configured = self
+                    .trusted_device
+                    .vault()
+                    .get_secret(&credential_key(household_id, &descriptor.id))?
+                    .is_some();
+                Ok(IntelligenceProviderStatus {
+                    descriptor,
+                    configured,
+                })
+            })
+            .collect()
     }
 
     pub fn list_consent_scopes(
@@ -387,7 +677,12 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             .trusted_device
             .vault()
             .get_secret(&credential_key(household_id, provider_id))?;
-        let result = match self.provider.evaluate(request, credential.as_deref()) {
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.descriptor().id == provider_id)
+            .ok_or(IntelligenceError::UnknownProvider)?;
+        let result = match provider.evaluate(request, credential.as_deref()) {
             Ok(result) => {
                 self.record_event(
                     household_id,
@@ -479,7 +774,9 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
     }
 
     fn require_provider(&self, provider_id: &str) -> Result<(), IntelligenceError> {
-        (self.provider.descriptor().id == provider_id)
+        self.providers
+            .iter()
+            .any(|provider| provider.descriptor().id == provider_id)
             .then_some(())
             .ok_or(IntelligenceError::UnknownProvider)
     }
@@ -576,6 +873,21 @@ mod tests {
         fn delete_secret(&self, name: &str) -> Result<(), VaultError> {
             self.0.lock().unwrap().remove(name);
             Ok(())
+        }
+    }
+
+    struct MockTransport {
+        response: serde_json::Value,
+    }
+
+    impl ProviderTransport for MockTransport {
+        fn post_json(
+            &self,
+            _endpoint: &str,
+            _headers: &[(&str, String)],
+            _body: &serde_json::Value,
+        ) -> Result<serde_json::Value, ProviderError> {
+            Ok(self.response.clone())
         }
     }
 
@@ -738,5 +1050,51 @@ mod tests {
             ),
             Err(IntelligenceError::KeptLocal)
         ));
+    }
+
+    #[test]
+    fn openai_and_anthropic_adapters_return_structured_results_without_network() {
+        let request = IntelligenceRequest {
+            purpose: "document-evaluation".into(),
+            document_name: "bill.pdf".into(),
+            media_type: "application/pdf".into(),
+            evidence: vec![IntelligenceEvidence {
+                field: "documentType".into(),
+                value: "bill".into(),
+            }],
+            unresolved_fields: vec!["serviceProvider".into()],
+        };
+        let openai = OpenAiProvider::new(
+            "https://example.invalid/openai",
+            "test-model",
+            Arc::new(MockTransport {
+                response: serde_json::json!({
+                    "choices": [{"message": {"content": "{\"serviceProvider\":\"AGL\"}"}}]
+                }),
+            }),
+        );
+        let anthropic = AnthropicProvider::new(
+            "https://example.invalid/anthropic",
+            "test-model",
+            Arc::new(MockTransport {
+                response: serde_json::json!({
+                    "content": [{"text": "{\"serviceProvider\":\"AGL\"}"}]
+                }),
+            }),
+        );
+        assert_eq!(
+            openai
+                .evaluate(&request, Some(b"openai-key"))
+                .unwrap()
+                .provider_id,
+            OPENAI_PROVIDER_ID
+        );
+        assert_eq!(
+            anthropic
+                .evaluate(&request, Some(b"anthropic-key"))
+                .unwrap()
+                .provider_id,
+            ANTHROPIC_PROVIDER_ID
+        );
     }
 }
