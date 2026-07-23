@@ -1327,6 +1327,93 @@ fn filing_never_overwrites_an_existing_destination_and_keeps_staging_for_recover
 }
 
 #[test]
+fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
+    let directory = tempfile::tempdir().expect("temporary unavailable cabinet directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("rates.png");
+    let original = image_fixture(image::ImageFormat::Png);
+    fs::write(&source, &original).expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Council rates.png",
+    );
+    let unavailable = directory.path().join("Cabinet temporarily unavailable");
+
+    let waiting = store
+        .file_document("rivera-household", ready.id, &unavailable)
+        .expect("keep filing work waiting");
+
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
+    assert!(ready.original_path.is_file());
+    assert_eq!(
+        store
+            .list_todo_items("rivera-household")
+            .expect("list waiting To-do item")
+            .len(),
+        1
+    );
+
+    let filed = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect("retry after Cabinet returns");
+    assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
+    assert!(!ready.original_path.exists());
+}
+
+#[test]
+fn provider_unavailability_is_a_visible_waiting_state_until_retried() {
+    let directory = tempfile::tempdir().expect("temporary waiting directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(&cabinet).expect("create Cabinet");
+    let source = directory.path().join("waiting.pdf");
+    fs::write(&source, digital_pdf_with_text("Needs provider assistance"))
+        .expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Waiting for provider")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach document");
+
+    let waiting = store
+        .mark_waiting_for_connectivity("rivera-household", arrival.id)
+        .expect("mark provider wait");
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::WaitingForConnectivity
+    );
+    assert_eq!(
+        store
+            .list_todo_items("rivera-household")
+            .expect("list waiting To-do item")
+            .len(),
+        1
+    );
+
+    let resumed = store
+        .resume_waiting_for_connectivity("rivera-household", arrival.id)
+        .expect("resume provider wait");
+    assert_eq!(
+        resumed.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert!(store
+        .list_todo_items("rivera-household")
+        .expect("list resumed To-do items")
+        .iter()
+        .any(|item| item.arrival_id == arrival.id));
+}
+
+#[test]
 fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_remain_scoped() {
     let directory = tempfile::tempdir().expect("temporary duplicate directory");
     let cabinet = directory.path().join("Cabinet");

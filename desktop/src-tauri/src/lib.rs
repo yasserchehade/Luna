@@ -546,6 +546,28 @@ fn dismiss_document_arrival(
 }
 
 #[tauri::command]
+fn mark_document_waiting_for_connectivity(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    arrival_id: i64,
+) -> Result<DocumentArrival, String> {
+    store
+        .mark_waiting_for_connectivity(&household_id, arrival_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resume_waiting_document(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    arrival_id: i64,
+) -> Result<DocumentArrival, String> {
+    store
+        .resume_waiting_for_connectivity(&household_id, arrival_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn record_member_direction(
     store: State<'_, ConversationState>,
     cabinet: State<'_, CabinetState>,
@@ -1152,6 +1174,8 @@ pub fn run() {
         list_manual_move_candidates,
         record_manual_move_decision,
         dismiss_document_arrival,
+        mark_document_waiting_for_connectivity,
+        resume_waiting_document,
         record_member_direction,
         confirm_filing_decision,
         select_document_files,

@@ -36,6 +36,8 @@ pub enum DocumentProcessingState {
     PossibleDuplicate,
     ReadyToFile,
     Filing,
+    WaitingForConnectivity,
+    CabinetUnavailable,
     Filed,
     Dismissed,
 }
@@ -1037,6 +1039,8 @@ impl<V: CredentialVault> ConversationStore<V> {
                     arrival.processing_state,
                     DocumentProcessingState::NeedsMemberDirection
                         | DocumentProcessingState::PossibleDuplicate
+                        | DocumentProcessingState::WaitingForConnectivity
+                        | DocumentProcessingState::CabinetUnavailable
                 )
             })
             .map(|arrival| {
@@ -1441,6 +1445,34 @@ impl<V: CredentialVault> ConversationStore<V> {
         )
     }
 
+    pub fn mark_waiting_for_connectivity(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+            return Err(ConversationError::NotFound);
+        }
+        payload.processing_state = DocumentProcessingState::WaitingForConnectivity;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn resume_waiting_for_connectivity(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::WaitingForConnectivity {
+            return Err(ConversationError::NotFound);
+        }
+        payload.processing_state = DocumentProcessingState::NeedsMemberDirection;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
     pub fn record_member_direction(
         &self,
         household_id: &str,
@@ -1513,10 +1545,25 @@ impl<V: CredentialVault> ConversationStore<V> {
             )?;
             return self.document_arrival(household_id, arrival_id, conversation_id, payload);
         }
-        let resuming = payload.processing_state == DocumentProcessingState::Filing;
+        let cabinet_root = cabinet_root.as_ref();
+        if !cabinet_root.is_dir() {
+            payload.processing_state = DocumentProcessingState::CabinetUnavailable;
+            return self.save_document_arrival_payload(
+                household_id,
+                arrival_id,
+                conversation_id,
+                payload,
+            );
+        }
+        let resuming = matches!(
+            payload.processing_state,
+            DocumentProcessingState::Filing | DocumentProcessingState::CabinetUnavailable
+        );
         if !matches!(
             payload.processing_state,
-            DocumentProcessingState::ReadyToFile | DocumentProcessingState::Filing
+            DocumentProcessingState::ReadyToFile
+                | DocumentProcessingState::Filing
+                | DocumentProcessingState::CabinetUnavailable
         ) {
             return Err(ConversationError::NotFound);
         }
@@ -1525,7 +1572,6 @@ impl<V: CredentialVault> ConversationStore<V> {
             .clone()
             .filter(|decision| decision.confirmed)
             .ok_or(ConversationError::UnresolvedContext)?;
-        let cabinet_root = cabinet_root.as_ref();
         let destination = safe_cabinet_destination(cabinet_root, &decision.cabinet_destination)?;
         let staged = fs::read(&payload.original_path)?;
         if sha256(&staged) != payload.checksum {

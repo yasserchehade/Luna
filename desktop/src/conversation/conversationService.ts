@@ -14,7 +14,7 @@ export type ConversationMessage = {
   body: string;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "possibleDuplicate" | "readyToFile" | "filing" | "filed" | "dismissed";
+export type DocumentProcessingState = "needsMemberDirection" | "possibleDuplicate" | "readyToFile" | "filing" | "waitingForConnectivity" | "cabinetUnavailable" | "filed" | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -307,6 +307,8 @@ export interface ConversationService {
   listManualMoveCandidates(householdId: string): Promise<ManualMoveCandidate[]>;
   recordManualMoveDecision(householdId: string, arrivalId: number, teachesRule: boolean): Promise<DocumentArrival>;
   dismissDocumentArrival(householdId: string, arrivalId: number): Promise<void>;
+  markDocumentWaitingForConnectivity(householdId: string, arrivalId: number): Promise<DocumentArrival>;
+  resumeWaitingDocument(householdId: string, arrivalId: number): Promise<DocumentArrival>;
   recordMemberDirection(
     householdId: string,
     arrivalId: number,
@@ -423,6 +425,12 @@ export const tauriConversationService: ConversationService = {
   },
   dismissDocumentArrival(householdId, arrivalId) {
     return invoke("dismiss_document_arrival", { householdId, arrivalId });
+  },
+  markDocumentWaitingForConnectivity(householdId, arrivalId) {
+    return invoke<DocumentArrival>("mark_document_waiting_for_connectivity", { householdId, arrivalId });
+  },
+  resumeWaitingDocument(householdId, arrivalId) {
+    return invoke<DocumentArrival>("resume_waiting_document", { householdId, arrivalId });
   },
   recordMemberDirection(householdId, arrivalId, direction) {
     return invoke<DocumentArrival>("record_member_direction", {

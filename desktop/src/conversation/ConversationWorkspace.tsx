@@ -18,6 +18,7 @@ type ConversationWorkspaceProps = {
   conversationService: ConversationService;
   destination: "Luna" | "To do";
   householdId: string;
+  cabinetRecoveryRequest: number;
   newConversationRequest: number;
   conversationSelectionRequest: { conversationId: number; request: number } | null;
   onRecentConversationsChange(conversations: Conversation[]): void;
@@ -32,6 +33,8 @@ const stateLabel = (arrival: DocumentArrival) => ({
   possibleDuplicate: "Needs duplicate decision",
   readyToFile: "Ready to file",
   filing: "Filing",
+  waitingForConnectivity: "Waiting for provider",
+  cabinetUnavailable: "Waiting for Cabinet",
   filed: "Filed",
   dismissed: "Dismissed",
 })[arrival.processingState];
@@ -64,6 +67,7 @@ type DocumentReviewEditorProps = {
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
   onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
+  onRefresh(): Promise<void>;
 };
 
 const cloudContextFields = [
@@ -171,6 +175,7 @@ function DocumentReviewEditor({
   onConfirm,
   onRecord,
   onResolveDuplicate,
+  onRefresh,
 }: DocumentReviewEditorProps) {
   const context = arrival.reviewCard.context;
   const [direction, setDirection] = useState<DocumentContextDirection>(
@@ -263,6 +268,10 @@ function DocumentReviewEditor({
         cloudProviderId,
         consent,
       );
+      if (arrival.processingState === "waitingForConnectivity") {
+        await conversationService.resumeWaitingDocument(householdId, arrival.id);
+        await onRefresh();
+      }
       const suggestedFields = Object.keys(result.fields);
       if (suggestedFields.length === 0) {
         setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The provider"} returned no usable suggestions. Luna kept this review local.`);
@@ -276,9 +285,20 @@ function DocumentReviewEditor({
       }
     } catch (reason) {
       if (consent === "keepLocal") {
+        if (arrival.processingState === "waitingForConnectivity") {
+          await conversationService.resumeWaitingDocument(householdId, arrival.id);
+          await onRefresh();
+        }
         setCloudMessage("Kept local. No document data was sent to a provider.");
       } else {
-        setCloudError(String(reason));
+        const reasonText = String(reason);
+        if (reasonText.includes("provider is unavailable")) {
+          await conversationService.markDocumentWaitingForConnectivity(householdId, arrival.id);
+          await onRefresh();
+          setCloudMessage("The provider is unavailable. Luna kept this review waiting and will retry when connectivity returns.");
+        } else {
+          setCloudError(reasonText);
+        }
       }
     } finally {
       setCloudBusy(false);
@@ -364,10 +384,10 @@ function DocumentReviewEditor({
       <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
       <button type="submit">Save Household Context</button>
     </form>}
-    {arrival.processingState === "needsMemberDirection" && unresolvedFields.length > 0 && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
+    {(arrival.processingState === "needsMemberDirection" || arrival.processingState === "waitingForConnectivity") && unresolvedFields.length > 0 && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
       <div className="cloud-assistance-inline-heading">
         <div><strong>Need help with these fields?</strong><small>Luna can ask a connected provider for suggestions. You review them before saving or filing.</small></div>
-        {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>Ask a provider</button>}
+        {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>{arrival.processingState === "waitingForConnectivity" ? "Retry provider assistance" : "Ask a provider"}</button>}
       </div>
       {cloudOpen && <div className="cloud-assistance-inline-panel">
         {cloudBusy && <p className="muted">Preparing provider consent…</p>}
@@ -414,6 +434,7 @@ export function ConversationWorkspace({
   conversationService,
   destination,
   householdId,
+  cabinetRecoveryRequest,
   newConversationRequest,
   conversationSelectionRequest,
   onRecentConversationsChange,
@@ -553,6 +574,13 @@ export function ConversationWorkspace({
     if (!initialized.current) return;
     void loadHouseholdWork().catch(() => setError("Luna could not refresh the Conversation list."));
   }, [includeArchived, loadHouseholdWork, search]);
+
+  useEffect(() => {
+    if (!initialized.current || cabinetRecoveryRequest === 0) return;
+    void conversationService.resumeDocumentFilings(householdId)
+      .then(() => loadHouseholdWork())
+      .catch(() => setError("Luna could not retry staged Cabinet work."));
+  }, [cabinetRecoveryRequest, conversationService, householdId, loadHouseholdWork]);
 
   useEffect(() => {
     if (newConversationRequest === lastNewRequest.current) return;
@@ -713,10 +741,10 @@ export function ConversationWorkspace({
       <section className="todo-list" aria-label="To-do Items">
         {todos.length === 0 && <p className="empty-state">Nothing needs your attention.</p>}
         {todos.map((todo) => <article key={todo.arrivalId} data-arrival-id={todo.arrivalId}>
-          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : "Needs your direction"}</p></div>
+          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : "Needs your direction"}</p></div>
           <div>
             <button type="button" onClick={() => void openTodo(todo)}>Open Conversation item</button>
-            <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>
+            {todo.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>}
           </div>
         </article>)}
       </section>
@@ -799,6 +827,7 @@ export function ConversationWorkspace({
       >
         <div>
           <small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p>
+          {arrival.processingState === "cabinetUnavailable" && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna kept this Original staged and will retry when the Cabinet returns.</p>}
           <DocumentReviewEditor
             arrival={arrival}
             conversationService={conversationService}
@@ -806,6 +835,7 @@ export function ConversationWorkspace({
             onConfirm={(direction) => confirmDecision(arrival.id, direction)}
             onRecord={(direction) => recordDirection(arrival.id, direction)}
             onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}
+            onRefresh={async () => { await loadHouseholdWork(); }}
           />
         </div>
         {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
