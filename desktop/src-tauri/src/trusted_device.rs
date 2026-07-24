@@ -204,6 +204,29 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         Ok(self.device_identity(household_id)?.to_public().to_string())
     }
 
+    pub fn current_device_authorization_public_key(
+        &self,
+        household_id: &str,
+    ) -> Result<[u8; 32], TrustedDeviceError> {
+        self.require_unlocked(household_id)?;
+        Ok(self
+            .device_authorization_signing_key(household_id)?
+            .verifying_key()
+            .to_bytes())
+    }
+
+    pub fn sign_portable_memory_record(
+        &self,
+        household_id: &str,
+        record: &[u8],
+    ) -> Result<[u8; 64], TrustedDeviceError> {
+        self.require_unlocked(household_id)?;
+        Ok(self
+            .device_authorization_signing_key(household_id)?
+            .sign(record)
+            .to_bytes())
+    }
+
     pub fn current_key_epoch(&self, household_id: &str) -> Result<u32, TrustedDeviceError> {
         let value = self
             .vault

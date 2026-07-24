@@ -103,6 +103,8 @@ A Trusted Device controls one device identity and its participation in household
 
 A Trusted Device must also be locally unlocked with its Device PIN for the current session. Recovery material remains pending until its service registration succeeds, and Device Revocation advances the Household key epoch for every retained device.
 
+Portable Memory Records carry only typed durable facts. A Trusted Device signs each encrypted append-only record with its device-held authorisation key. Import verifies that signature against Trusted Device coordination data before decrypting the record with the Household key and rebuilding the device's own local database. Competing mutable facts become a Portable Memory Conflict; neither record silently overwrites the other.
+
 ## Invariants
 
 1. **Originals are immutable.** Luna may rename or relocate an Original but never silently change its bytes.
@@ -126,6 +128,11 @@ A Trusted Device must also be locally unlocked with its Device PIN for the curre
 19. **Conversation is an interface, not a work owner.** Deleting dialogue cannot delete or rewrite Document Handling, Household Context, authority, Filing Rules or Audit Events.
 20. **Member effort is minimised.** Luna asks only for materially necessary unresolved information and does not require a member to construct a filename or Cabinet Destination unless they choose to override the proposal.
 21. **Interpretation is not execution.** A Member Utterance changes durable state only after a typed candidate direction passes owning-domain validation; ambiguous interpretations do not execute.
+22. **Portable memory contains durable facts only.** Filing Rules, relationships, Member Direction, authority, Consent Grants, outcomes, Audit Events and stable references may cross devices; derived prompts, transient orchestration, hidden reasoning and raw provider output do not.
+23. **Secrets never become portable memory.** Credentials, tokens, device private keys and plaintext encryption keys remain in their owning credential boundary.
+24. **Portable delivery is append-only and idempotent.** A duplicate record has no additional effect, while modified, replay-invalid or untrusted records are rejected.
+25. **Concurrent portable state never silently overwrites.** Valid competing changes to one mutable subject remain detectable until an explicit resolution selects the current projection.
+26. **Each Trusted Device owns a separate local database.** The Cabinet carries Portable Memory Records, never a live database file.
 
 ## Document Handling lifecycle
 

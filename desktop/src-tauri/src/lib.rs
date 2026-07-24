@@ -2,6 +2,7 @@ mod account_session;
 mod cabinet;
 mod conversation;
 mod intelligence;
+mod portable_memory;
 mod settings;
 mod trusted_device;
 
@@ -30,6 +31,11 @@ pub use intelligence::{
     CloudIntelligenceStore, IntelligenceEvidence, IntelligenceProviderDescriptor,
     IntelligenceProviderStatus, IntelligenceRequest, IntelligenceResult, LunaManagedProvider,
     ProviderError,
+};
+pub use portable_memory::{
+    PortableConflict, PortableConversationReference, PortableEvent, PortableEventDraft,
+    PortableFact, PortableImportReport, PortableMemoryError, PortableMemoryStore,
+    TrustedDeviceAuthorization,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{

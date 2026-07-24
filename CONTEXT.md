@@ -72,6 +72,14 @@ _Avoid_: Recovery Key retrieval, Recovery Key reset
 The removal of a Trusted Device's authority to receive future Household keys; after key rotation it cannot read newly protected Household state, though information it previously opened cannot be remotely erased.
 _Avoid_: Remote wipe, remove device
 
+**Portable Memory Record**:
+A signed, Household-key-encrypted, append-only record of one durable household fact stored in Luna's reserved Cabinet memory area and imported into each Trusted Device's separate local database.
+_Avoid_: Synced database, chat memory, model memory
+
+**Portable Memory Conflict**:
+Two valid Portable Memory Records that claim incompatible current state for the same durable household subject without one causally superseding the other. Luna keeps both records and requires an explicit resolution instead of silently choosing one.
+_Avoid_: Last-write-wins, sync overwrite
+
 ## Cabinet and documents
 
 **Desk**:
