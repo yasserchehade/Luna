@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   Conversation,
@@ -6,6 +6,8 @@ import type {
   ConversationService,
   CloudConsentDecision,
   CloudConsentScope,
+  ConversationAction,
+  DocumentConversationView,
   DocumentContextDirection,
   DocumentArrival,
   DocumentProcessingState,
@@ -56,6 +58,12 @@ const confidenceLabel = (arrival: DocumentArrival) => ({
   unknown: "Unknown",
 })[arrival.reviewCard.confidenceState];
 
+const authorityLabel = (arrival: DocumentArrival) => {
+  if (arrival.authoritySource === "filingRule") return "Scoped Filing Rule";
+  if (arrival.authoritySource === "memberDirection") return "Member Direction";
+  return "Member Direction required before filing";
+};
+
 const duplicateDecisionOptions: Array<[DuplicateDecision, string]> = [
   ["keepBoth", "Keep both"],
   ["linkCopies", "Link copies"],
@@ -68,6 +76,12 @@ const duplicateResolutionLabels: Record<DuplicateDecision, string> = {
   linkCopies: "Linked both Originals",
   discardNew: "Discarded the new Original",
   updatedVersion: "Kept both Originals as an updated version",
+};
+
+const conversationActionLabels: Record<Exclude<ConversationAction, "reviewDetails">, string> = {
+  yes: "Yes",
+  no: "No",
+  alwaysDoThis: "Always do this",
 };
 
 type DocumentReviewEditorProps = {
@@ -338,8 +352,17 @@ function DocumentReviewEditor({
     }
   };
 
-  return <section className="review-card" aria-label={`Review card for ${arrival.originalName}`}>
+  return <details className="review-details">
+    <summary>Review details</summary>
+    <section className="review-card" aria-label={`Review details for ${arrival.originalName}`}>
     <strong>{confidenceLabel(arrival)}</strong>
+    <dl className="review-transparency">
+      <div><dt>Authority</dt><dd>{authorityLabel(arrival)}</dd></div>
+      <div><dt>Relevant consent</dt><dd>{arrival.cloudAssistanceHistory.length > 0
+        ? <ul>{arrival.cloudAssistanceHistory.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+        : "No Cloud Assistance consent recorded; inspection remained local."}</dd></div>
+      <div><dt>Execution history</dt><dd><ol>{arrival.executionHistory.map((entry) => <li key={entry}>{entry}</li>)}</ol></dd></div>
+    </dl>
     <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
       <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
     </div>)}</dl>
@@ -455,7 +478,8 @@ function DocumentReviewEditor({
       <small>Learned filing rule</small>
       <p>For {arrival.reviewCard.learnedRule.documentType} from {arrival.reviewCard.learnedRule.serviceProvider} addressed to {arrival.reviewCard.learnedRule.addressee}{arrival.reviewCard.learnedRule.property ? ` at ${arrival.reviewCard.learnedRule.property}` : ""}{arrival.reviewCard.learnedRule.account ? ` on account ${arrival.reviewCard.learnedRule.account}` : ""}, Luna can file an exact match at {arrival.reviewCard.learnedRule.cabinetDestination}.</p>
     </aside>}
-  </section>;
+    </section>
+  </details>;
 }
 
 export function ConversationWorkspace({
@@ -475,6 +499,8 @@ export function ConversationWorkspace({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [arrivals, setArrivals] = useState<DocumentArrival[]>([]);
+  const [documentConversations, setDocumentConversations] = useState<Record<number, DocumentConversationView>>({});
+  const [turnMessages, setTurnMessages] = useState<Record<number, string>>({});
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -494,6 +520,14 @@ export function ConversationWorkspace({
     .filter(({ conversationId }) => conversationId === selectedConversationId)
     .sort((left, right) => left.id - right.id);
 
+  const loadDocumentConversations = useCallback(async (loadedArrivals: DocumentArrival[]) => {
+    const entries = await Promise.all(loadedArrivals.map(async (arrival) => [
+      arrival.id,
+      await conversationService.getDocumentConversation(householdId, arrival.id),
+    ] as const));
+    setDocumentConversations(Object.fromEntries(entries));
+  }, [conversationService, householdId]);
+
   useEffect(() => {
     onActiveConversationChange(selectedConversationId);
   }, [onActiveConversationChange, selectedConversationId]);
@@ -507,6 +541,7 @@ export function ConversationWorkspace({
     setConversations(loadedConversations);
     if (!search) onRecentConversationsChange(loadedConversations.filter(({ archived }) => !archived));
     setArrivals(loadedArrivals);
+    await loadDocumentConversations(loadedArrivals);
     setTodos(loadedTodos);
     onTodoCountChange(loadedTodos.length);
     setSelectedConversationId((current) => {
@@ -522,7 +557,7 @@ export function ConversationWorkspace({
       return loadedConversations[0]?.id ?? null;
     });
     return loadedArrivals;
-  }, [conversationService, focusedArrivalId, householdId, includeArchived, onRecentConversationsChange, onTodoCountChange, search]);
+  }, [conversationService, focusedArrivalId, householdId, includeArchived, loadDocumentConversations, onRecentConversationsChange, onTodoCountChange, search]);
 
   const createConversation = useCallback(async () => {
     const created = await conversationService.createConversation(householdId, "New conversation");
@@ -536,12 +571,13 @@ export function ConversationWorkspace({
     setConversations(loadedConversations);
     onRecentConversationsChange(loadedConversations);
     setArrivals(loadedArrivals);
+    await loadDocumentConversations(loadedArrivals);
     setTodos(loadedTodos);
     onTodoCountChange(loadedTodos.length);
     setSelectedConversationId(created.id);
     setFocusedArrivalId(null);
     onOpenConversation();
-  }, [conversationService, householdId, onOpenConversation, onRecentConversationsChange, onTodoCountChange]);
+  }, [conversationService, householdId, loadDocumentConversations, onOpenConversation, onRecentConversationsChange, onTodoCountChange]);
 
   const deleteConversationAndRecoverWorkspace = useCallback(async (conversationId: number) => {
     try {
@@ -587,12 +623,13 @@ export function ConversationWorkspace({
             conversationService.listTodoItems(householdId),
           ]);
           setArrivals(loadedArrivals);
+          await loadDocumentConversations(loadedArrivals);
           setTodos(loadedTodos);
           onTodoCountChange(loadedTodos.length);
         }
       })
       .catch(() => setError("Luna could not open this Household's Conversations."));
-  }, [conversationSelectionRequest, conversationService, createConversation, householdId, onRecentConversationsChange, onTodoCountChange]);
+  }, [conversationSelectionRequest, conversationService, createConversation, householdId, loadDocumentConversations, onRecentConversationsChange, onTodoCountChange]);
 
   useEffect(() => {
     if (!conversationSelectionRequest) return;
@@ -693,12 +730,54 @@ export function ConversationWorkspace({
     item?.scrollIntoView({ block: "center" });
   }, [destination, focusedArrivalId, selectedArrivals.length]);
 
+  const submitUtterance = async (arrivalId: number, message: string) => {
+    const prompt = documentConversations[arrivalId]?.prompt;
+    if (!selectedConversationId || !prompt || !message.trim()) return;
+    try {
+      const outcome = await conversationService.submitMemberUtterance(
+        householdId,
+        arrivalId,
+        {
+          conversationId: selectedConversationId,
+          message,
+          linkedPrompt: prompt.id,
+        },
+      );
+      setTurnMessages((current) => ({
+        ...current,
+        [arrivalId]: outcome.status === "clarificationRequired" || outcome.status === "actionRefused"
+          ? outcome.message
+          : "",
+      }));
+      setMessages(await conversationService.listMessages(householdId, selectedConversationId));
+      setFocusedArrivalId(arrivalId);
+      setError("");
+      await loadHouseholdWork();
+    } catch (utteranceError) {
+      setError(String(utteranceError));
+    }
+  };
+
   const submitMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedConversationId || !draft.trim()) return;
+    const messageBody = draft.trim();
+    const promptedArrival = selectedArrivals.find(
+      (arrival) => arrival.id === focusedArrivalId && documentConversations[arrival.id]?.prompt,
+    ) ?? [...selectedArrivals]
+      .reverse()
+      .find((arrival) => documentConversations[arrival.id]?.prompt);
     try {
-      const message = await conversationService.addMemberMessage(householdId, selectedConversationId, draft);
-      setMessages((current) => [...current, message]);
+      if (promptedArrival) {
+        await submitUtterance(promptedArrival.id, messageBody);
+      } else {
+        const message = await conversationService.addMemberMessage(
+          householdId,
+          selectedConversationId,
+          messageBody,
+        );
+        setMessages((current) => [...current, message]);
+      }
       setDraft("");
     } catch {
       setError("Luna could not save that message.");
@@ -790,6 +869,61 @@ export function ConversationWorkspace({
     }
   };
 
+  const lastLinkedMessage = new Map<number, number>();
+  for (const message of messages) {
+    if (message.linkedDocumentArrival !== null) {
+      lastLinkedMessage.set(message.linkedDocumentArrival, message.id);
+    }
+  }
+  const arrivalById = new Map(selectedArrivals.map((arrival) => [arrival.id, arrival]));
+  const unlinkedArrivals = selectedArrivals.filter((arrival) => !lastLinkedMessage.has(arrival.id));
+  const renderDocumentArrival = (arrival: DocumentArrival) => <article
+    className="document-arrival"
+    data-arrival-id={arrival.id}
+    data-focused={arrival.id === focusedArrivalId ? "true" : undefined}
+    key={arrival.id}
+    tabIndex={-1}
+  >
+    <div className="document-conversation">
+      <div className="document-attachment">
+        <small>Attached document</small>
+        <strong>{arrival.originalName}</strong>
+      </div>
+      {arrival.processingState === "cabinetUnavailable" && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna kept this Original staged and will retry when the Cabinet returns.</p>}
+      {documentConversations[arrival.id] && <article className="luna-message document-luna-message">
+        <span aria-hidden="true">L</span>
+        <div>
+          {turnMessages[arrival.id] && <p className="turn-message">{turnMessages[arrival.id]}</p>}
+          <p className="conversation-copy">{
+            documentConversations[arrival.id].prompt?.message
+            ?? documentConversations[arrival.id].completionMessage
+            ?? documentConversations[arrival.id].understanding
+          }</p>
+          {documentConversations[arrival.id].prompt && <div className="conversation-inline-actions">
+            {documentConversations[arrival.id].prompt?.allowedActions
+              .filter((action): action is Exclude<ConversationAction, "reviewDetails"> => action !== "reviewDetails")
+              .map((action) => <button
+                type="button"
+                key={action}
+                onClick={() => void submitUtterance(arrival.id, conversationActionLabels[action])}
+              >{conversationActionLabels[action]}</button>)}
+          </div>}
+        </div>
+      </article>}
+      <DocumentReviewEditor
+        arrival={arrival}
+        conversationService={conversationService}
+        householdId={householdId}
+        onConfirm={(direction) => confirmDecision(arrival.id, direction)}
+        onRecord={(direction) => recordDirection(arrival.id, direction)}
+        onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}
+        onRefresh={async () => { await loadHouseholdWork(); }}
+      />
+      {!documentConversations[arrival.id] && <p>{stateLabel(arrival)}</p>}
+    </div>
+    {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
+  </article>;
+
   if (destination === "To do") {
     return <main className="conversation todo-view">
       <header><div><small>Attention</small><h1>To do</h1></div><span>{todos.length} requiring attention</span></header>
@@ -873,29 +1007,17 @@ export function ConversationWorkspace({
     {error && <p role="alert" className="session-notice">{error}</p>}
     <section className="messages" aria-label="Conversation">
       <article className="luna-message"><span aria-hidden="true">L</span><p>What would you like me to take care of?</p></article>
-      {messages.map((message) => <article className="member-message" key={message.id}><span aria-hidden="true">You</span><p>{message.body}</p></article>)}
-      {selectedArrivals.map((arrival) => <article
-        className="document-arrival"
-        data-arrival-id={arrival.id}
-        data-focused={arrival.id === focusedArrivalId ? "true" : undefined}
-        key={arrival.id}
-        tabIndex={-1}
-      >
-        <div>
-          <small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p>
-          {arrival.processingState === "cabinetUnavailable" && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna kept this Original staged and will retry when the Cabinet returns.</p>}
-          <DocumentReviewEditor
-            arrival={arrival}
-            conversationService={conversationService}
-            householdId={householdId}
-            onConfirm={(direction) => confirmDecision(arrival.id, direction)}
-            onRecord={(direction) => recordDirection(arrival.id, direction)}
-            onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}
-            onRefresh={async () => { await loadHouseholdWork(); }}
-          />
-        </div>
-        {canDismiss(arrival.processingState) && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
-      </article>)}
+      {messages.map((message) => <Fragment key={message.id}>
+        <article className={message.author === "luna" ? "luna-message" : "member-message"}>
+          <span aria-hidden="true">{message.author === "luna" ? "L" : "You"}</span>
+          <p className={message.author === "luna" ? "conversation-copy" : undefined}>{message.body}</p>
+        </article>
+        {message.linkedDocumentArrival !== null
+          && lastLinkedMessage.get(message.linkedDocumentArrival) === message.id
+          && arrivalById.has(message.linkedDocumentArrival)
+          && renderDocumentArrival(arrivalById.get(message.linkedDocumentArrival)!)}
+      </Fragment>)}
+      {unlinkedArrivals.map(renderDocumentArrival)}
     </section>
     <div className="attachment-zone">
       <p>{dropReady

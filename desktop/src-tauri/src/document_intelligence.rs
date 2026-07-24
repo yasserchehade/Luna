@@ -138,13 +138,27 @@ fn authorised_request(
     arrival: &crate::DocumentArrival,
     selection: &IntelligenceSelection,
 ) -> Result<IntelligenceRequest, IntelligenceFailure> {
-    let allowed_fields = arrival
-        .review_card
-        .questions
-        .iter()
-        .filter_map(|question| cloud_field(question.field))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
+    let context = &arrival.review_card.context;
+    let mut allowed_fields = [
+        ("documentType", &context.document_type),
+        ("serviceProvider", &context.service_provider),
+        ("addressee", &context.addressee),
+        ("property", &context.property),
+        ("account", &context.account),
+        ("amount", &context.amount),
+    ]
+    .into_iter()
+    .filter(|(_, field)| field.confidence_state != crate::ConfidenceState::Confirmed)
+    .map(|(field, _)| field.to_owned())
+    .collect::<Vec<_>>();
+    if context.relevant_dates.is_empty()
+        || context
+            .relevant_dates
+            .iter()
+            .any(|field| field.confidence_state != crate::ConfidenceState::Confirmed)
+    {
+        allowed_fields.push("relevantDates".to_owned());
+    }
     if allowed_fields.is_empty() {
         return Err(IntelligenceFailure::UnsupportedCapability);
     }
@@ -194,21 +208,6 @@ fn authorised_request(
             max_output_tokens: 512,
         },
     })
-}
-
-fn cloud_field(field: crate::ContextField) -> Option<&'static str> {
-    match field {
-        crate::ContextField::DocumentType => Some("documentType"),
-        crate::ContextField::ServiceProvider => Some("serviceProvider"),
-        crate::ContextField::Addressee => Some("addressee"),
-        crate::ContextField::Property => Some("property"),
-        crate::ContextField::Account => Some("account"),
-        crate::ContextField::Amount => Some("amount"),
-        crate::ContextField::RelevantDates => Some("relevantDates"),
-        crate::ContextField::ServiceProviderRelevance | crate::ContextField::PropertyRelevance => {
-            None
-        }
-    }
 }
 
 fn review_value(arrival: &crate::DocumentArrival, field: &str) -> Option<String> {

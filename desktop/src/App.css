@@ -52,6 +52,7 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .messages article { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
 .messages p { max-width: 620px; margin: 0; padding: 11px 14px; border-radius: 4px 14px 14px 14px; color: #4d554e; background: #f1f3ee; font-size: 13px; line-height: 1.55; }
 .luna-message > span { width: 31px; height: 31px; flex: 0 0 auto; border-radius: 10px 10px 10px 4px; }
+.messages > .luna-message .conversation-copy { white-space: pre-line; }
 .member-message { flex-direction: row-reverse; }.member-message > span { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 50%; color: #425047; background: #dce5dc; font-size: 10px; font-weight: 750; }.member-message p { border-radius: 14px 4px 14px 14px; background: #e8eee7; }
 .composer { position: relative; display: grid; grid-template-columns: 1fr 36px; gap: 8px; width: min(690px, calc(100% - 72px)); margin: 0 auto 25px; padding: 8px; border: 1px solid #d8dcd4; border-radius: 15px; background: #fff; box-shadow: 0 8px 24px rgba(42, 55, 45, .07); }
 .composer label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
@@ -133,18 +134,32 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .conversation-toolbar button, .conversation > header form button, .todo-list button, .document-arrival button, .attachment-zone button { padding: 6px 9px; border: 1px solid #e0e4df; border-radius: 6px; color: #3d473f; background: #fff; }
 .conversation-toolbar button:hover, .conversation > header form button:hover { border-color: #b9c5bb; background: #f7f9f6; }
 .conversation > header form { display: flex; flex-direction: row; gap: 7px; }.conversation > header form input { max-width: 260px; padding: 6px 8px; border: 1px solid #bbc5bb; border-radius: 6px; }
-.document-arrival { justify-content: space-between; padding: 16px; border: 1px solid #d7ddd4; border-radius: 12px; background: #fbfcf8; }
+.document-arrival { display: block; padding: 16px; border: 1px solid #d7ddd4; border-radius: 12px; background: #fbfcf8; }
 .document-arrival[data-focused="true"] { border-color: #527663; box-shadow: 0 0 0 3px rgba(82, 118, 99, .14); outline: 0; }
 .document-arrival > div { display: grid; gap: 5px; }
 .document-arrival small { color: #7f887f; font-size: 9px; text-transform: uppercase; }
 .document-arrival h2 { margin: 0; font-family: Georgia, serif; font-size: 17px; font-weight: 500; }
 .document-arrival p { padding: 0; background: transparent; font-size: 11px; }
+.document-attachment { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; color: #59635b; }
+.document-attachment strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.document-arrival .document-luna-message { display: flex; margin: 0 0 12px; }
+.document-luna-message > div { display: grid; gap: 7px; }
+.document-arrival .document-luna-message .conversation-copy { max-width: 620px; padding: 11px 14px; border-radius: 4px 14px 14px 14px; color: #4d554e; background: #f1f3ee; font-size: 13px; line-height: 1.55; white-space: pre-line; }
+.document-arrival .document-luna-message .turn-message { color: #765b22; font-size: 11px; }
+.conversation-inline-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.conversation-inline-actions button { padding: 7px 11px; border-color: #c8d4ca; color: #315540; background: #fff; }
+.conversation-inline-actions button:first-child { color: #fff; border-color: #355f4a; background: #355f4a; }
+.review-details { margin-top: 5px; color: #687269; font-size: 11px; }
+.review-details > summary { width: fit-content; cursor: pointer; color: #466252; font-weight: 650; }
+.review-details[open] > summary { margin-bottom: 8px; }
 .review-card { display: grid; gap: 7px; padding: 10px; border: 1px solid #dce3d9; border-radius: 8px; background: #fff; }
 .review-card strong { color: #506854; font-size: 11px; }
 .review-card dl { display: grid; gap: 5px; margin: 0; }
 .review-card dl div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px; }
 .review-card dt { color: #687269; font-size: 10px; }
 .review-card dd { margin: 0; color: #34463b; font-size: 11px; white-space: pre-wrap; }
+.review-card .review-transparency { padding: 8px; border-radius: 6px; background: #f7f8f4; }
+.review-transparency ul, .review-transparency ol { margin: 0; padding-left: 16px; }
 .duplicate-review { display: grid; gap: 8px; padding: 12px; border: 1px solid #d9cfae; border-radius: 9px; background: #fffaf0; }
 .duplicate-review > strong { color: #765b22; }
 .duplicate-review p, .duplicate-review li, .duplicate-review small, .duplicate-resolution small { color: #687068; font-size: 12px; line-height: 1.5; }

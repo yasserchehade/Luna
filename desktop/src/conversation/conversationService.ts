@@ -12,6 +12,7 @@ export type ConversationMessage = {
   conversationId: number;
   author: "member" | "luna";
   body: string;
+  linkedDocumentArrival: number | null;
 };
 
 export type DocumentProcessingState =
@@ -62,6 +63,55 @@ export type ClarificationQuestion = {
     | "amount"
     | "relevantDates";
   prompt: string;
+};
+
+export type ConversationPromptPurpose =
+  | "clarifyContext"
+  | "confirmFilingDecision"
+  | "learnFilingRule";
+
+export type ConversationExpectedResponse = "confirmation" | "contextValue";
+
+export type ConversationAction = "yes" | "no" | "alwaysDoThis" | "reviewDetails";
+
+export type ConversationPrompt = {
+  id: string;
+  purpose: ConversationPromptPurpose;
+  subject: string;
+  message: string;
+  expectedResponse: ConversationExpectedResponse;
+  allowedActions: ConversationAction[];
+  linkedDocumentArrival: number;
+  evidenceSummary: string[];
+  contextField: ClarificationQuestion["field"] | null;
+};
+
+export type MemberUtterance = {
+  conversationId: number;
+  message: string;
+  linkedPrompt: string;
+};
+
+export type MemberDirectionCommand =
+  | { type: "confirmContextField"; field: ClarificationQuestion["field"] }
+  | { type: "rejectContextField"; field: ClarificationQuestion["field"] }
+  | { type: "setContextField"; field: ClarificationQuestion["field"]; value: string | null }
+  | { type: "confirmFilingDecision" }
+  | { type: "learnFilingRule" }
+  | { type: "decline" };
+
+export type DocumentConversationView = {
+  understanding: string;
+  prompt: ConversationPrompt | null;
+  completionMessage: string | null;
+};
+
+export type ConversationTurnOutcome = {
+  status: "acceptedDirection" | "clarificationRequired" | "actionCompleted" | "actionRefused";
+  acceptedDirection: MemberDirectionCommand | null;
+  message: string;
+  nextPrompt: ConversationPrompt | null;
+  arrival: DocumentArrival;
 };
 
 export type FilingDecisionReview = {
@@ -348,6 +398,11 @@ export type DocumentArrival = {
   filedOriginal: FiledOriginal | null;
   duplicateReview: DuplicateReview | null;
   duplicateResolution: DuplicateResolution | null;
+  authoritySource: "memberDirection" | "filingRule" | null;
+  cloudAssistanceHistory: string[];
+  executionHistory: string[];
+  filingDecisionDeclined: boolean;
+  filingRuleDeclined: boolean;
 };
 
 export type TodoItem = {
@@ -369,6 +424,12 @@ export interface ConversationService {
   listMessages(householdId: string, conversationId: number): Promise<ConversationMessage[]>;
   selectDocumentFiles(): Promise<string[]>;
   attachDocument(householdId: string, conversationId: number, path: string): Promise<DocumentArrival>;
+  getDocumentConversation(householdId: string, arrivalId: number): Promise<DocumentConversationView>;
+  submitMemberUtterance(
+    householdId: string,
+    arrivalId: number,
+    utterance: MemberUtterance,
+  ): Promise<ConversationTurnOutcome>;
   resumeDocumentFilings(householdId: string): Promise<void>;
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
   listTodoItems(householdId: string): Promise<TodoItem[]>;
@@ -465,6 +526,19 @@ export const tauriConversationService: ConversationService = {
   },
   attachDocument(householdId, conversationId, path) {
     return invoke<DocumentArrival>("attach_document", { householdId, conversationId, path });
+  },
+  getDocumentConversation(householdId, arrivalId) {
+    return invoke<DocumentConversationView>("get_document_conversation", {
+      householdId,
+      arrivalId,
+    });
+  },
+  submitMemberUtterance(householdId, arrivalId, utterance) {
+    return invoke<ConversationTurnOutcome>("submit_member_utterance", {
+      householdId,
+      arrivalId,
+      utterance,
+    });
   },
   resumeDocumentFilings(householdId) {
     return invoke("resume_document_filings", { householdId });

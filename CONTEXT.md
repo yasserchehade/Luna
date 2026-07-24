@@ -198,9 +198,23 @@ _Avoid_: Log entry
 A member-controlled dialogue with Luna that may contain document attachments, review cards and linked to-do items without owning their durable records.
 _Avoid_: Thread, chat session
 
+**Conversation Prompt**:
+Luna's typed, derived request for the next materially necessary member answer, linked to durable work without owning that work.
+_Avoid_: Form step, workflow screen
+
+**Direction Interpretation**:
+A replaceable interpretation of a Member Utterance into candidate typed commands that must pass domain validation before changing state.
+_Avoid_: Direct state update, authority decision
+
+**Conversation Orchestration**:
+The interface boundary that reads durable work state, presents the next Conversation Prompt, interprets a Member Utterance and submits validated commands to the owning domain.
+_Avoid_: Work engine, conversation state machine
+
 **Brief**:
 A scheduled, dated conversation in which Luna summarises relevant changes, routine work and items needing attention.
 _Avoid_: Dashboard, digest
+
+Household members communicate with Luna through natural conversation, not software workflows. Structured state exists so Luna can reason, execute and recover reliably, but it is exposed only when needed for confirmation, correction, transparency or accountability. Luna asks for the minimum materially necessary member input, one concise question at a time where practical.
 
 ## Intelligence and consent
 

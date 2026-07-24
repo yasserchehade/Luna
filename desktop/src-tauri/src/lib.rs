@@ -15,14 +15,18 @@ pub use cabinet::{
 };
 pub use conversation::{
     AuditAuthority, AuditEvent, AuditEventKind, ClarificationQuestion, ConfidenceState,
-    ContextField, ContextRelevanceDirection, Conversation, ConversationError, ConversationMessage,
-    ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
+    ContextField, ContextRelevanceDirection, Conversation, ConversationAction, ConversationError,
+    ConversationExpectedResponse, ConversationMessage, ConversationPrompt,
+    ConversationPromptPurpose, ConversationStore, ConversationTurnOutcome, ConversationTurnStatus,
+    DeterministicMemberDirectionInterpreter, DirectionInterpretation, DocumentArrival,
+    DocumentContextDirection, DocumentContextReview, DocumentConversationView,
     DocumentProcessingState, DuplicateAuditEvent, DuplicateAuditKind, DuplicateCandidate,
     DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
     FilingDecisionDirection, FilingDecisionReview, FilingRuleAuditEvent, FilingRuleAuditKind,
     FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
-    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, RebuiltDocumentRelationship, ReviewCard,
-    ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    FilingRuleUpdate, InterpretationConfidence, LocalOcr, ManualMoveCandidate,
+    MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance,
+    RebuiltDocumentRelationship, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
 };
 pub use document_intelligence::{
     CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
@@ -841,6 +845,54 @@ fn dismiss_document_arrival(
 }
 
 #[tauri::command]
+fn get_document_conversation(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    arrival_id: i64,
+) -> Result<DocumentConversationView, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before handling a document.".to_owned())?;
+    let cabinet_section = configuration
+        .sections
+        .first()
+        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
+    store
+        .document_conversation_in_section(&household_id, arrival_id, cabinet_section)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn submit_member_utterance(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    arrival_id: i64,
+    utterance: MemberUtterance,
+) -> Result<ConversationTurnOutcome, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before handling a document.".to_owned())?;
+    let cabinet_section = configuration
+        .sections
+        .first()
+        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
+    store
+        .submit_member_utterance(
+            &household_id,
+            arrival_id,
+            utterance,
+            &DeterministicMemberDirectionInterpreter,
+            configuration.root,
+            cabinet_section,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn record_member_direction(
     store: State<'_, ConversationState>,
     intelligence: State<'_, IntelligenceState>,
@@ -903,7 +955,9 @@ fn confirm_filing_decision(
 
 #[cfg(feature = "e2e")]
 fn e2e_digital_pdf() -> Vec<u8> {
-    e2e_pdf_with_text("Luna E2E fixture")
+    e2e_pdf_with_text(
+        "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Amount: $184.72; Relevant Date: 2026-07-15",
+    )
 }
 
 #[tauri::command]
@@ -1548,6 +1602,8 @@ pub fn run() {
         list_manual_move_candidates,
         record_manual_move_decision,
         dismiss_document_arrival,
+        get_document_conversation,
+        submit_member_utterance,
         record_member_direction,
         confirm_filing_decision,
         select_document_files,
