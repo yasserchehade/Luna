@@ -48,11 +48,11 @@ impl CredentialVault for MemoryCredentialVault {
 
 type TestConversationStore = ConversationStore<MemoryCredentialVault>;
 
-struct FixedLocalOcr;
+struct FixedLocalOcr(&'static str);
 
 impl LocalOcr for FixedLocalOcr {
     fn extract_text(&self, _original: &Path, _media_type: &str) -> Option<String> {
-        Some("Council rates notice".to_owned())
+        Some(self.0.to_owned())
     }
 }
 
@@ -136,6 +136,7 @@ fn open_conversation_store(
 
 fn open_conversation_store_with_ocr(
     database: impl AsRef<Path>,
+    extracted_text: &'static str,
 ) -> (
     TestConversationStore,
     TrustedDeviceManager<MemoryCredentialVault>,
@@ -158,8 +159,12 @@ fn open_conversation_store_with_ocr(
     trusted_device
         .configure_device_pin(household_id, "246810")
         .expect("unlock test Trusted Device");
-    let store = ConversationStore::open_with_ocr(database, trusted_device.clone(), FixedLocalOcr)
-        .expect("open Conversation store");
+    let store = ConversationStore::open_with_ocr(
+        database,
+        trusted_device.clone(),
+        FixedLocalOcr(extracted_text),
+    )
+    .expect("open Conversation store");
     (store, trusted_device)
 }
 
@@ -1477,7 +1482,8 @@ fn a_document_arrival_uses_local_ocr_for_an_image() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("council-rates.png");
     fs::write(&document, image_fixture(image::ImageFormat::Png)).expect("write PNG");
-    let (store, _) = open_conversation_store_with_ocr(directory.path().join("luna.db"));
+    let (store, _) =
+        open_conversation_store_with_ocr(directory.path().join("luna.db"), "Council rates notice");
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
         .expect("create Conversation");
@@ -1502,7 +1508,8 @@ fn a_document_arrival_uses_local_ocr_for_an_image_only_pdf() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("council-rates-scan.pdf");
     fs::write(&document, digital_pdf_with_text("")).expect("write image-only PDF");
-    let (store, _) = open_conversation_store_with_ocr(directory.path().join("luna.db"));
+    let (store, _) =
+        open_conversation_store_with_ocr(directory.path().join("luna.db"), "Council rates notice");
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
         .expect("create Conversation");
@@ -1782,13 +1789,16 @@ fn a_font_unsupported_pdf_still_provides_local_text_for_rule_matching() {
     let directory = tempfile::tempdir().expect("temporary fallback directory");
     let cabinet = directory.path().join("Cabinet");
     fs::create_dir_all(&cabinet).expect("create Cabinet");
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("samples")
-        .join("bills")
-        .join("utility bill.pdf");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let source = directory.path().join("utility bill.pdf");
+    fs::write(
+        &source,
+        pdf_with_text_and_font_resource("Account Number: 12345678", ""),
+    )
+    .expect("write utility bill fallback fixture");
+    let (store, _) = open_conversation_store_with_ocr(
+        directory.path().join("luna.db"),
+        "Account Number: 12345678",
+    );
     let conversation = store
         .create_conversation("rivera-household", "Fallback")
         .expect("create Conversation");
