@@ -12,14 +12,18 @@ pub use cabinet::{
 };
 pub use conversation::{
     AuditAuthority, AuditEvent, AuditEventKind, ClarificationQuestion, ConfidenceState,
-    ContextField, ContextRelevanceDirection, Conversation, ConversationError, ConversationMessage,
-    ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
+    ContextField, ContextRelevanceDirection, Conversation, ConversationAction, ConversationError,
+    ConversationExpectedResponse, ConversationMessage, ConversationPrompt,
+    ConversationPromptPurpose, ConversationStore, ConversationTurnOutcome, ConversationTurnStatus,
+    DeterministicMemberDirectionInterpreter, DirectionInterpretation, DocumentArrival,
+    DocumentContextDirection, DocumentContextReview, DocumentConversationView,
     DocumentProcessingState, DuplicateAuditEvent, DuplicateAuditKind, DuplicateCandidate,
     DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
     FilingDecisionDirection, FilingDecisionReview, FilingRuleAuditEvent, FilingRuleAuditKind,
     FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
-    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
-    TesseractOcr, TodoItem,
+    FilingRuleUpdate, InterpretationConfidence, LocalOcr, ManualMoveCandidate,
+    MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance, ReviewCard,
+    ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
 };
 pub use intelligence::{
     CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
@@ -422,15 +426,36 @@ fn list_intelligence_provider_statuses(
 
 #[tauri::command]
 fn evaluate_cloud_request(
-    store: State<'_, IntelligenceState>,
+    intelligence: State<'_, IntelligenceState>,
+    conversations: State<'_, ConversationState>,
     household_id: String,
+    arrival_id: i64,
     request: IntelligenceRequest,
     provider_id: String,
     consent: CloudConsentDecision,
 ) -> Result<IntelligenceResult, String> {
-    store
-        .evaluate(&household_id, &request, &provider_id, consent)
-        .map_err(|error| error.to_string())
+    let result = intelligence.evaluate(&household_id, &request, &provider_id, consent);
+    let summary = match (consent, result.is_ok()) {
+        (CloudConsentDecision::KeepLocal, _) => format!(
+            "Member chose Keep local for {provider_id}; no document evidence was sent."
+        ),
+        (CloudConsentDecision::AllowOnce, true) => {
+            format!("Member allowed {provider_id} once; the provider returned suggestions.")
+        }
+        (CloudConsentDecision::AllowForScope, true) => format!(
+            "Member allowed {provider_id} for this consent scope; the provider returned suggestions."
+        ),
+        (CloudConsentDecision::UseExistingScope, true) => format!(
+            "An existing consent scope allowed {provider_id}; the provider returned suggestions."
+        ),
+        (_, false) => format!(
+            "Consent was recorded for {provider_id}, but provider assistance did not complete and Luna did not switch providers."
+        ),
+    };
+    conversations
+        .record_cloud_assistance_event(&household_id, arrival_id, &summary)
+        .map_err(|error| error.to_string())?;
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -568,6 +593,54 @@ fn resume_waiting_document(
 }
 
 #[tauri::command]
+fn get_document_conversation(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    arrival_id: i64,
+) -> Result<DocumentConversationView, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before handling a document.".to_owned())?;
+    let cabinet_section = configuration
+        .sections
+        .first()
+        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
+    store
+        .document_conversation_in_section(&household_id, arrival_id, cabinet_section)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn submit_member_utterance(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    arrival_id: i64,
+    utterance: MemberUtterance,
+) -> Result<ConversationTurnOutcome, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before handling a document.".to_owned())?;
+    let cabinet_section = configuration
+        .sections
+        .first()
+        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
+    store
+        .submit_member_utterance(
+            &household_id,
+            arrival_id,
+            utterance,
+            &DeterministicMemberDirectionInterpreter,
+            configuration.root,
+            cabinet_section,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn record_member_direction(
     store: State<'_, ConversationState>,
     cabinet: State<'_, CabinetState>,
@@ -610,7 +683,9 @@ fn confirm_filing_decision(
 
 #[cfg(feature = "e2e")]
 fn e2e_digital_pdf() -> Vec<u8> {
-    e2e_pdf_with_text("Luna E2E fixture")
+    e2e_pdf_with_text(
+        "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Amount: $184.72; Relevant Date: 2026-07-15",
+    )
 }
 
 #[tauri::command]
@@ -1176,6 +1251,8 @@ pub fn run() {
         dismiss_document_arrival,
         mark_document_waiting_for_connectivity,
         resume_waiting_document,
+        get_document_conversation,
+        submit_member_utterance,
         record_member_direction,
         confirm_filing_decision,
         select_document_files,

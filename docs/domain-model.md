@@ -14,6 +14,25 @@ Supporting domain areas are:
 - **Intelligence and consent** — how local inspection and permission-gated cloud assistance contribute evidence.
 - **Device trust and portable memory** — which devices may process protected household state and how that state remains recoverable.
 
+## Interaction principle
+
+Conversation is Luna's primary household interface. A member delegates in ordinary language; Luna derives its understanding and the next materially necessary question from durable work state. Structured Household Context and Filing Decisions remain hidden by default and are available through an optional **Review details** surface for transparency and correction.
+
+Conversation orchestration is an interface boundary, not a new consistency boundary:
+
+```mermaid
+flowchart TD
+    Message["Member Utterance"] --> Orchestrator["Conversation Orchestration"]
+    Orchestrator --> Interpreter["Replaceable direction interpretation"]
+    Interpreter --> Candidate["Typed candidate Member Direction"]
+    Candidate --> Validation["Owning-domain validation"]
+    Validation --> Handling["Document Handling"]
+    Handling --> Prompt["Next derived Conversation Prompt"]
+    Handling --> Views["Conversation · To do · Cabinet · History"]
+```
+
+The interpreter may be deterministic, local intelligence or consent-gated Cloud Assistance. It never owns authority, consent, tools, Filing Rules or durable work state. Ambiguous interpretations do not execute.
+
 ## Conceptual relationships
 
 ```mermaid
@@ -76,7 +95,7 @@ A Consent Grant is independently visible and revocable. It names the Intelligenc
 
 ### Conversation
 
-A Conversation owns member messages and references to durable domain subjects. It does not own documents, handling state, rules, authority or audit history.
+A Conversation owns member messages and references to durable domain subjects. It does not own documents, handling state, rules, authority or audit history. Conversation Prompts are derived from the owning domain, and accepted replies become validated domain commands rather than persistence mutations.
 
 ### Trusted Device
 
@@ -104,6 +123,9 @@ A Trusted Device must also be locally unlocked with its Device PIN for the curre
 16. **Staging ends only after verification.** Luna removes a staged copy only after the cabinet copy is checksum-verified and the outcome is durably recorded.
 17. **Rules change prospectively.** Historical reorganisation requires a preview and explicit direction.
 18. **Deletion meanings are separate.** Deleting a file does not implicitly delete its Filing Rule, related future obligation, conversation or Audit Events.
+19. **Conversation is an interface, not a work owner.** Deleting dialogue cannot delete or rewrite Document Handling, Household Context, authority, Filing Rules or Audit Events.
+20. **Member effort is minimised.** Luna asks only for materially necessary unresolved information and does not require a member to construct a filename or Cabinet Destination unless they choose to override the proposal.
+21. **Interpretation is not execution.** A Member Utterance changes durable state only after a typed candidate direction passes owning-domain validation; ambiguous interpretations do not execute.
 
 ## Document Handling lifecycle
 

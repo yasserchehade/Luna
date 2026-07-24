@@ -13,6 +13,8 @@ Tests observe behavior only through these public boundaries:
 
 Tests must not reach into private functions, mock Luna's internal collaborators or inspect the database as a shortcut around a public interface. Expected results must come from specifications, fixtures or worked examples rather than restating the implementation.
 
+Member-direction interpretation is a boundary contract: deterministic test interpreters may propose typed candidate directions, but tests must observe acceptance, clarification, refusal and execution through the local-core or installed-application seam. Interpretation test doubles do not bypass owning-domain validation.
+
 Tauri supports unit and integration testing through its mock runtime and desktop testing on Windows and macOS through WebdriverIO's Tauri service:
 
 - <https://v2.tauri.app/develop/tests/>

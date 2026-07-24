@@ -168,6 +168,259 @@ pub enum ContextField {
     RelevantDates,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationPromptPurpose {
+    ClarifyContext,
+    ConfirmFilingDecision,
+    LearnFilingRule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationExpectedResponse {
+    Confirmation,
+    ContextValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationAction {
+    Yes,
+    No,
+    AlwaysDoThis,
+    ReviewDetails,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationPrompt {
+    pub id: String,
+    pub purpose: ConversationPromptPurpose,
+    pub subject: String,
+    pub message: String,
+    pub expected_response: ConversationExpectedResponse,
+    pub allowed_actions: Vec<ConversationAction>,
+    pub linked_document_arrival: i64,
+    pub evidence_summary: Vec<String>,
+    pub context_field: Option<ContextField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberUtterance {
+    pub conversation_id: i64,
+    pub message: String,
+    pub linked_prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum MemberDirectionCommand {
+    ConfirmContextField {
+        field: ContextField,
+    },
+    RejectContextField {
+        field: ContextField,
+    },
+    SetContextField {
+        field: ContextField,
+        value: Option<String>,
+    },
+    ConfirmFilingDecision,
+    LearnFilingRule,
+    Decline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InterpretationConfidence {
+    Confident,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectionInterpretation {
+    pub proposed_commands: Vec<MemberDirectionCommand>,
+    pub confidence: InterpretationConfidence,
+    pub ambiguity: Option<String>,
+    pub evidence: Vec<String>,
+}
+
+pub trait MemberDirectionInterpreter: Send + Sync {
+    fn interpret(
+        &self,
+        prompt: &ConversationPrompt,
+        utterance: &MemberUtterance,
+    ) -> DirectionInterpretation;
+}
+
+#[derive(Default)]
+pub struct DeterministicMemberDirectionInterpreter;
+
+impl MemberDirectionInterpreter for DeterministicMemberDirectionInterpreter {
+    fn interpret(
+        &self,
+        prompt: &ConversationPrompt,
+        utterance: &MemberUtterance,
+    ) -> DirectionInterpretation {
+        let message = utterance.message.trim();
+        let normalized = message
+            .trim_matches(|character: char| character.is_ascii_punctuation())
+            .to_ascii_lowercase();
+        let affirmative = matches!(
+            normalized.as_str(),
+            "yes" | "yep" | "yeah" | "correct" | "right" | "that's right" | "that is right"
+        ) || normalized.starts_with("yes ")
+            || normalized.starts_with("yes,")
+            || normalized.contains("that's right")
+            || normalized.contains("that is right");
+        let negative = matches!(
+            normalized.as_str(),
+            "no" | "nope" | "not right" | "that's wrong" | "that is wrong"
+        );
+        let hedged = ["maybe", "perhaps", "not sure", "unsure", "i suppose"]
+            .iter()
+            .any(|phrase| normalized.contains(phrase));
+        let delegation_request = [
+            "take care of this",
+            "handle this",
+            "file this",
+            "organise this",
+            "organize this",
+        ]
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+        let ambiguous = |reason: &str| DirectionInterpretation {
+            proposed_commands: Vec::new(),
+            confidence: InterpretationConfidence::Ambiguous,
+            ambiguity: Some(reason.to_owned()),
+            evidence: vec![format!("Member said: {message}")],
+        };
+        let confident = |command| DirectionInterpretation {
+            proposed_commands: vec![command],
+            confidence: InterpretationConfidence::Confident,
+            ambiguity: None,
+            evidence: vec![format!("Member said: {message}")],
+        };
+        if delegation_request {
+            return ambiguous(
+                "I can take care of it, but I still need an answer to the current question.",
+            );
+        }
+
+        match prompt.purpose {
+            ConversationPromptPurpose::ConfirmFilingDecision => {
+                if affirmative {
+                    confident(MemberDirectionCommand::ConfirmFilingDecision)
+                } else if negative {
+                    confident(MemberDirectionCommand::Decline)
+                } else {
+                    ambiguous("Luna could not tell whether the Filing Decision was confirmed.")
+                }
+            }
+            ConversationPromptPurpose::LearnFilingRule => {
+                if affirmative || normalized == "always do this" {
+                    confident(MemberDirectionCommand::LearnFilingRule)
+                } else if negative {
+                    confident(MemberDirectionCommand::Decline)
+                } else {
+                    ambiguous("Luna could not tell whether this should become a Filing Rule.")
+                }
+            }
+            ConversationPromptPurpose::ClarifyContext => {
+                let Some(field) = prompt.context_field else {
+                    return ambiguous("The current question is not linked to Household Context.");
+                };
+                if hedged {
+                    return ambiguous("Luna needs a clearer answer to the current question.");
+                }
+                if prompt.expected_response == ConversationExpectedResponse::Confirmation {
+                    if affirmative {
+                        return confident(MemberDirectionCommand::ConfirmContextField { field });
+                    }
+                    if negative {
+                        return confident(MemberDirectionCommand::RejectContextField { field });
+                    }
+                } else if negative
+                    && matches!(field, ContextField::Property | ContextField::Account)
+                {
+                    return confident(MemberDirectionCommand::SetContextField {
+                        field,
+                        value: None,
+                    });
+                }
+
+                let correction = conversational_value(message);
+                if correction.is_empty() || affirmative || negative {
+                    ambiguous("Luna needs a clearer answer to the current question.")
+                } else {
+                    confident(MemberDirectionCommand::SetContextField {
+                        field,
+                        value: Some(normalize_conversational_context_value(field, correction)),
+                    })
+                }
+            }
+        }
+    }
+}
+
+fn normalize_conversational_context_value(field: ContextField, value: String) -> String {
+    if field == ContextField::DocumentType {
+        let lower = value.to_ascii_lowercase();
+        for article in ["a ", "an "] {
+            if lower.starts_with(article) {
+                return value[article.len()..].trim().to_owned();
+            }
+        }
+    }
+    value
+}
+
+fn conversational_value(message: &str) -> String {
+    let trimmed = message.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    for marker in ["no, it is ", "no, it's ", "it is ", "it's "] {
+        if lower.starts_with(marker) {
+            return trimmed[marker.len()..]
+                .trim()
+                .trim_matches(|character: char| character.is_ascii_punctuation())
+                .to_owned();
+        }
+    }
+    trimmed
+        .trim_matches(|character: char| character.is_ascii_punctuation())
+        .to_owned()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationTurnStatus {
+    AcceptedDirection,
+    ClarificationRequired,
+    ActionCompleted,
+    ActionRefused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentConversationView {
+    pub understanding: String,
+    pub prompt: Option<ConversationPrompt>,
+    pub completion_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTurnOutcome {
+    pub status: ConversationTurnStatus,
+    pub accepted_direction: Option<MemberDirectionCommand>,
+    pub message: String,
+    pub next_prompt: Option<ConversationPrompt>,
+    pub arrival: DocumentArrival,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilingDecisionReview {
@@ -466,6 +719,11 @@ pub struct DocumentArrival {
     pub filed_original: Option<FiledOriginal>,
     pub duplicate_review: Option<DuplicateReview>,
     pub duplicate_resolution: Option<DuplicateResolution>,
+    pub authority_source: Option<AuditAuthority>,
+    pub cloud_assistance_history: Vec<String>,
+    pub execution_history: Vec<String>,
+    pub filing_decision_declined: bool,
+    pub filing_rule_declined: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,6 +744,7 @@ pub struct ConversationMessage {
     pub conversation_id: i64,
     pub author: String,
     pub body: String,
+    pub linked_document_arrival: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -499,6 +758,8 @@ struct ConversationPayload {
 struct MessagePayload {
     author: String,
     body: String,
+    #[serde(default)]
+    linked_document_arrival: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -526,6 +787,14 @@ struct DocumentArrivalPayload {
     duplicate_review: Option<DuplicateReview>,
     #[serde(default)]
     duplicate_resolution: Option<DuplicateResolution>,
+    #[serde(default)]
+    cloud_assistance_history: Vec<String>,
+    #[serde(default)]
+    execution_history: Vec<String>,
+    #[serde(default)]
+    filing_decision_declined: bool,
+    #[serde(default)]
+    filing_rule_declined: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -591,6 +860,10 @@ pub enum ConversationError {
     DuplicateDecisionUnavailable,
     #[error("Household Context must be resolved before confirming a Filing Decision.")]
     UnresolvedContext,
+    #[error("The conversational question is no longer current.")]
+    StaleConversationPrompt,
+    #[error("The interpreted Member Direction does not answer the current question.")]
+    InvalidMemberDirection,
     #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
     InvalidCabinetDestination,
     #[error("The selected document is unavailable.")]
@@ -880,6 +1153,13 @@ impl<V: CredentialVault> ConversationStore<V> {
             filed_original: None,
             duplicate_review: None,
             duplicate_resolution: None,
+            cloud_assistance_history: Vec::new(),
+            execution_history: vec![
+                "Verified Original staged and inspected locally; no filing action completed."
+                    .to_owned(),
+            ],
+            filing_decision_declined: false,
+            filing_rule_declined: false,
         };
         let arrival_id = {
             let protected = self.protect(household_id, &payload)?;
@@ -891,11 +1171,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             )?;
             connection.last_insert_rowid()
         };
-        if let Some(duplicate_review) = self.find_duplicate_review(
-            household_id,
-            arrival_id,
-            &payload,
-        )? {
+        if let Some(duplicate_review) =
+            self.find_duplicate_review(household_id, arrival_id, &payload)?
+        {
             payload.processing_state = DocumentProcessingState::PossibleDuplicate;
             payload.duplicate_review = Some(duplicate_review);
             self.save_document_arrival_payload(
@@ -904,10 +1182,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                 conversation_id,
                 payload.clone(),
             )?;
-            if let Some(preference) = self.matching_duplicate_preference(
-                household_id,
-                &payload,
-            )? {
+            if let Some(preference) = self.matching_duplicate_preference(household_id, &payload)? {
                 return self.resolve_duplicate_internal(
                     household_id,
                     arrival_id,
@@ -928,6 +1203,10 @@ impl<V: CredentialVault> ConversationStore<V> {
             payload.filing_decision = Some(automatic_filing_decision(&payload, &rule));
             payload.learned_rule = Some(rule.clone());
             payload.automatic_rule_id = Some(rule.id);
+            push_history(
+                &mut payload.execution_history,
+                "A scoped Filing Rule matched and authorised filing.",
+            );
             let protected = self.protect(household_id, &payload)?;
             self.ensure_updated(
                 "UPDATE document_arrivals SET protected_payload = ?1 WHERE id = ?2 AND household_id = ?3",
@@ -944,14 +1223,26 @@ impl<V: CredentialVault> ConversationStore<V> {
         conversation_id: i64,
         body: &str,
     ) -> Result<ConversationMessage, ConversationError> {
+        self.add_conversation_message(household_id, conversation_id, "member", body, None)
+    }
+
+    fn add_conversation_message(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        author: &str,
+        body: &str,
+        linked_document_arrival: Option<i64>,
+    ) -> Result<ConversationMessage, ConversationError> {
         self.require_active_conversation(household_id, conversation_id)?;
         let body = body.trim();
         if body.is_empty() {
             return Err(ConversationError::EmptyMessage);
         }
         let payload = MessagePayload {
-            author: "member".to_owned(),
+            author: author.to_owned(),
             body: body.to_owned(),
+            linked_document_arrival,
         };
         let protected = self.protect(household_id, &payload)?;
         let connection = self.connect()?;
@@ -965,6 +1256,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             conversation_id,
             author: payload.author,
             body: payload.body,
+            linked_document_arrival: payload.linked_document_arrival,
         })
     }
 
@@ -996,6 +1288,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                     conversation_id,
                     author: payload.author,
                     body: payload.body,
+                    linked_document_arrival: payload.linked_document_arrival,
                 })
             })
             .collect()
@@ -1456,6 +1749,10 @@ impl<V: CredentialVault> ConversationStore<V> {
             return Err(ConversationError::NotFound);
         }
         payload.processing_state = DocumentProcessingState::WaitingForConnectivity;
+        push_history(
+            &mut payload.execution_history,
+            "Provider assistance is waiting; the verified Original remains local.",
+        );
         self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
     }
 
@@ -1470,7 +1767,199 @@ impl<V: CredentialVault> ConversationStore<V> {
             return Err(ConversationError::NotFound);
         }
         payload.processing_state = DocumentProcessingState::NeedsMemberDirection;
+        push_history(
+            &mut payload.execution_history,
+            "Provider assistance resumed; no provider was changed automatically.",
+        );
         self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn document_conversation(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentConversationView, ConversationError> {
+        self.document_conversation_in_section(household_id, arrival_id, "Household records")
+    }
+
+    pub fn document_conversation_in_section(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        cabinet_section: &str,
+    ) -> Result<DocumentConversationView, ConversationError> {
+        let (conversation_id, payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        let arrival = self.document_arrival(household_id, arrival_id, conversation_id, payload)?;
+        Ok(document_conversation_view(&arrival, cabinet_section))
+    }
+
+    pub fn submit_member_utterance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        utterance: MemberUtterance,
+        interpreter: &dyn MemberDirectionInterpreter,
+        cabinet_root: impl AsRef<Path>,
+        cabinet_section: &str,
+    ) -> Result<ConversationTurnOutcome, ConversationError> {
+        let (conversation_id, payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if conversation_id != utterance.conversation_id {
+            return Err(ConversationError::InvalidMemberDirection);
+        }
+        let arrival = self.document_arrival(household_id, arrival_id, conversation_id, payload)?;
+        let view = document_conversation_view(&arrival, cabinet_section);
+        let prompt = view
+            .prompt
+            .filter(|prompt| prompt.id == utterance.linked_prompt)
+            .ok_or(ConversationError::StaleConversationPrompt)?;
+        if !self
+            .load_conversation_payload(household_id, conversation_id)?
+            .deleted
+        {
+            self.add_conversation_message(
+                household_id,
+                conversation_id,
+                "luna",
+                &prompt.message,
+                Some(arrival_id),
+            )?;
+            self.add_conversation_message(
+                household_id,
+                conversation_id,
+                "member",
+                &utterance.message,
+                Some(arrival_id),
+            )?;
+        }
+        let interpretation = interpreter.interpret(&prompt, &utterance);
+        if interpretation.confidence != InterpretationConfidence::Confident {
+            return Ok(ConversationTurnOutcome {
+                status: ConversationTurnStatus::ClarificationRequired,
+                accepted_direction: None,
+                message: interpretation.ambiguity.unwrap_or_else(|| {
+                    "I could not confidently apply that answer. Could you say it another way?"
+                        .to_owned()
+                }),
+                next_prompt: Some(prompt),
+                arrival,
+            });
+        }
+        let mut valid_commands = interpretation
+            .proposed_commands
+            .into_iter()
+            .filter(|command| validate_direction_for_prompt(&prompt, command).is_ok())
+            .collect::<Vec<_>>();
+        if valid_commands.len() > 1 {
+            return Ok(ConversationTurnOutcome {
+                status: ConversationTurnStatus::ClarificationRequired,
+                accepted_direction: None,
+                message:
+                    "I found more than one possible direction. Please clarify which one you mean."
+                        .to_owned(),
+                next_prompt: Some(prompt),
+                arrival,
+            });
+        }
+        let command = valid_commands
+            .pop()
+            .ok_or(ConversationError::InvalidMemberDirection)?;
+
+        let updated = match &command {
+            MemberDirectionCommand::ConfirmContextField { .. }
+            | MemberDirectionCommand::RejectContextField { .. }
+            | MemberDirectionCommand::SetContextField { .. } => {
+                let direction = apply_context_direction(&arrival, &command)?;
+                self.record_member_direction(household_id, arrival_id, direction, cabinet_section)?
+            }
+            MemberDirectionCommand::ConfirmFilingDecision => {
+                let prepared = if arrival.review_card.filing_decision.is_none() {
+                    let direction = provisional_context_direction(&arrival)
+                        .ok_or(ConversationError::UnresolvedContext)?;
+                    self.record_member_direction(
+                        household_id,
+                        arrival_id,
+                        direction,
+                        cabinet_section,
+                    )?
+                } else {
+                    arrival.clone()
+                };
+                let decision = prepared
+                    .review_card
+                    .filing_decision
+                    .as_ref()
+                    .ok_or(ConversationError::UnresolvedContext)?;
+                self.confirm_filing_decision(
+                    household_id,
+                    arrival_id,
+                    FilingDecisionDirection {
+                        file_name: decision.file_name.clone(),
+                        cabinet_destination: decision.cabinet_destination.clone(),
+                    },
+                )?;
+                self.file_document(household_id, arrival_id, cabinet_root)?
+            }
+            MemberDirectionCommand::LearnFilingRule => {
+                self.learn_filing_rule(household_id, arrival_id)?
+            }
+            MemberDirectionCommand::Decline => match prompt.purpose {
+                ConversationPromptPurpose::ConfirmFilingDecision => {
+                    if arrival.review_card.filing_decision.is_none() {
+                        let direction = provisional_context_direction(&arrival)
+                            .ok_or(ConversationError::UnresolvedContext)?;
+                        self.record_member_direction(
+                            household_id,
+                            arrival_id,
+                            direction,
+                            cabinet_section,
+                        )?;
+                    }
+                    self.decline_filing_decision(household_id, arrival_id)?
+                }
+                ConversationPromptPurpose::LearnFilingRule => {
+                    self.decline_filing_rule(household_id, arrival_id)?
+                }
+                ConversationPromptPurpose::ClarifyContext => {
+                    return Err(ConversationError::InvalidMemberDirection);
+                }
+            },
+        };
+        let next = document_conversation_view(&updated, cabinet_section);
+        let status = match command {
+            MemberDirectionCommand::ConfirmFilingDecision
+                if updated.processing_state == DocumentProcessingState::Filed =>
+            {
+                ConversationTurnStatus::ActionCompleted
+            }
+            MemberDirectionCommand::LearnFilingRule => ConversationTurnStatus::ActionCompleted,
+            MemberDirectionCommand::Decline => ConversationTurnStatus::ActionRefused,
+            _ => ConversationTurnStatus::AcceptedDirection,
+        };
+        let message = match status {
+            ConversationTurnStatus::ActionRefused => {
+                "Okay. I have not carried out that action. You can review the details or correct me."
+                    .to_owned()
+            }
+            ConversationTurnStatus::ActionCompleted => next
+                .completion_message
+                .clone()
+                .or_else(|| next.prompt.as_ref().map(|prompt| prompt.message.clone()))
+                .unwrap_or_else(|| "Done.".to_owned()),
+            _ => next
+                .prompt
+                .as_ref()
+                .map(|prompt| prompt.message.clone())
+                .unwrap_or_else(|| "Thanks. I have recorded that direction.".to_owned()),
+        };
+        Ok(ConversationTurnOutcome {
+            status,
+            accepted_direction: Some(command),
+            message,
+            next_prompt: next.prompt,
+            arrival: updated,
+        })
     }
 
     pub fn record_member_direction(
@@ -1486,6 +1975,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             return Err(ConversationError::NotFound);
         }
         payload.context_direction = direction.normalized();
+        payload.filing_decision_declined = false;
         payload.filing_decision = clarification_questions(&payload.context_direction)
             .is_empty()
             .then(|| propose_filing_decision(&payload, cabinet_section));
@@ -1520,7 +2010,12 @@ impl<V: CredentialVault> ConversationStore<V> {
             cabinet_destination: cabinet_destination.to_owned(),
             confirmed: true,
         });
+        payload.filing_decision_declined = false;
         payload.processing_state = DocumentProcessingState::ReadyToFile;
+        push_history(
+            &mut payload.execution_history,
+            "Member Direction confirmed the Filing Decision.",
+        );
         self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
     }
 
@@ -1548,6 +2043,10 @@ impl<V: CredentialVault> ConversationStore<V> {
         let cabinet_root = cabinet_root.as_ref();
         if !cabinet_root.is_dir() {
             payload.processing_state = DocumentProcessingState::CabinetUnavailable;
+            push_history(
+                &mut payload.execution_history,
+                "Filing paused because the Cabinet is unavailable; the verified Original remains staged.",
+            );
             return self.save_document_arrival_payload(
                 household_id,
                 arrival_id,
@@ -1586,6 +2085,10 @@ impl<V: CredentialVault> ConversationStore<V> {
         } else {
             if !resuming {
                 payload.processing_state = DocumentProcessingState::Filing;
+                push_history(
+                    &mut payload.execution_history,
+                    "Filing started after the destination and verified Original were checked.",
+                );
                 self.save_document_arrival_payload(
                     household_id,
                     arrival_id,
@@ -1633,26 +2136,15 @@ impl<V: CredentialVault> ConversationStore<V> {
         };
         payload.processing_state = DocumentProcessingState::Filed;
         payload.filed_original = Some(filed_original.clone());
+        push_history(
+            &mut payload.execution_history,
+            &format!(
+                "Verified Original filed at {}.",
+                decision.cabinet_destination
+            ),
+        );
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
-        let mut learned_rule = payload.learned_rule.clone();
-        if learned_rule.is_none() {
-            if let Some(mut rule) = filing_rule_from_payload(&payload, &decision) {
-                let protected_placeholder = self.protect(household_id, &rule)?;
-                transaction.execute(
-                    "INSERT INTO filing_rules (household_id, protected_payload) VALUES (?1, ?2)",
-                    params![household_id, protected_placeholder],
-                )?;
-                rule.id = transaction.last_insert_rowid();
-                let protected_rule = self.protect(household_id, &rule)?;
-                transaction.execute(
-                    "UPDATE filing_rules SET protected_payload = ?1 WHERE id = ?2 AND household_id = ?3",
-                    params![protected_rule, rule.id, household_id],
-                )?;
-                learned_rule = Some(rule);
-            }
-        }
-        payload.learned_rule = learned_rule;
         let protected_arrival = self.protect(household_id, &payload)?;
         let automatic = payload.automatic_rule_id.is_some();
         let protected_event = self.protect(
@@ -1701,6 +2193,97 @@ impl<V: CredentialVault> ConversationStore<V> {
             &payload.original_path,
         )?;
         self.document_arrival(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn learn_filing_rule(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::Filed
+            || payload.automatic_rule_id.is_some()
+        {
+            return Err(ConversationError::InvalidMemberDirection);
+        }
+        if payload.learned_rule.is_some() {
+            return self.document_arrival(household_id, arrival_id, conversation_id, payload);
+        }
+        let decision = payload
+            .filing_decision
+            .as_ref()
+            .filter(|decision| decision.confirmed)
+            .ok_or(ConversationError::UnresolvedContext)?;
+        let mut rule = filing_rule_from_payload(&payload, decision)
+            .ok_or(ConversationError::UnresolvedContext)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let protected_placeholder = self.protect(household_id, &rule)?;
+        transaction.execute(
+            "INSERT INTO filing_rules (household_id, protected_payload) VALUES (?1, ?2)",
+            params![household_id, protected_placeholder],
+        )?;
+        rule.id = transaction.last_insert_rowid();
+        let protected_rule = self.protect(household_id, &rule)?;
+        transaction.execute(
+            "UPDATE filing_rules SET protected_payload = ?1 WHERE id = ?2 AND household_id = ?3",
+            params![protected_rule, rule.id, household_id],
+        )?;
+        payload.learned_rule = Some(rule);
+        payload.filing_rule_declined = false;
+        let protected_arrival = self.protect(household_id, &payload)?;
+        transaction.execute(
+            "UPDATE document_arrivals SET protected_payload = ?1
+              WHERE id = ?2 AND household_id = ?3",
+            params![protected_arrival, arrival_id, household_id],
+        )?;
+        transaction.commit()?;
+        self.document_arrival(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn decline_filing_decision(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection
+            || payload.filing_decision.is_none()
+        {
+            return Err(ConversationError::InvalidMemberDirection);
+        }
+        payload.filing_decision_declined = true;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn decline_filing_rule(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::Filed
+            || payload.learned_rule.is_some()
+        {
+            return Err(ConversationError::InvalidMemberDirection);
+        }
+        payload.filing_rule_declined = true;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
+    pub fn record_cloud_assistance_event(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        summary: &str,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        push_history(&mut payload.cloud_assistance_history, summary);
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
     }
 
     fn release_staged_original_if_unreferenced(
@@ -1850,7 +2433,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             .collect::<Result<Vec<_>, _>>()?;
         protected_rows
             .into_iter()
-            .map(|protected| self.open_protected::<DuplicatePreferencePayload>(household_id, &protected))
+            .map(|protected| {
+                self.open_protected::<DuplicatePreferencePayload>(household_id, &protected)
+            })
             .find_map(|result| match result {
                 Ok(preference)
                     if preference.checksum == payload.checksum
@@ -1955,7 +2540,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             DuplicateDecision::KeepBoth => "kept both Originals",
             DuplicateDecision::LinkCopies => "linked both Originals without filing the new copy",
             DuplicateDecision::DiscardNew => "discarded the new duplicate Original",
-            DuplicateDecision::UpdatedVersion => "kept both Originals and marked the new copy as an updated version",
+            DuplicateDecision::UpdatedVersion => {
+                "kept both Originals and marked the new copy as an updated version"
+            }
         };
         let protected = self.protect(
             household_id,
@@ -2151,6 +2738,17 @@ impl<V: CredentialVault> ConversationStore<V> {
         payload: DocumentArrivalPayload,
     ) -> Result<DocumentArrival, ConversationError> {
         let review_card = review_card(&payload);
+        let authority_source = if payload.automatic_rule_id.is_some() {
+            Some(AuditAuthority::FilingRule)
+        } else if payload
+            .filing_decision
+            .as_ref()
+            .is_some_and(|decision| decision.confirmed)
+        {
+            Some(AuditAuthority::MemberDirection)
+        } else {
+            None
+        };
         Ok(DocumentArrival {
             id: arrival_id,
             household_id: household_id.to_owned(),
@@ -2166,6 +2764,11 @@ impl<V: CredentialVault> ConversationStore<V> {
             filed_original: payload.filed_original,
             duplicate_review: payload.duplicate_review,
             duplicate_resolution: payload.duplicate_resolution,
+            authority_source,
+            cloud_assistance_history: payload.cloud_assistance_history,
+            execution_history: payload.execution_history,
+            filing_decision_declined: payload.filing_decision_declined,
+            filing_rule_declined: payload.filing_rule_declined,
         })
     }
 
@@ -2555,6 +3158,534 @@ fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
     }
 }
 
+fn document_conversation_view(
+    arrival: &DocumentArrival,
+    cabinet_section: &str,
+) -> DocumentConversationView {
+    let understanding = document_understanding(arrival);
+    if arrival.processing_state == DocumentProcessingState::Filed {
+        let destination = arrival
+            .filed_original
+            .as_ref()
+            .map(|filed| filed.filing_decision.cabinet_destination.as_str())
+            .unwrap_or("the Cabinet");
+        let completion = format!("Done. I filed the verified Original in:\n{destination}");
+        if arrival.review_card.learned_rule.is_none()
+            && !arrival.filing_rule_declined
+            && can_learn_filing_rule(arrival)
+        {
+            let message =
+                format!("{completion}\n\nShould I handle future matching documents the same way?");
+            return DocumentConversationView {
+                understanding,
+                prompt: Some(ConversationPrompt {
+                    id: conversation_prompt_id(arrival.id, "learn-filing-rule", &message),
+                    purpose: ConversationPromptPurpose::LearnFilingRule,
+                    subject: arrival.original_name.clone(),
+                    message,
+                    expected_response: ConversationExpectedResponse::Confirmation,
+                    allowed_actions: vec![
+                        ConversationAction::AlwaysDoThis,
+                        ConversationAction::No,
+                        ConversationAction::ReviewDetails,
+                    ],
+                    linked_document_arrival: arrival.id,
+                    evidence_summary: evidence_summary(arrival),
+                    context_field: None,
+                }),
+                completion_message: None,
+            };
+        }
+        return DocumentConversationView {
+            understanding,
+            prompt: None,
+            completion_message: Some(if arrival.filing_rule_declined {
+                format!("{completion}\n\nI will not make this a Filing Rule.")
+            } else {
+                completion
+            }),
+        };
+    }
+
+    if arrival.processing_state == DocumentProcessingState::NeedsMemberDirection {
+        if !arrival.filing_decision_declined {
+            if let Some(decision) = provisional_filing_decision(arrival, cabinet_section) {
+                return filing_confirmation_view(arrival, understanding, &decision);
+            }
+        }
+        if let Some(question) = next_material_question(arrival) {
+            let value = context_field_value(&arrival.review_card.context, question.field);
+            let confirmation = value.is_some()
+                && !matches!(
+                    question.field,
+                    ContextField::ServiceProviderRelevance | ContextField::PropertyRelevance
+                );
+            let question_text = if confirmation {
+                confirmation_question(question.field, value.as_deref().unwrap_or_default())
+            } else {
+                question.prompt.clone()
+            };
+            let message = format!("{understanding}\n\n{question_text}");
+            return DocumentConversationView {
+                understanding: understanding.clone(),
+                prompt: Some(ConversationPrompt {
+                    id: conversation_prompt_id(
+                        arrival.id,
+                        &format!(
+                            "context-{}-{}",
+                            context_field_key(question.field),
+                            if confirmation { "confirm" } else { "value" }
+                        ),
+                        &message,
+                    ),
+                    purpose: ConversationPromptPurpose::ClarifyContext,
+                    subject: arrival.original_name.clone(),
+                    message,
+                    expected_response: if confirmation {
+                        ConversationExpectedResponse::Confirmation
+                    } else {
+                        ConversationExpectedResponse::ContextValue
+                    },
+                    allowed_actions: if confirmation {
+                        vec![
+                            ConversationAction::Yes,
+                            ConversationAction::No,
+                            ConversationAction::ReviewDetails,
+                        ]
+                    } else if matches!(
+                        question.field,
+                        ContextField::Property | ContextField::Account
+                    ) {
+                        vec![ConversationAction::No, ConversationAction::ReviewDetails]
+                    } else {
+                        vec![ConversationAction::ReviewDetails]
+                    },
+                    linked_document_arrival: arrival.id,
+                    evidence_summary: evidence_summary(arrival),
+                    context_field: Some(question.field),
+                }),
+                completion_message: None,
+            };
+        }
+        if let Some(decision) = arrival
+            .review_card
+            .filing_decision
+            .as_ref()
+            .filter(|decision| !decision.confirmed && !arrival.filing_decision_declined)
+        {
+            return filing_confirmation_view(arrival, understanding, decision);
+        }
+    }
+
+    DocumentConversationView {
+        understanding,
+        prompt: None,
+        completion_message: if arrival.filing_decision_declined {
+            Some(
+                "I have not filed this Original. You can correct the proposal in Review details."
+                    .to_owned(),
+            )
+        } else {
+            match arrival.processing_state {
+            DocumentProcessingState::CabinetUnavailable => Some(
+                "The Cabinet is unavailable. I kept the Original safely staged and will retry."
+                    .to_owned(),
+            ),
+            DocumentProcessingState::WaitingForConnectivity => Some(
+                "I am waiting for the selected Intelligence Provider. The Original remains local."
+                    .to_owned(),
+            ),
+            _ => None,
+            }
+        },
+    }
+}
+
+fn filing_confirmation_view(
+    arrival: &DocumentArrival,
+    understanding: String,
+    decision: &FilingDecisionReview,
+) -> DocumentConversationView {
+    let message = format!(
+        "{understanding}\n\nI can file it in:\n{}\n\nIs that correct?",
+        decision.cabinet_destination
+    );
+    DocumentConversationView {
+        understanding: understanding.clone(),
+        prompt: Some(ConversationPrompt {
+            id: conversation_prompt_id(
+                arrival.id,
+                "confirm-filing",
+                &format!("{message}\n{}", decision.file_name),
+            ),
+            purpose: ConversationPromptPurpose::ConfirmFilingDecision,
+            subject: arrival.original_name.clone(),
+            message,
+            expected_response: ConversationExpectedResponse::Confirmation,
+            allowed_actions: vec![
+                ConversationAction::Yes,
+                ConversationAction::No,
+                ConversationAction::ReviewDetails,
+            ],
+            linked_document_arrival: arrival.id,
+            evidence_summary: evidence_summary(arrival),
+            context_field: None,
+        }),
+        completion_message: None,
+    }
+}
+
+fn provisional_filing_decision(
+    arrival: &DocumentArrival,
+    cabinet_section: &str,
+) -> Option<FilingDecisionReview> {
+    if arrival.review_card.filing_decision.is_some() {
+        return None;
+    }
+    let context = provisional_context_direction(arrival)?;
+    Some(propose_filing_decision_from_context(
+        &arrival.original_name,
+        &context,
+        cabinet_section,
+    ))
+}
+
+fn provisional_context_direction(arrival: &DocumentArrival) -> Option<DocumentContextDirection> {
+    let mut direction = direction_from_review(arrival);
+    if direction.document_type.is_none()
+        || direction.service_provider.is_none()
+        || direction.addressee.is_none()
+        || (direction.property.is_none() && direction.account.is_none())
+    {
+        return None;
+    }
+
+    direction.document_type_resolved = true;
+    direction.service_provider_resolved = true;
+    direction.addressee_resolved = true;
+    direction.property_resolved = true;
+    direction.account_resolved = true;
+    direction.amount_resolved = true;
+    direction.relevant_dates_resolved = true;
+    if direction.service_provider_relevance.is_none() {
+        direction.service_provider_relevance =
+            direction
+                .service_provider
+                .clone()
+                .map(|subject| ContextRelevanceDirection {
+                    subject,
+                    explanation: "Confirmed by the member for this filing".to_owned(),
+                });
+    }
+    if direction.property_relevance.is_none() {
+        direction.property_relevance =
+            direction
+                .property
+                .clone()
+                .map(|subject| ContextRelevanceDirection {
+                    subject,
+                    explanation: "Confirmed by the member for this filing".to_owned(),
+                });
+    }
+    Some(direction)
+}
+
+fn can_learn_filing_rule(arrival: &DocumentArrival) -> bool {
+    let context = &arrival.review_card.context;
+    context.document_type.value.is_some()
+        && context.service_provider.value.is_some()
+        && context.addressee.value.is_some()
+        && (context.property.value.is_some() || context.account.value.is_some())
+}
+
+fn document_understanding(arrival: &DocumentArrival) -> String {
+    let context = &arrival.review_card.context;
+    let mut parts = Vec::new();
+    if let Some(document_type) = &context.document_type.value {
+        let document_type = document_type.to_lowercase();
+        parts.push(format!(
+            "{} {document_type}",
+            indefinite_article(&document_type)
+        ));
+    } else {
+        let media_type = media_type_label(&arrival.media_type).to_lowercase();
+        parts.push(format!("{} {media_type}", indefinite_article(&media_type)));
+    }
+    if let Some(provider) = &context.service_provider.value {
+        parts.push(format!("from {provider}"));
+    }
+    if let Some(property) = &context.property.value {
+        parts.push(format!("for {property}"));
+    }
+    if let Some(account) = &context.account.value {
+        parts.push(format!("on account {account}"));
+    }
+    let mut message = format!("This appears to be {}.", parts.join(" "));
+    if let Some(addressee) = &context.addressee.value {
+        message.push_str(&format!(" It is addressed to {addressee}."));
+    }
+    message
+}
+
+fn conversation_prompt_id(arrival_id: i64, kind: &str, material: &str) -> String {
+    let digest = sha256(material.as_bytes());
+    format!("document:{arrival_id}:{kind}:{}", &digest[..16])
+}
+
+fn push_history(history: &mut Vec<String>, entry: &str) {
+    if history.last().is_none_or(|previous| previous != entry) {
+        history.push(entry.to_owned());
+    }
+}
+
+fn indefinite_article(value: &str) -> &'static str {
+    if value
+        .chars()
+        .next()
+        .is_some_and(|character| "aeiou".contains(character))
+    {
+        "an"
+    } else {
+        "a"
+    }
+}
+
+fn evidence_summary(arrival: &DocumentArrival) -> Vec<String> {
+    arrival
+        .review_card
+        .evidence
+        .iter()
+        .take(3)
+        .map(|evidence| format!("{}: {}", evidence.label, evidence.value))
+        .collect()
+}
+
+fn next_material_question(arrival: &DocumentArrival) -> Option<&ClarificationQuestion> {
+    arrival.review_card.questions.iter().find(|question| {
+        question.field != ContextField::Amount
+            && (question.field != ContextField::RelevantDates
+                || !arrival.review_card.context.relevant_dates.is_empty())
+    })
+}
+
+fn context_field_value(context: &DocumentContextReview, field: ContextField) -> Option<String> {
+    match field {
+        ContextField::DocumentType => context.document_type.value.clone(),
+        ContextField::ServiceProvider => context.service_provider.value.clone(),
+        ContextField::ServiceProviderRelevance => context.service_provider_relevance.value.clone(),
+        ContextField::Addressee => context.addressee.value.clone(),
+        ContextField::Property => context.property.value.clone(),
+        ContextField::PropertyRelevance => context.property_relevance.value.clone(),
+        ContextField::Account => context.account.value.clone(),
+        ContextField::Amount => context.amount.value.clone(),
+        ContextField::RelevantDates => context
+            .relevant_dates
+            .iter()
+            .filter_map(|date| date.value.clone())
+            .next(),
+    }
+}
+
+fn confirmation_question(field: ContextField, value: &str) -> String {
+    match field {
+        ContextField::DocumentType => format!("Is this a {value}?"),
+        ContextField::ServiceProvider => format!("Is {value} the Service Provider?"),
+        ContextField::Addressee => format!("Is it addressed to {value}?"),
+        ContextField::Property => format!("Is this for {value}?"),
+        ContextField::Account => format!("Is this for account {value}?"),
+        ContextField::RelevantDates => format!("Should I use {value} as the relevant date?"),
+        ContextField::Amount => format!("Is the amount {value}?"),
+        ContextField::ServiceProviderRelevance | ContextField::PropertyRelevance => {
+            "How is this relevant to the Household?".to_owned()
+        }
+    }
+}
+
+fn context_field_key(field: ContextField) -> &'static str {
+    match field {
+        ContextField::DocumentType => "document-type",
+        ContextField::ServiceProvider => "service-provider",
+        ContextField::ServiceProviderRelevance => "service-provider-relevance",
+        ContextField::Addressee => "addressee",
+        ContextField::Property => "property",
+        ContextField::PropertyRelevance => "property-relevance",
+        ContextField::Account => "account",
+        ContextField::Amount => "amount",
+        ContextField::RelevantDates => "relevant-dates",
+    }
+}
+
+fn validate_direction_for_prompt(
+    prompt: &ConversationPrompt,
+    command: &MemberDirectionCommand,
+) -> Result<(), ConversationError> {
+    let valid = match command {
+        MemberDirectionCommand::ConfirmContextField { field }
+        | MemberDirectionCommand::RejectContextField { field }
+        | MemberDirectionCommand::SetContextField { field, .. } => {
+            prompt.purpose == ConversationPromptPurpose::ClarifyContext
+                && prompt.context_field == Some(*field)
+                && (!matches!(command, MemberDirectionCommand::ConfirmContextField { .. })
+                    || prompt.expected_response == ConversationExpectedResponse::Confirmation)
+        }
+        MemberDirectionCommand::ConfirmFilingDecision => {
+            prompt.purpose == ConversationPromptPurpose::ConfirmFilingDecision
+        }
+        MemberDirectionCommand::LearnFilingRule => {
+            prompt.purpose == ConversationPromptPurpose::LearnFilingRule
+        }
+        MemberDirectionCommand::Decline => matches!(
+            prompt.purpose,
+            ConversationPromptPurpose::ConfirmFilingDecision
+                | ConversationPromptPurpose::LearnFilingRule
+        ),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ConversationError::InvalidMemberDirection)
+    }
+}
+
+fn apply_context_direction(
+    arrival: &DocumentArrival,
+    command: &MemberDirectionCommand,
+) -> Result<DocumentContextDirection, ConversationError> {
+    let mut direction = direction_from_review(arrival);
+    match command {
+        MemberDirectionCommand::ConfirmContextField { field } => {
+            if context_field_value(&arrival.review_card.context, *field).is_none() {
+                return Err(ConversationError::InvalidMemberDirection);
+            }
+            set_context_resolved(&mut direction, *field, true);
+        }
+        MemberDirectionCommand::RejectContextField { field } => {
+            set_context_value(&mut direction, *field, None)?;
+            set_context_resolved(&mut direction, *field, false);
+        }
+        MemberDirectionCommand::SetContextField { field, value } => {
+            let value = value
+                .as_ref()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+            if value.is_none() && !matches!(field, ContextField::Property | ContextField::Account) {
+                return Err(ConversationError::InvalidMemberDirection);
+            }
+            set_context_value(&mut direction, *field, value)?;
+            set_context_resolved(&mut direction, *field, true);
+        }
+        _ => return Err(ConversationError::InvalidMemberDirection),
+    }
+    Ok(direction)
+}
+
+fn direction_from_review(arrival: &DocumentArrival) -> DocumentContextDirection {
+    let context = &arrival.review_card.context;
+    let confirmed = |field: &ReviewField| field.confidence_state == ConfidenceState::Confirmed;
+    DocumentContextDirection {
+        document_type: context.document_type.value.clone(),
+        document_type_resolved: confirmed(&context.document_type),
+        service_provider: context.service_provider.value.clone(),
+        service_provider_resolved: confirmed(&context.service_provider),
+        addressee: context.addressee.value.clone(),
+        addressee_resolved: confirmed(&context.addressee),
+        property: context.property.value.clone(),
+        property_resolved: confirmed(&context.property),
+        account: context.account.value.clone(),
+        account_resolved: confirmed(&context.account),
+        amount: context.amount.value.clone(),
+        amount_resolved: confirmed(&context.amount) || context.amount.value.is_none(),
+        relevant_dates: context
+            .relevant_dates
+            .iter()
+            .filter_map(|date| date.value.clone())
+            .collect(),
+        relevant_dates_resolved: context.relevant_dates.is_empty()
+            || context.relevant_dates.iter().all(confirmed),
+        service_provider_relevance: context.service_provider_relevance.value.as_ref().map(
+            |explanation| ContextRelevanceDirection {
+                subject: context.service_provider.value.clone().unwrap_or_default(),
+                explanation: explanation.clone(),
+            },
+        ),
+        property_relevance: context
+            .property_relevance
+            .value
+            .as_ref()
+            .map(|explanation| ContextRelevanceDirection {
+                subject: context.property.value.clone().unwrap_or_default(),
+                explanation: explanation.clone(),
+            }),
+    }
+}
+
+fn set_context_resolved(
+    direction: &mut DocumentContextDirection,
+    field: ContextField,
+    resolved: bool,
+) {
+    match field {
+        ContextField::DocumentType => direction.document_type_resolved = resolved,
+        ContextField::ServiceProvider => direction.service_provider_resolved = resolved,
+        ContextField::Addressee => direction.addressee_resolved = resolved,
+        ContextField::Property => direction.property_resolved = resolved,
+        ContextField::Account => direction.account_resolved = resolved,
+        ContextField::Amount => direction.amount_resolved = resolved,
+        ContextField::RelevantDates => direction.relevant_dates_resolved = resolved,
+        ContextField::ServiceProviderRelevance | ContextField::PropertyRelevance => {}
+    }
+}
+
+fn set_context_value(
+    direction: &mut DocumentContextDirection,
+    field: ContextField,
+    value: Option<String>,
+) -> Result<(), ConversationError> {
+    match field {
+        ContextField::DocumentType => direction.document_type = value,
+        ContextField::ServiceProvider => {
+            if direction.service_provider != value {
+                direction.service_provider_relevance = None;
+            }
+            direction.service_provider = value;
+        }
+        ContextField::ServiceProviderRelevance => {
+            let subject = direction
+                .service_provider
+                .clone()
+                .ok_or(ConversationError::InvalidMemberDirection)?;
+            direction.service_provider_relevance =
+                value.map(|explanation| ContextRelevanceDirection {
+                    subject,
+                    explanation,
+                });
+        }
+        ContextField::Addressee => direction.addressee = value,
+        ContextField::Property => {
+            if direction.property != value {
+                direction.property_relevance = None;
+            }
+            direction.property = value;
+        }
+        ContextField::PropertyRelevance => {
+            let subject = direction
+                .property
+                .clone()
+                .ok_or(ConversationError::InvalidMemberDirection)?;
+            direction.property_relevance = value.map(|explanation| ContextRelevanceDirection {
+                subject,
+                explanation,
+            });
+        }
+        ContextField::Account => direction.account = value,
+        ContextField::Amount => direction.amount = value,
+        ContextField::RelevantDates => {
+            direction.relevant_dates = value.into_iter().collect();
+        }
+    }
+    Ok(())
+}
+
 fn filing_rule_from_payload(
     payload: &DocumentArrivalPayload,
     decision: &FilingDecisionReview,
@@ -2637,13 +3768,19 @@ fn possible_duplicate(
     if existing.media_type != incoming.media_type || existing.checksum == incoming.checksum {
         return false;
     }
-    if !existing.original_name.eq_ignore_ascii_case(&incoming.original_name) {
+    if !existing
+        .original_name
+        .eq_ignore_ascii_case(&incoming.original_name)
+    {
         return false;
     }
     let existing_context = &existing.context_direction;
     let incoming_context = &incoming.context_direction;
     let core_context_matches = [
-        (&existing_context.document_type, &incoming_context.document_type),
+        (
+            &existing_context.document_type,
+            &incoming_context.document_type,
+        ),
         (
             &existing_context.service_provider,
             &incoming_context.service_provider,
@@ -2652,11 +3789,13 @@ fn possible_duplicate(
     ]
     .into_iter()
     .all(|(left, right)| left.is_some() && left == right);
-    let subject_matches = existing_context.property.as_ref().is_some_and(|property| {
-        incoming_context.property.as_deref() == Some(property.as_str())
-    }) || existing_context.account.as_ref().is_some_and(|account| {
-        incoming_context.account.as_deref() == Some(account.as_str())
-    });
+    let subject_matches =
+        existing_context.property.as_ref().is_some_and(|property| {
+            incoming_context.property.as_deref() == Some(property.as_str())
+        }) || existing_context
+            .account
+            .as_ref()
+            .is_some_and(|account| incoming_context.account.as_deref() == Some(account.as_str()));
     core_context_matches && subject_matches
 }
 
@@ -2787,16 +3926,10 @@ fn clarification_questions(context: &DocumentContextDirection) -> Vec<Clarificat
             prompt: "Does this document relate to a Household account?".to_owned(),
         });
     }
-    if !context.amount_resolved {
-        questions.push(ClarificationQuestion {
-            field: ContextField::Amount,
-            prompt: "What amount, if any, helps identify this document?".to_owned(),
-        });
-    }
-    if !context.relevant_dates_resolved {
+    if !context.relevant_dates_resolved && !context.relevant_dates.is_empty() {
         questions.push(ClarificationQuestion {
             field: ContextField::RelevantDates,
-            prompt: "Which dates, if any, should identify this document?".to_owned(),
+            prompt: "Which of these dates should identify this document?".to_owned(),
         });
     }
     questions
@@ -2806,7 +3939,18 @@ fn propose_filing_decision(
     payload: &DocumentArrivalPayload,
     cabinet_section: &str,
 ) -> FilingDecisionReview {
-    let context = &payload.context_direction;
+    propose_filing_decision_from_context(
+        &payload.original_name,
+        &payload.context_direction,
+        cabinet_section,
+    )
+}
+
+fn propose_filing_decision_from_context(
+    original_name: &str,
+    context: &DocumentContextDirection,
+    cabinet_section: &str,
+) -> FilingDecisionReview {
     let date = context
         .relevant_dates
         .first()
@@ -2822,7 +3966,7 @@ fn propose_filing_decision(
         .unwrap_or("Unknown provider");
     let document_type = context.document_type.as_deref().unwrap_or("Document");
     let addressee = context.addressee.as_deref().unwrap_or("Household");
-    let extension = Path::new(&payload.original_name)
+    let extension = Path::new(original_name)
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
