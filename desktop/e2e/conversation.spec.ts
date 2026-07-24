@@ -4,7 +4,37 @@ import { join } from "node:path";
 import { browser, expect } from "@wdio/globals";
 import { onboardTestHousehold } from "./onboardTestHousehold";
 
+const enterKey = "\uE007";
+
 describe("Luna Conversation desk", () => {
+  it("sends a message with Enter and keeps Shift+Enter as a new line", async () => {
+    await onboardTestHousehold();
+    const composer = await $("#message-composer");
+    await composer.click();
+    await composer.setValue("First line");
+    const shiftEnterAllowsNativeEdit = await browser.execute(() => {
+      const composer = document.querySelector("#message-composer");
+      if (!composer) return false;
+      return composer.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+        shiftKey: true,
+      }));
+    });
+
+    expect(shiftEnterAllowsNativeEdit).toBe(true);
+    await expect($$(".member-message")).toBeElementsArrayOfSize(0);
+    await composer.addValue("\nSecond line");
+    await expect(composer).toHaveValue("First line\nSecond line");
+
+    await browser.keys(enterKey);
+
+    await expect($$(".member-message")).toBeElementsArrayOfSize(1);
+    await expect($(".member-message p")).toHaveText("First line\nSecond line");
+    await expect(composer).toHaveValue("");
+  });
+
   it("keeps document work consistent between Conversation and To do", async () => {
     await onboardTestHousehold();
     const openConversationActions = async () => {
@@ -20,7 +50,7 @@ describe("Luna Conversation desk", () => {
     await composer.setValue(message);
     await $("button[aria-label='Send message']").click();
 
-    await expect($(".member-message p")).toHaveText(message);
+    await expect($(".member-message:last-of-type p")).toHaveText(message);
 
     await openConversationActions();
     await $("button=Rename").click();
