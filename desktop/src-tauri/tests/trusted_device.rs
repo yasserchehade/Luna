@@ -354,6 +354,9 @@ fn revoked_and_incorrectly_keyed_devices_cannot_read_new_household_state() {
     surviving_device
         .configure_device_pin(household_id, "334455")
         .expect("the retained device should require a local PIN");
+    let protected_before_revocation = active_device
+        .protect_household_state(household_id, b"state written before revocation")
+        .expect("active device should protect Household state before rotation");
 
     let rotation = active_device
         .prepare_household_key_rotation_after_revocation(
@@ -426,6 +429,45 @@ fn revoked_and_incorrectly_keyed_devices_cannot_read_new_household_state() {
         surviving_device
             .open_household_state(household_id, &protected_after_revocation)
             .expect("another retained device should read state after rotation"),
+        b"state written after revocation"
+    );
+    assert_eq!(
+        active_device
+            .open_household_state_at_epoch(household_id, 1, &protected_before_revocation)
+            .expect("a retained device should keep access to pre-rotation Household state"),
+        b"state written before revocation"
+    );
+    assert_eq!(
+        surviving_device
+            .open_household_state_at_epoch(household_id, 1, &protected_before_revocation)
+            .expect("another retained device should rebuild pre-rotation Household state"),
+        b"state written before revocation"
+    );
+    let recovered_after_rotation = TrustedDeviceManager::new(MemoryCredentialVault::default());
+    recovered_after_rotation
+        .recover_device(
+            household_id,
+            &enrollment.recovery_key,
+            &rotation.recovery_envelope,
+            2,
+        )
+        .expect("a new device should recover the complete historical keyring");
+    recovered_after_rotation
+        .finalize_recovered_device(household_id, 2)
+        .expect("post-rotation recovery should finalize at the current epoch");
+    recovered_after_rotation
+        .configure_device_pin(household_id, "556677")
+        .expect("the post-rotation device should require a local PIN");
+    assert_eq!(
+        recovered_after_rotation
+            .open_household_state_at_epoch(household_id, 1, &protected_before_revocation)
+            .expect("a newly recovered device should rebuild pre-rotation History"),
+        b"state written before revocation"
+    );
+    assert_eq!(
+        recovered_after_rotation
+            .open_household_state_at_epoch(household_id, 2, &protected_after_revocation)
+            .expect("a newly recovered device should read current Household state"),
         b"state written after revocation"
     );
 

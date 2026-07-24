@@ -78,6 +78,9 @@ _Avoid_: Synced database, chat memory, model memory
 
 **Portable Memory Conflict**:
 Two valid Portable Memory Records that claim incompatible current state for the same durable household subject without one causally superseding the other. Luna keeps both records and requires an explicit resolution instead of silently choosing one.
+
+**Portable Reference**:
+An opaque owning-domain identifier carried by Portable Memory. It uses an allowlisted domain kind and canonical UUID; it is not a free-text field and cannot carry prompts, provider output or credentials.
 _Avoid_: Last-write-wins, sync overwrite
 
 ## Cabinet and documents

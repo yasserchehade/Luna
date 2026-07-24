@@ -6,10 +6,13 @@ use std::{
 };
 
 use luna_core::{
-    CredentialVault, PortableConversationReference, PortableEventDraft, PortableFact,
-    PortableMemoryError, PortableMemoryStore, TrustedDeviceAuthorization, TrustedDeviceManager,
+    CredentialVault, PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
+    PortableConflictResolutionDraft, PortableConversationReference, PortableEventDraft,
+    PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleState, PortableMemoryError,
+    PortableMemoryStore, PortableReference, TrustedDeviceAuthorization, TrustedDeviceManager,
     VaultError,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default)]
 struct MemoryCredentialVault {
@@ -41,6 +44,51 @@ impl CredentialVault for MemoryCredentialVault {
             .remove(name);
         Ok(())
     }
+}
+
+fn reference(value: &str) -> PortableReference {
+    let kind = if value.starts_with("conversation") {
+        "conversation"
+    } else if value.starts_with("message") {
+        "message"
+    } else if value.starts_with("filing-rule") {
+        "filing-rule"
+    } else {
+        "document"
+    };
+    PortableReference::new(format!("{kind}:{}", uuid_for(value)))
+        .expect("test references should satisfy the portable schema")
+}
+
+fn event_id(value: &str) -> String {
+    format!("event:{}", uuid_for(value))
+}
+
+fn uuid_for(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        digest[0],
+        digest[1],
+        digest[2],
+        digest[3],
+        digest[4],
+        digest[5],
+        digest[6],
+        digest[7],
+        digest[8],
+        digest[9],
+        digest[10],
+        digest[11],
+        digest[12],
+        digest[13],
+        digest[14],
+        digest[15]
+    )
+}
+
+fn filing_rule_subject(value: &str) -> String {
+    format!("filingRule:{}", reference(value))
 }
 
 fn enrol_two_devices(
@@ -90,12 +138,16 @@ fn enrol_two_devices(
             .current_device_public_key(household_id)
             .expect("read the first Trusted Device identity"),
         authorization_public_key: enrollment.device_authorization_public_key,
+        activated_key_epoch: 1,
+        revoked_after: None,
     };
     let recovered_authorization = TrustedDeviceAuthorization {
         device_id: second
             .current_device_public_key(household_id)
             .expect("read the recovered Trusted Device identity"),
         authorization_public_key: recovered.device_authorization_public_key,
+        activated_key_epoch: 1,
+        revoked_after: None,
     };
     (first, second, authorization, recovered_authorization)
 }
@@ -143,26 +195,26 @@ fn a_recovered_trusted_device_imports_a_signed_encrypted_audit_event() {
             household_id,
             cabinet.path(),
             PortableEventDraft {
-                event_id: "audit-event-0001".to_owned(),
+                event_id: event_id("audit-event-0001"),
                 sequence: 1,
                 previous_event_digest: None,
                 supersedes_event_digest: None,
                 occurred_at: "2026-07-24T17:30:00+10:00".to_owned(),
                 conversation_reference: Some(PortableConversationReference {
-                    conversation_id: "conversation-41".to_owned(),
-                    message_id: "message-87".to_owned(),
+                    conversation_id: reference("conversation-41"),
+                    message_id: reference("message-87"),
                 }),
                 fact: PortableFact::AuditEvent {
-                    event_kind: "documentFiled".to_owned(),
-                    authority: "memberDirection".to_owned(),
-                    subject_reference: "document-arrival-23".to_owned(),
-                    outcome: "filedAndVerified".to_owned(),
+                    event_kind: PortableAuditEventKind::DocumentFiled,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference: reference("document-arrival-23"),
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
                 },
             },
         )
         .expect("append a portable Audit Event");
 
-    assert_eq!(appended.event_id, "audit-event-0001");
+    assert_eq!(appended.event_id, event_id("audit-event-0001"));
     assert_eq!(
         fs::read(cabinet.path().join("ordinary household note.txt"))
             .expect("read the ordinary Cabinet file"),
@@ -204,6 +256,52 @@ fn a_recovered_trusted_device_imports_a_signed_encrypted_audit_event() {
 }
 
 #[test]
+fn retry_repairs_a_missing_cabinet_record_without_duplicating_local_projection() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
+    let local = tempfile::tempdir().expect("create a local database directory");
+    let (first_device, _, _, _) = enrol_two_devices(household_id);
+    let repair_device = first_device.clone();
+    let store = PortableMemoryStore::open(local.path().join("luna.db"), first_device)
+        .expect("open portable memory");
+    let draft = PortableEventDraft {
+        event_id: event_id("repairable-event"),
+        sequence: 1,
+        previous_event_digest: None,
+        supersedes_event_digest: None,
+        occurred_at: "2026-07-24T17:35:00+10:00".to_owned(),
+        conversation_reference: None,
+        fact: PortableFact::AuditEvent {
+            event_kind: PortableAuditEventKind::DocumentFiled,
+            authority: PortableAuthority::MemberDirection,
+            subject_reference: reference("document-arrival-repair"),
+            outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+        },
+    };
+    let appended = store
+        .append(household_id, cabinet.path(), draft.clone())
+        .expect("append the repairable event");
+    let record_path = only_portable_record_path(cabinet.path());
+    fs::remove_file(&record_path).expect("simulate interruption before Cabinet persistence");
+    repair_device
+        .set_current_key_epoch(household_id, 2)
+        .expect("advance the Household key epoch before retry");
+
+    let repaired = store
+        .append(household_id, cabinet.path(), draft)
+        .expect("retry should restore the old-epoch exact portable record");
+
+    assert_eq!(repaired, appended);
+    assert!(record_path.is_file());
+    assert_eq!(
+        store
+            .list_events(household_id)
+            .expect("list the idempotent local projection"),
+        vec![appended]
+    );
+}
+
+#[test]
 fn secret_shaped_content_is_rejected_before_portable_memory_is_written() {
     let household_id = "rivera-household";
     let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
@@ -212,28 +310,24 @@ fn secret_shaped_content_is_rejected_before_portable_memory_is_written() {
     let store = PortableMemoryStore::open(local.path().join("luna.db"), first_device)
         .expect("open portable memory");
 
-    let error = store
-        .append(
-            household_id,
-            cabinet.path(),
-            PortableEventDraft {
-                event_id: "consent-event-with-secret".to_owned(),
-                sequence: 1,
-                previous_event_digest: None,
-                supersedes_event_digest: None,
-                occurred_at: "2026-07-24T17:40:00+10:00".to_owned(),
-                conversation_reference: None,
-                fact: PortableFact::ConsentGrant {
-                    grant_reference: "consent-grant-1".to_owned(),
-                    provider: "OpenAI".to_owned(),
-                    scope: "Bearer luna-test-token-should-never-sync".to_owned(),
-                    state: "granted".to_owned(),
-                },
-            },
-        )
-        .expect_err("credential-shaped content must not enter portable memory");
+    let error = PortableReference::new("Bearer luna-test-token-should-never-sync")
+        .expect_err("credential-shaped content must not enter the typed portable schema");
 
     assert!(matches!(error, PortableMemoryError::SensitiveMaterial));
+    for excluded in [
+        "246810",
+        "AKIAIOSFODNN7EXAMPLE",
+        "dGVzdC1wcml2YXRlLWtleS1ieXRlcw",
+        "subject:not-a-domain-uuid",
+    ] {
+        assert!(
+            matches!(
+                PortableReference::new(excluded),
+                Err(PortableMemoryError::SensitiveMaterial)
+            ),
+            "{excluded} must not satisfy the owning-domain reference grammar"
+        );
+    }
     assert!(!cabinet.path().join(".luna-memory").exists());
     assert!(store
         .list_events(household_id)
@@ -260,33 +354,33 @@ fn concurrent_filing_rule_events_create_a_resolvable_conflict() {
             household_id,
             cabinet.path(),
             PortableEventDraft {
-                event_id: "rule-event-paused".to_owned(),
+                event_id: event_id("rule-event-paused"),
                 sequence: 1,
                 previous_event_digest: None,
                 supersedes_event_digest: None,
                 occurred_at: "2026-07-24T18:00:00+10:00".to_owned(),
                 conversation_reference: None,
                 fact: PortableFact::FilingRule {
-                    rule_reference: "filing-rule-7".to_owned(),
-                    state: "paused".to_owned(),
+                    rule_reference: reference("filing-rule-7"),
+                    state: PortableFilingRuleState::Paused,
                 },
             },
         )
         .expect("append the first Filing Rule event");
-    second_store
+    let deleted = second_store
         .append(
             household_id,
             cabinet.path(),
             PortableEventDraft {
-                event_id: "rule-event-deleted".to_owned(),
+                event_id: event_id("rule-event-deleted"),
                 sequence: 1,
                 previous_event_digest: None,
                 supersedes_event_digest: None,
                 occurred_at: "2026-07-24T18:00:01+10:00".to_owned(),
                 conversation_reference: None,
                 fact: PortableFact::FilingRule {
-                    rule_reference: "filing-rule-7".to_owned(),
-                    state: "deleted".to_owned(),
+                    rule_reference: reference("filing-rule-7"),
+                    state: PortableFilingRuleState::Deleted,
                 },
             },
         )
@@ -296,7 +390,7 @@ fn concurrent_filing_rule_events_create_a_resolvable_conflict() {
         .import(
             household_id,
             cabinet.path(),
-            &[first_authorization, second_authorization],
+            &[first_authorization.clone(), second_authorization.clone()],
         )
         .expect("import concurrent portable events");
     assert_eq!(report.imported, 1);
@@ -308,22 +402,237 @@ fn concurrent_filing_rule_events_create_a_resolvable_conflict() {
         .expect("list unresolved portable-memory conflicts");
     assert_eq!(conflicts, report.conflicts);
     let conflict = &conflicts[0];
-    assert_eq!(conflict.subject_reference, "filingRule:filing-rule-7");
+    assert_eq!(
+        conflict.subject_reference,
+        filing_rule_subject("filing-rule-7")
+    );
+
+    let first_conflict_report = first_store
+        .import(
+            household_id,
+            cabinet.path(),
+            &[first_authorization.clone(), second_authorization.clone()],
+        )
+        .expect("make the same base conflict visible on the first device");
+    assert_eq!(first_conflict_report.conflicts.len(), 1);
+    let first_conflict = first_conflict_report.conflicts[0].clone();
+
+    let paused_resolution = second_store
+        .resolve_conflict(
+            household_id,
+            cabinet.path(),
+            conflict.id,
+            PortableConflictResolutionDraft {
+                event_id: event_id("conflict-resolution-1"),
+                sequence: 2,
+                previous_event_digest: Some(
+                    second_store
+                        .list_events(household_id)
+                        .expect("list the recovered device chain")
+                        .into_iter()
+                        .find(|event| event.signer_device_id == second_authorization.device_id)
+                        .expect("find the recovered device event")
+                        .digest,
+                ),
+                occurred_at: "2026-07-24T18:01:00+10:00".to_owned(),
+                chosen_event_id: paused.event_id.clone(),
+            },
+        )
+        .expect("choose the retained Filing Rule event");
+    let deleted_resolution = first_store
+        .resolve_conflict(
+            household_id,
+            cabinet.path(),
+            first_conflict.id,
+            PortableConflictResolutionDraft {
+                event_id: event_id("conflict-resolution-2"),
+                sequence: 2,
+                previous_event_digest: Some(paused.digest.clone()),
+                occurred_at: "2026-07-24T18:01:01+10:00".to_owned(),
+                chosen_event_id: deleted.event_id.clone(),
+            },
+        )
+        .expect("record the concurrent opposing resolution");
+
+    let opposing = second_store
+        .import(
+            household_id,
+            cabinet.path(),
+            &[first_authorization.clone(), second_authorization.clone()],
+        )
+        .expect("opposing signed resolutions should import as a new detectable conflict");
+    assert_eq!(opposing.imported, 1);
+    assert_eq!(opposing.conflicts.len(), 1);
+    let resolution_conflict = &opposing.conflicts[0];
+    assert!(resolution_conflict
+        .subject_reference
+        .starts_with("conflictResolution:"));
 
     second_store
-        .resolve_conflict(household_id, conflict.id, &paused.event_id)
-        .expect("choose the retained Filing Rule event");
-    assert!(second_store
+        .resolve_conflict(
+            household_id,
+            cabinet.path(),
+            resolution_conflict.id,
+            PortableConflictResolutionDraft {
+                event_id: event_id("conflict-resolution-final"),
+                sequence: 3,
+                previous_event_digest: Some(paused_resolution.digest.clone()),
+                occurred_at: "2026-07-24T18:02:00+10:00".to_owned(),
+                chosen_event_id: deleted_resolution.event_id.clone(),
+            },
+        )
+        .expect("resolve the competing resolution events in favor of the second resolution");
+    let final_report = first_store
+        .import(
+            household_id,
+            cabinet.path(),
+            &[first_authorization, second_authorization],
+        )
+        .expect("replay both resolutions and their final resolution");
+    assert!(final_report.conflicts.is_empty());
+    assert!(first_store
         .list_conflicts(household_id)
-        .expect("list resolved portable-memory conflicts")
+        .expect("list first-device conflicts after final portable resolution")
         .is_empty());
     assert_eq!(
-        second_store
-            .current_subject_event(household_id, "filingRule:filing-rule-7")
-            .expect("read the resolved Filing Rule projection")
+        first_store
+            .current_subject_event(household_id, &filing_rule_subject("filing-rule-7"))
+            .expect("read the rebuilt first-device Filing Rule projection")
             .expect("the resolved Filing Rule event should exist")
             .event_id,
-        paused.event_id
+        deleted.event_id
+    );
+
+    first_store
+        .append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("conflict-resolution-late"),
+                sequence: 3,
+                previous_event_digest: Some(deleted_resolution.digest),
+                supersedes_event_digest: None,
+                occurred_at: "2026-07-24T18:03:00+10:00".to_owned(),
+                conversation_reference: None,
+                fact: PortableFact::ConflictResolution {
+                    existing_event_id: PortableReference::new(first_conflict.existing_event_id)
+                        .expect("the conflict should contain a portable event reference"),
+                    conflicting_event_id: PortableReference::new(
+                        first_conflict.conflicting_event_id,
+                    )
+                    .expect("the conflict should contain a portable event reference"),
+                    chosen_event_id: PortableReference::new(paused.event_id)
+                        .expect("the chosen event should be a portable event reference"),
+                },
+            },
+        )
+        .expect("record a later resolution against the now-authoritative second choice");
+    let late_conflicts = first_store
+        .list_conflicts(household_id)
+        .expect("surface the later competing resolution");
+    assert_eq!(late_conflicts.len(), 1);
+    assert!(late_conflicts[0]
+        .subject_reference
+        .starts_with("conflictResolution:"));
+}
+
+#[test]
+fn import_rebuilds_causal_subject_updates_even_when_the_update_file_sorts_first() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
+    let first_local = tempfile::tempdir().expect("create the first local database directory");
+    let second_local = tempfile::tempdir().expect("create the second local database directory");
+    let rebuilt_local = tempfile::tempdir().expect("create a rebuilt local database directory");
+    let (first_device, second_device, first_authorization, second_authorization) =
+        enrol_two_devices(household_id);
+    let rebuilt_device = second_device.clone();
+    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
+        .expect("open portable memory on the first device");
+    let second_store =
+        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
+            .expect("open portable memory on the second device");
+    let rebuilt_store =
+        PortableMemoryStore::open(rebuilt_local.path().join("luna.db"), rebuilt_device)
+            .expect("open empty portable memory for a causal rebuild");
+
+    let base = first_store
+        .append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("causal-update"),
+                sequence: 1,
+                previous_event_digest: None,
+                supersedes_event_digest: None,
+                occurred_at: "2026-07-24T18:05:00+10:00".to_owned(),
+                conversation_reference: None,
+                fact: PortableFact::FilingRule {
+                    rule_reference: reference("filing-rule-causal"),
+                    state: PortableFilingRuleState::Active,
+                },
+            },
+        )
+        .expect("append the causal base event");
+    second_store
+        .import(
+            household_id,
+            cabinet.path(),
+            std::slice::from_ref(&first_authorization),
+        )
+        .expect("import the causal base before updating it");
+    let update = second_store
+        .append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("causal-base"),
+                sequence: 1,
+                previous_event_digest: None,
+                supersedes_event_digest: Some(base.digest),
+                occurred_at: "2026-07-24T18:06:00+10:00".to_owned(),
+                conversation_reference: None,
+                fact: PortableFact::FilingRule {
+                    rule_reference: reference("filing-rule-causal"),
+                    state: PortableFilingRuleState::Paused,
+                },
+            },
+        )
+        .expect("append the causal update");
+
+    let mut event_paths = fs::read_dir(
+        cabinet
+            .path()
+            .join(".luna-memory")
+            .join("v1")
+            .join("events"),
+    )
+    .expect("read causal event files")
+    .map(|entry| entry.expect("read a causal event file").file_name())
+    .collect::<Vec<_>>();
+    event_paths.sort();
+    assert_eq!(event_paths.len(), 2);
+    assert!(
+        event_paths[0]
+            .to_string_lossy()
+            .starts_with(&format!("{:x}", Sha256::digest(update.event_id.as_bytes()))),
+        "the update file should sort before its dependency for this regression"
+    );
+
+    let report = rebuilt_store
+        .import(
+            household_id,
+            cabinet.path(),
+            &[first_authorization, second_authorization],
+        )
+        .expect("rebuild events in dependency order rather than filename order");
+    assert_eq!(report.imported, 2);
+    assert!(report.conflicts.is_empty());
+    assert_eq!(
+        rebuilt_store
+            .current_subject_event(household_id, &filing_rule_subject("filing-rule-causal"),)
+            .expect("read the causally rebuilt Filing Rule")
+            .expect("the rebuilt Filing Rule should exist"),
+        update
     );
 }
 
@@ -340,17 +649,17 @@ fn a_portable_event_with_a_substituted_device_predecessor_is_rejected() {
             household_id,
             cabinet.path(),
             PortableEventDraft {
-                event_id: "audit-event-first".to_owned(),
+                event_id: event_id("audit-event-first"),
                 sequence: 1,
                 previous_event_digest: None,
                 supersedes_event_digest: None,
                 occurred_at: "2026-07-24T18:10:00+10:00".to_owned(),
                 conversation_reference: None,
                 fact: PortableFact::AuditEvent {
-                    event_kind: "documentFiled".to_owned(),
-                    authority: "memberDirection".to_owned(),
-                    subject_reference: "document-arrival-55".to_owned(),
-                    outcome: "filedAndVerified".to_owned(),
+                    event_kind: PortableAuditEventKind::DocumentFiled,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference: reference("document-arrival-55"),
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
                 },
             },
         )
@@ -361,17 +670,17 @@ fn a_portable_event_with_a_substituted_device_predecessor_is_rejected() {
             household_id,
             cabinet.path(),
             PortableEventDraft {
-                event_id: "audit-event-replayed".to_owned(),
+                event_id: event_id("audit-event-replayed"),
                 sequence: 2,
-                previous_event_digest: Some("substituted-predecessor".to_owned()),
+                previous_event_digest: Some("0".repeat(64)),
                 supersedes_event_digest: None,
                 occurred_at: "2026-07-24T18:11:00+10:00".to_owned(),
                 conversation_reference: None,
                 fact: PortableFact::AuditEvent {
-                    event_kind: "documentFiled".to_owned(),
-                    authority: "memberDirection".to_owned(),
-                    subject_reference: "document-arrival-56".to_owned(),
-                    outcome: "filedAndVerified".to_owned(),
+                    event_kind: PortableAuditEventKind::DocumentFiled,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference: reference("document-arrival-56"),
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
                 },
             },
         )
@@ -398,6 +707,88 @@ fn a_portable_event_with_a_substituted_device_predecessor_is_rejected() {
 }
 
 #[test]
+fn revoked_device_authorization_accepts_history_only_through_its_signed_cutoff() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
+    let first_local = tempfile::tempdir().expect("create the first local database directory");
+    let second_local = tempfile::tempdir().expect("create the second local database directory");
+    let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
+    let revoked_device = first_device.clone();
+    let retained_device = second_device.clone();
+    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
+        .expect("open portable memory on the device that will be revoked");
+    let second_store =
+        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
+            .expect("open portable memory on a retained device");
+    revoked_device
+        .set_current_key_epoch(household_id, 2)
+        .expect("advance to the cutoff key epoch");
+    retained_device
+        .set_current_key_epoch(household_id, 2)
+        .expect("give the retained device the cutoff key epoch");
+    let before_revocation = first_store
+        .append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("revocation-cutoff"),
+                sequence: 1,
+                previous_event_digest: None,
+                supersedes_event_digest: None,
+                occurred_at: "2026-07-24T18:15:00+10:00".to_owned(),
+                conversation_reference: None,
+                fact: PortableFact::AuditEvent {
+                    event_kind: PortableAuditEventKind::DocumentFiled,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference: reference("document-before-revocation"),
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                },
+            },
+        )
+        .expect("append legitimate pre-revocation history");
+    let revoked_authorization = TrustedDeviceAuthorization {
+        revoked_after: Some(PortableAuthorizationCutoff {
+            key_epoch: 2,
+            sequence: 1,
+            event_digest: before_revocation.digest.clone(),
+        }),
+        ..first_authorization
+    };
+    second_store
+        .import(
+            household_id,
+            cabinet.path(),
+            std::slice::from_ref(&revoked_authorization),
+        )
+        .expect("import legitimate history through the revocation cutoff");
+    first_store
+        .append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("after-revocation-forgery"),
+                sequence: 2,
+                previous_event_digest: Some(before_revocation.digest),
+                supersedes_event_digest: None,
+                occurred_at: "2026-07-24T18:16:00+10:00".to_owned(),
+                conversation_reference: None,
+                fact: PortableFact::AuditEvent {
+                    event_kind: PortableAuditEventKind::DocumentFiled,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference: reference("document-after-revocation"),
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                },
+            },
+        )
+        .expect("simulate a revoked device signing beyond its authorization cutoff");
+
+    assert!(matches!(
+        second_store.import(household_id, cabinet.path(), &[revoked_authorization],),
+        Err(PortableMemoryError::UntrustedDevice)
+    ));
+}
+
+#[test]
 fn a_modified_portable_record_is_rejected_before_local_import() {
     let household_id = "rivera-household";
     let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
@@ -414,17 +805,17 @@ fn a_modified_portable_record_is_rejected_before_local_import() {
             household_id,
             cabinet.path(),
             PortableEventDraft {
-                event_id: "audit-event-tamper-target".to_owned(),
+                event_id: event_id("audit-event-tamper-target"),
                 sequence: 1,
                 previous_event_digest: None,
                 supersedes_event_digest: None,
                 occurred_at: "2026-07-24T18:20:00+10:00".to_owned(),
                 conversation_reference: None,
                 fact: PortableFact::AuditEvent {
-                    event_kind: "documentFiled".to_owned(),
-                    authority: "memberDirection".to_owned(),
-                    subject_reference: "document-arrival-60".to_owned(),
-                    outcome: "filedAndVerified".to_owned(),
+                    event_kind: PortableAuditEventKind::DocumentFiled,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference: reference("document-arrival-60"),
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
                 },
             },
         )

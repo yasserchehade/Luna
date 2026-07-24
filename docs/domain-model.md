@@ -103,7 +103,7 @@ A Trusted Device controls one device identity and its participation in household
 
 A Trusted Device must also be locally unlocked with its Device PIN for the current session. Recovery material remains pending until its service registration succeeds, and Device Revocation advances the Household key epoch for every retained device.
 
-Portable Memory Records carry only typed durable facts. A Trusted Device signs each encrypted append-only record with its device-held authorisation key. Import verifies that signature against Trusted Device coordination data before decrypting the record with the Household key and rebuilding the device's own local database. Competing mutable facts become a Portable Memory Conflict; neither record silently overwrites the other.
+Portable Memory Records carry only typed durable facts and opaque owning-domain UUID references. A Trusted Device signs each encrypted append-only record with its device-held authorisation key. Import verifies that signature and the device's activation/revocation validity window against Trusted Device coordination data before decrypting the record with the correct Household key epoch and rebuilding the device's own local database. The Recovery Key protects the complete historical Household-key ring so a device recovered after rotation can rebuild pre-rotation History without restoring access to a revoked device. Competing mutable facts or opposing resolution events become a Portable Memory Conflict; neither record silently overwrites the other.
 
 ## Invariants
 
@@ -130,7 +130,7 @@ Portable Memory Records carry only typed durable facts. A Trusted Device signs e
 21. **Interpretation is not execution.** A Member Utterance changes durable state only after a typed candidate direction passes owning-domain validation; ambiguous interpretations do not execute.
 22. **Portable memory contains durable facts only.** Filing Rules, relationships, Member Direction, authority, Consent Grants, outcomes, Audit Events and stable references may cross devices; derived prompts, transient orchestration, hidden reasoning and raw provider output do not.
 23. **Secrets never become portable memory.** Credentials, tokens, device private keys and plaintext encryption keys remain in their owning credential boundary.
-24. **Portable delivery is append-only and idempotent.** A duplicate record has no additional effect, while modified, replay-invalid or untrusted records are rejected.
+24. **Portable delivery is append-only and idempotent.** A duplicate record has no additional effect, an interrupted Cabinet write can be repaired from the exact committed record across key rotation, and modified, replay-invalid, post-revocation or untrusted records are rejected.
 25. **Concurrent portable state never silently overwrites.** Valid competing changes to one mutable subject remain detectable until an explicit resolution selects the current projection.
 26. **Each Trusted Device owns a separate local database.** The Cabinet carries Portable Memory Records, never a live database file.
 

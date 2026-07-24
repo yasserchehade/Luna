@@ -150,6 +150,18 @@ pub struct ProtectedHouseholdState {
     ciphertext: Vec<u8>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct RecoveryKeyring {
+    version: u8,
+    keys: Vec<RecoveryEpochKey>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RecoveryEpochKey {
+    epoch: u32,
+    key: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct TrustedDeviceManager<V: CredentialVault> {
     vault: V,
@@ -250,6 +262,11 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         if key_epoch == 0 {
             return Err(TrustedDeviceError::Cryptography);
         }
+        let household_key = self.household_key(household_id)?;
+        self.vault.set_secret(
+            &household_key_epoch_name(household_id, key_epoch),
+            &household_key,
+        )?;
         self.vault
             .set_secret(&key_epoch_name(household_id), &key_epoch.to_le_bytes())?;
         Ok(())
@@ -294,6 +311,12 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
     }
 
     pub fn forget_current_device(&self, household_id: &str) -> Result<(), TrustedDeviceError> {
+        if let Ok(current_epoch) = self.current_key_epoch(household_id) {
+            for epoch in 1..=current_epoch {
+                self.vault
+                    .delete_secret(&household_key_epoch_name(household_id, epoch))?;
+            }
+        }
         self.vault
             .delete_secret(&device_identity_name(household_id))?;
         self.vault
@@ -329,7 +352,16 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         let recovery_key = Mnemonic::from_entropy(&random_bytes::<HOUSEHOLD_KEY_BYTES>()?)
             .map_err(|_| TrustedDeviceError::Cryptography)?
             .to_string();
-        let recovery_envelope = encrypt_for_recovery(&recovery_key, &household_key)?;
+        let recovery_envelope = encrypt_recovery_keyring(
+            &recovery_key,
+            &RecoveryKeyring {
+                version: 1,
+                keys: vec![RecoveryEpochKey {
+                    epoch: 1,
+                    key: household_key.to_vec(),
+                }],
+            },
+        )?;
         let recovery_verification_key = recovery_signing_key(&recovery_key)?
             .verifying_key()
             .to_bytes();
@@ -367,11 +399,11 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         if self.current_key_epoch(household_id)? != current_key_epoch {
             return Err(TrustedDeviceError::Cryptography);
         }
-        let household_key = self.household_key(household_id)?;
+        let keyring = self.local_recovery_keyring(household_id, current_key_epoch)?;
         let recovery_key = Mnemonic::from_entropy(&random_bytes::<HOUSEHOLD_KEY_BYTES>()?)
             .map_err(|_| TrustedDeviceError::Cryptography)?
             .to_string();
-        let recovery_envelope = encrypt_for_recovery(&recovery_key, &household_key)?;
+        let recovery_envelope = encrypt_recovery_keyring(&recovery_key, &keyring)?;
         let recovery_verification_key = recovery_signing_key(&recovery_key)?
             .verifying_key()
             .to_bytes();
@@ -406,8 +438,9 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         recovery_envelope: &[u8],
     ) -> Result<(), TrustedDeviceError> {
         self.require_unlocked(household_id)?;
-        let recovered = decrypt_recovery_envelope(recovery_key, recovery_envelope)?;
-        if recovered != self.household_key(household_id)? {
+        let keyring = decrypt_recovery_keyring(recovery_key, recovery_envelope)?;
+        let current_epoch = self.current_key_epoch(household_id)?;
+        if keyring_key(&keyring, current_epoch)? != self.household_key(household_id)? {
             return Err(TrustedDeviceError::InvalidRecoveryKey);
         }
         Ok(())
@@ -420,10 +453,8 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         recovery_envelope: &[u8],
         key_epoch: u32,
     ) -> Result<RecoveredDeviceEnrollment, TrustedDeviceError> {
-        let household_key = decrypt_recovery_envelope(recovery_key, recovery_envelope)?;
-        if household_key.len() != HOUSEHOLD_KEY_BYTES {
-            return Err(TrustedDeviceError::InvalidRecoveryKey);
-        }
+        let keyring = decrypt_recovery_keyring(recovery_key, recovery_envelope)?;
+        let household_key = keyring_key(&keyring, key_epoch)?;
 
         let device_identity = x25519::Identity::generate();
         let device_public_key = device_identity.to_public().to_string();
@@ -449,8 +480,10 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             &pending_device_identity_name(household_id),
             device_secret.expose_secret().as_bytes(),
         )?;
-        self.vault
-            .set_secret(&pending_household_key_name(household_id), &household_key)?;
+        self.vault.set_secret(
+            &pending_household_key_name(household_id),
+            &serde_json::to_vec(&keyring).map_err(|_| TrustedDeviceError::Cryptography)?,
+        )?;
         self.vault.set_secret(
             &pending_device_authorization_key_name(household_id),
             &device_authorization_key.to_bytes(),
@@ -473,10 +506,13 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             .vault
             .get_secret(&pending_device_identity_name(household_id))?
             .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
-        let household_key = self
+        let pending_keyring = self
             .vault
             .get_secret(&pending_household_key_name(household_id))?
             .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
+        let keyring: RecoveryKeyring = serde_json::from_slice(&pending_keyring)
+            .map_err(|_| TrustedDeviceError::Cryptography)?;
+        let household_key = keyring_key(&keyring, key_epoch)?;
         let device_authorization_key = self
             .vault
             .get_secret(&pending_device_authorization_key_name(household_id))?
@@ -485,6 +521,12 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             .set_secret(&device_identity_name(household_id), &identity)?;
         self.vault
             .set_secret(&household_key_name(household_id), &household_key)?;
+        for epoch_key in &keyring.keys {
+            self.vault.set_secret(
+                &household_key_epoch_name(household_id, epoch_key.epoch),
+                &epoch_key.key,
+            )?;
+        }
         self.vault.set_secret(
             &device_authorization_key_name(household_id),
             &device_authorization_key,
@@ -507,9 +549,9 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         recovery_key: &str,
         recovery_envelope: &[u8],
     ) -> Result<(), TrustedDeviceError> {
-        let recovered = decrypt_recovery_envelope(recovery_key, recovery_envelope)?;
+        let keyring = decrypt_recovery_keyring(recovery_key, recovery_envelope)?;
         let stored = self.household_key(household_id)?;
-        if recovered != stored {
+        if !keyring.keys.iter().any(|entry| entry.key == stored) {
             return Err(TrustedDeviceError::InvalidRecoveryKey);
         }
         self.vault
@@ -528,8 +570,8 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
     ) -> Result<HouseholdKeyRotation, TrustedDeviceError> {
         self.require_unlocked(household_id)?;
         let current_key = self.household_key(household_id)?;
-        let recovered = decrypt_recovery_envelope(recovery_key, current_recovery_envelope)?;
-        if recovered != current_key {
+        let mut keyring = decrypt_recovery_keyring(recovery_key, current_recovery_envelope)?;
+        if keyring_key(&keyring, current_key_epoch)? != current_key {
             return Err(TrustedDeviceError::InvalidRecoveryKey);
         }
 
@@ -548,7 +590,11 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
                 key_envelope,
             });
         }
-        let recovery_envelope = encrypt_for_recovery(recovery_key, &rotated_key)?;
+        keyring.keys.push(RecoveryEpochKey {
+            epoch: current_key_epoch + 1,
+            key: rotated_key.to_vec(),
+        });
+        let recovery_envelope = encrypt_recovery_keyring(recovery_key, &keyring)?;
         let current_device_public_key = self.current_device_public_key(household_id)?;
         let recovery_authorization_signature = recovery_signing_key(recovery_key)?
             .sign(
@@ -661,6 +707,33 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             .map_err(|_| TrustedDeviceError::ProtectedStateRejected)
     }
 
+    pub fn open_household_state_at_epoch(
+        &self,
+        household_id: &str,
+        key_epoch: u32,
+        protected: &ProtectedHouseholdState,
+    ) -> Result<Vec<u8>, TrustedDeviceError> {
+        self.require_unlocked(household_id)?;
+        let key = self
+            .vault
+            .get_secret(&household_key_epoch_name(household_id, key_epoch))?
+            .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
+        if key.len() != HOUSEHOLD_KEY_BYTES {
+            return Err(TrustedDeviceError::MissingHouseholdKey);
+        }
+        let cipher = XChaCha20Poly1305::new_from_slice(&key)
+            .map_err(|_| TrustedDeviceError::ProtectedStateRejected)?;
+        cipher
+            .decrypt(
+                XNonce::from_slice(&protected.nonce),
+                Payload {
+                    msg: &protected.ciphertext,
+                    aad: household_id.as_bytes(),
+                },
+            )
+            .map_err(|_| TrustedDeviceError::ProtectedStateRejected)
+    }
+
     fn require_confirmed(&self, household_id: &str) -> Result<(), TrustedDeviceError> {
         match self
             .vault
@@ -680,6 +753,25 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             return Err(TrustedDeviceError::MissingHouseholdKey);
         }
         Ok(key)
+    }
+
+    fn local_recovery_keyring(
+        &self,
+        household_id: &str,
+        current_epoch: u32,
+    ) -> Result<RecoveryKeyring, TrustedDeviceError> {
+        let mut keys = Vec::with_capacity(current_epoch as usize);
+        for epoch in 1..=current_epoch {
+            let key = self
+                .vault
+                .get_secret(&household_key_epoch_name(household_id, epoch))?
+                .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
+            if key.len() != HOUSEHOLD_KEY_BYTES {
+                return Err(TrustedDeviceError::MissingHouseholdKey);
+            }
+            keys.push(RecoveryEpochKey { epoch, key });
+        }
+        Ok(RecoveryKeyring { version: 1, keys })
     }
 
     fn device_identity(&self, household_id: &str) -> Result<x25519::Identity, TrustedDeviceError> {
@@ -730,22 +822,45 @@ fn validate_device_pin(pin: &str) -> Result<(), TrustedDeviceError> {
     }
 }
 
-fn encrypt_for_recovery(
+fn encrypt_recovery_keyring(
     recovery_key: &str,
-    household_key: &[u8],
+    keyring: &RecoveryKeyring,
 ) -> Result<Vec<u8>, TrustedDeviceError> {
     let passphrase = SecretString::from(recovery_key.to_owned());
     let recipient = age::scrypt::Recipient::new(passphrase);
-    age::encrypt(&recipient, household_key).map_err(|_| TrustedDeviceError::Cryptography)
+    let plaintext = serde_json::to_vec(keyring).map_err(|_| TrustedDeviceError::Cryptography)?;
+    age::encrypt(&recipient, &plaintext).map_err(|_| TrustedDeviceError::Cryptography)
 }
 
-fn decrypt_recovery_envelope(
+fn decrypt_recovery_keyring(
     recovery_key: &str,
     recovery_envelope: &[u8],
-) -> Result<Vec<u8>, TrustedDeviceError> {
+) -> Result<RecoveryKeyring, TrustedDeviceError> {
     let passphrase = SecretString::from(recovery_key.to_owned());
     let identity = age::scrypt::Identity::new(passphrase);
-    age::decrypt(&identity, recovery_envelope).map_err(|_| TrustedDeviceError::InvalidRecoveryKey)
+    let plaintext = age::decrypt(&identity, recovery_envelope)
+        .map_err(|_| TrustedDeviceError::InvalidRecoveryKey)?;
+    let keyring: RecoveryKeyring =
+        serde_json::from_slice(&plaintext).map_err(|_| TrustedDeviceError::InvalidRecoveryKey)?;
+    if keyring.version != 1
+        || keyring.keys.is_empty()
+        || keyring
+            .keys
+            .iter()
+            .any(|entry| entry.epoch == 0 || entry.key.len() != HOUSEHOLD_KEY_BYTES)
+    {
+        return Err(TrustedDeviceError::InvalidRecoveryKey);
+    }
+    Ok(keyring)
+}
+
+fn keyring_key(keyring: &RecoveryKeyring, key_epoch: u32) -> Result<Vec<u8>, TrustedDeviceError> {
+    keyring
+        .keys
+        .iter()
+        .find(|entry| entry.epoch == key_epoch)
+        .map(|entry| entry.key.clone())
+        .ok_or(TrustedDeviceError::MissingHouseholdKey)
 }
 
 fn recovery_signing_key(recovery_key: &str) -> Result<SigningKey, TrustedDeviceError> {
@@ -852,6 +967,10 @@ fn device_authorization_key_name(household_id: &str) -> String {
 
 fn household_key_name(household_id: &str) -> String {
     format!("household:{household_id}:memory-key")
+}
+
+fn household_key_epoch_name(household_id: &str, key_epoch: u32) -> String {
+    format!("household:{household_id}:memory-key:epoch:{key_epoch}")
 }
 
 fn trust_confirmation_name(household_id: &str) -> String {

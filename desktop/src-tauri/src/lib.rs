@@ -33,9 +33,12 @@ pub use intelligence::{
     ProviderError,
 };
 pub use portable_memory::{
-    PortableConflict, PortableConversationReference, PortableEvent, PortableEventDraft,
-    PortableFact, PortableImportReport, PortableMemoryError, PortableMemoryStore,
-    TrustedDeviceAuthorization,
+    PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff, PortableConflict,
+    PortableConflictResolutionDraft, PortableConsentProvider, PortableConsentScope,
+    PortableConsentState, PortableConversationReference, PortableDocumentRelationshipKind,
+    PortableEvent, PortableEventDraft, PortableExecutionOutcomeKind, PortableFact,
+    PortableFilingRuleState, PortableImportReport, PortableMemberDirectionKind,
+    PortableMemoryError, PortableMemoryStore, PortableReference, TrustedDeviceAuthorization,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
