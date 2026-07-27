@@ -7,6 +7,7 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/desktop.yml"
+      - ".github/workflows/full-desktop.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
