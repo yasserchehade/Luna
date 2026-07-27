@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "desktop/**"
+      - "ops/litellm/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/desktop.yml"
@@ -43,6 +44,14 @@ jobs:
           workspaces: "desktop/src-tauri -> target"
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
+      - run: node --test ops/litellm/canary.test.mjs
+      - name: Validate pinned LiteLLM deployment
+        env:
+          OPENAI_API_KEY: sk-ci-placeholder
+          LITELLM_MASTER_KEY: sk-ci-master-placeholder
+          LITELLM_DATABASE_PASSWORD: ci-placeholder
+          DATABASE_URL: postgresql://llmproxy:ci-placeholder@database:5432/litellm
+        run: docker compose -f ops/litellm/compose.yaml config --quiet
       - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --all -- --check
       - run: pnpm --filter luna-desktop test
       - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings

@@ -25,7 +25,8 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Replaceable adapter | the same `DocumentIntelligenceService` tests run with the deterministic gateway |
 | Safe immutable History | `candidate_disposition_appends_history_without_rewriting_the_presented_event` plus application coverage for rejected candidates |
 | Consent conversation | `desktop/e2e/conversation.spec.ts` names OpenAI, explains the exact reusable scope before consent, and exercises allow-once, reusable consent, reuse, revocation, and Keep local |
+| Operational canary runner | `node --test ops/litellm/canary.test.mjs` proves exact model scoping, the strict structured-result contract, usage evidence, revocation and secret-free output through the public HTTP and CLI seams |
 
-The remote OpenAI/LiteLLM canary is an explicit release-environment check, not an automated-suite dependency. A passing canary must be attached to issue #13 before the evaluated-real-provider criterion is marked complete; this repository/workspace currently contains no deployed gateway endpoint or credential.
+The remote OpenAI/LiteLLM canary is an explicit release-environment check, not an automated-suite dependency. A passing canary must be attached to issue #13 before the evaluated-real-provider criterion is marked complete. The pinned Compose deployment, image signature and fake-credential failure path have been verified locally; this repository/workspace still contains no authorised remote hosting target, OpenAI credential or gateway secret.
 
 Source-boundary review additionally verifies `conversation.rs` and `document_intelligence.rs` import no LiteLLM type. `litellm.rs` is private to the Rust crate.
