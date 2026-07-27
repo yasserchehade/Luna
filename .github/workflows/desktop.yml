@@ -39,6 +39,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: desktop
           workspaces: "desktop/src-tauri -> target"
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
@@ -67,6 +68,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: desktop
           workspaces: "desktop/src-tauri -> target"
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
