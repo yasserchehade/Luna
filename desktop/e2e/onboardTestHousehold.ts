@@ -5,6 +5,7 @@ export async function onboardTestHousehold() {
   const accountEntryAvailable = await browser.waitUntil(async () => (
     await $("#organiser-name").isExisting()
     || await $("#sign-in-email").isExisting()
+    || await $("button[aria-label='Luna']").isExisting()
   ), { timeout: 10_000 }).catch(() => false);
   if (!accountEntryAvailable) {
     const visibleContent = await $("body").getText().catch(() => "<not available>");
@@ -13,6 +14,11 @@ export async function onboardTestHousehold() {
 
   if (await $("#organiser-name").isExisting()) {
     await registerTestHousehold();
+    await configureCabinetIfNeeded();
+    return;
+  }
+
+  if (!await $("#sign-in-email").isExisting()) {
     await configureCabinetIfNeeded();
     return;
   }

@@ -14,7 +14,7 @@ export type ConversationMessage = {
   body: string;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "readyToFile" | "filing" | "filed" | "dismissed";
+export type DocumentProcessingState = "needsMemberDirection" | "possibleDuplicate" | "readyToFile" | "filing" | "filed" | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -101,6 +101,38 @@ export type FilingRuleReorganizationPreview = {
   }>;
 };
 
+export type DuplicateKind = "exact" | "possible";
+
+export type DuplicateDecision = "keepBoth" | "linkCopies" | "discardNew" | "updatedVersion";
+
+export type DuplicateCandidate = {
+  arrivalId: number;
+  kind: DuplicateKind;
+  originalName: string;
+  checksum: string;
+  filedDestination: string | null;
+};
+
+export type DuplicateReview = {
+  candidates: DuplicateCandidate[];
+};
+
+export type DuplicateResolution = {
+  decision: DuplicateDecision;
+  relatedArrivalId: number;
+  relatedOriginalName: string;
+};
+
+export type DuplicateAuditEvent = {
+  id: number;
+  householdId: string;
+  kind: "duplicateDecisionRecorded" | "duplicatePreferenceApplied";
+  decision: DuplicateDecision;
+  subject: string;
+  outcome: string;
+  relatedArrivalId: number;
+};
+
 export type ManualMoveCandidate = {
   arrivalId: number;
   originalName: string;
@@ -181,6 +213,8 @@ export type DocumentArrival = {
   reviewCard: ReviewCard;
   processingState: DocumentProcessingState;
   filedOriginal: FiledOriginal | null;
+  duplicateReview: DuplicateReview | null;
+  duplicateResolution: DuplicateResolution | null;
 };
 
 export type TodoItem = {
@@ -189,6 +223,7 @@ export type TodoItem = {
   conversationTitle: string;
   conversationDeleted: boolean;
   documentName: string;
+  processingState: DocumentProcessingState;
 };
 
 export interface ConversationService {
@@ -206,6 +241,14 @@ export interface ConversationService {
   listTodoItems(householdId: string): Promise<TodoItem[]>;
   listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
   listAuditEvents(householdId: string): Promise<AuditEvent[]>;
+  listDuplicateAuditEvents(householdId: string): Promise<DuplicateAuditEvent[]>;
+  resolveDuplicate(
+    householdId: string,
+    arrivalId: number,
+    relatedArrivalId: number,
+    decision: DuplicateDecision,
+    rememberPreference: boolean,
+  ): Promise<DocumentArrival>;
   listFilingRules(householdId: string): Promise<FilingRuleSummary[]>;
   updateFilingRule(householdId: string, ruleId: number, update: FilingRuleUpdate): Promise<FilingRuleSummary>;
   pauseFilingRule(householdId: string, ruleId: number, paused: boolean): Promise<FilingRuleSummary>;
@@ -273,6 +316,18 @@ export const tauriConversationService: ConversationService = {
   },
   listAuditEvents(householdId) {
     return invoke<AuditEvent[]>("list_audit_events", { householdId });
+  },
+  listDuplicateAuditEvents(householdId) {
+    return invoke<DuplicateAuditEvent[]>("list_duplicate_audit_events", { householdId });
+  },
+  resolveDuplicate(householdId, arrivalId, relatedArrivalId, decision, rememberPreference) {
+    return invoke<DocumentArrival>("resolve_duplicate", {
+      householdId,
+      arrivalId,
+      relatedArrivalId,
+      decision,
+      rememberPreference,
+    });
   },
   listFilingRules(householdId) {
     return invoke<FilingRuleSummary[]>("list_filing_rules", { householdId });

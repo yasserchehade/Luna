@@ -6,6 +6,7 @@ import type {
   ConversationService,
   DocumentContextDirection,
   DocumentArrival,
+  DuplicateDecision,
   FilingDecisionDirection,
   TodoItem,
 } from "./conversationService";
@@ -25,6 +26,7 @@ type ConversationWorkspaceProps = {
 
 const stateLabel = (arrival: DocumentArrival) => ({
   needsMemberDirection: "Needs your direction",
+  possibleDuplicate: "Needs duplicate decision",
   readyToFile: "Ready to file",
   filing: "Filing",
   filed: "Filed",
@@ -38,10 +40,25 @@ const confidenceLabel = (arrival: DocumentArrival) => ({
   unknown: "Unknown",
 })[arrival.reviewCard.confidenceState];
 
+const duplicateDecisionOptions: Array<[DuplicateDecision, string]> = [
+  ["keepBoth", "Keep both"],
+  ["linkCopies", "Link copies"],
+  ["discardNew", "Discard new"],
+  ["updatedVersion", "Updated version"],
+];
+
+const duplicateResolutionLabels: Record<DuplicateDecision, string> = {
+  keepBoth: "Kept both Originals",
+  linkCopies: "Linked both Originals",
+  discardNew: "Discarded the new Original",
+  updatedVersion: "Kept both Originals as an updated version",
+};
+
 type DocumentReviewEditorProps = {
   arrival: DocumentArrival;
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
+  onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
 };
 
 const directionFromReview = (arrival: DocumentArrival): DocumentContextDirection => {
@@ -83,6 +100,7 @@ function DocumentReviewEditor({
   arrival,
   onConfirm,
   onRecord,
+  onResolveDuplicate,
 }: DocumentReviewEditorProps) {
   const context = arrival.reviewCard.context;
   const [direction, setDirection] = useState<DocumentContextDirection>(
@@ -94,6 +112,7 @@ function DocumentReviewEditor({
   const [cabinetDestination, setCabinetDestination] = useState(
     decision?.cabinetDestination ?? "",
   );
+  const [rememberDuplicatePreference, setRememberDuplicatePreference] = useState(false);
   const clarificationQuestions = arrival.processingState === "needsMemberDirection"
     ? arrival.reviewCard.questions.filter(({ field }) => field !== "amount")
     : arrival.reviewCard.questions;
@@ -128,6 +147,29 @@ function DocumentReviewEditor({
     <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
       <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
     </div>)}</dl>
+    {arrival.duplicateReview && <section className="duplicate-review" aria-label={`Duplicate review for ${arrival.originalName}`}>
+      <strong>{arrival.duplicateReview.candidates[0]?.kind === "exact" ? "Exact byte duplicate" : "Possible duplicate (changed bytes)"}</strong>
+      <p>Luna found one or more Originals that may represent the same document. Choose what should happen to this new arrival in relation to each candidate.</p>
+      <ul>{arrival.duplicateReview.candidates.map((candidate) => <li key={candidate.arrivalId}>
+        <span>{candidate.originalName}</span>
+        <small>{candidate.kind === "exact" ? "Exact SHA-256 match" : "Same Household context with changed bytes"}{candidate.filedDestination ? ` · Filed at ${candidate.filedDestination}` : ""}</small>
+        {candidate.kind === "exact" && <label className="duplicate-preference"><input type="checkbox" checked={rememberDuplicatePreference} onChange={(event) => setRememberDuplicatePreference(event.target.checked)} /> Remember this choice for this exact duplicate scope</label>}
+        <div className="duplicate-actions">{duplicateDecisionOptions.map(([decisionValue, label]) => <button
+          key={decisionValue}
+          type="button"
+          onClick={() => void onResolveDuplicate(
+            candidate.arrivalId,
+            decisionValue,
+            candidate.kind === "exact" && rememberDuplicatePreference,
+          )}
+        >{label}</button>)}</div>
+      </li>)}</ul>
+    </section>}
+    {arrival.duplicateResolution && <aside className="duplicate-resolution" aria-label="Duplicate resolution">
+      <small>Duplicate decision</small>
+      <p>{duplicateResolutionLabels[arrival.duplicateResolution.decision]}</p>
+      <small>Related Original: {arrival.duplicateResolution.relatedOriginalName}</small>
+    </aside>}
     {arrival.processingState === "needsMemberDirection" && <form className="context-review-form" onSubmit={(event) => {
       event.preventDefault();
       void onRecord({
@@ -443,6 +485,27 @@ export function ConversationWorkspace({
     }
   };
 
+  const resolveDuplicate = async (
+    arrivalId: number,
+    relatedArrivalId: number,
+    decision: DuplicateDecision,
+    rememberPreference: boolean,
+  ) => {
+    try {
+      await conversationService.resolveDuplicate(
+        householdId,
+        arrivalId,
+        relatedArrivalId,
+        decision,
+        rememberPreference,
+      );
+      setError("");
+      await loadHouseholdWork();
+    } catch (duplicateError) {
+      setError(String(duplicateError));
+    }
+  };
+
   const openTodo = async (todo: TodoItem) => {
     try {
       const availableConversations = await conversationService.listConversations(
@@ -469,7 +532,7 @@ export function ConversationWorkspace({
       <section className="todo-list" aria-label="To-do Items">
         {todos.length === 0 && <p className="empty-state">Nothing needs your attention.</p>}
         {todos.map((todo) => <article key={todo.arrivalId} data-arrival-id={todo.arrivalId}>
-          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>Needs your direction</p></div>
+          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : "Needs your direction"}</p></div>
           <div>
             <button type="button" onClick={() => void openTodo(todo)}>Open Conversation item</button>
             <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>
@@ -559,6 +622,7 @@ export function ConversationWorkspace({
             arrival={arrival}
             onConfirm={(direction) => confirmDecision(arrival.id, direction)}
             onRecord={(direction) => recordDirection(arrival.id, direction)}
+            onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}
           />
         </div>
         {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}

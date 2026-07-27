@@ -33,10 +33,70 @@ pub struct Conversation {
 #[serde(rename_all = "camelCase")]
 pub enum DocumentProcessingState {
     NeedsMemberDirection,
+    PossibleDuplicate,
     ReadyToFile,
     Filing,
     Filed,
     Dismissed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DuplicateKind {
+    Exact,
+    Possible,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DuplicateDecision {
+    KeepBoth,
+    LinkCopies,
+    DiscardNew,
+    UpdatedVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCandidate {
+    pub arrival_id: i64,
+    pub kind: DuplicateKind,
+    pub original_name: String,
+    pub checksum: String,
+    pub filed_destination: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateReview {
+    pub candidates: Vec<DuplicateCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateResolution {
+    pub decision: DuplicateDecision,
+    pub related_arrival_id: i64,
+    pub related_original_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DuplicateAuditKind {
+    DuplicateDecisionRecorded,
+    DuplicatePreferenceApplied,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateAuditEvent {
+    pub id: i64,
+    pub household_id: String,
+    pub kind: DuplicateAuditKind,
+    pub decision: DuplicateDecision,
+    pub subject: String,
+    pub outcome: String,
+    pub related_arrival_id: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,6 +462,8 @@ pub struct DocumentArrival {
     pub review_card: ReviewCard,
     pub processing_state: DocumentProcessingState,
     pub filed_original: Option<FiledOriginal>,
+    pub duplicate_review: Option<DuplicateReview>,
+    pub duplicate_resolution: Option<DuplicateResolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +474,7 @@ pub struct TodoItem {
     pub conversation_title: String,
     pub conversation_deleted: bool,
     pub document_name: String,
+    pub processing_state: DocumentProcessingState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -457,6 +520,27 @@ struct DocumentArrivalPayload {
     automatic_rule_id: Option<i64>,
     #[serde(default)]
     filed_original: Option<FiledOriginal>,
+    #[serde(default)]
+    duplicate_review: Option<DuplicateReview>,
+    #[serde(default)]
+    duplicate_resolution: Option<DuplicateResolution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DuplicatePreferencePayload {
+    checksum: String,
+    context_direction: DocumentContextDirection,
+    decision: DuplicateDecision,
+    related_arrival_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DuplicateAuditPayload {
+    kind: DuplicateAuditKind,
+    decision: DuplicateDecision,
+    subject: String,
+    outcome: String,
+    related_arrival_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,6 +585,8 @@ pub enum ConversationError {
     CabinetDestinationConflict,
     #[error("The staged or filed Original could not be verified.")]
     OriginalVerificationFailed,
+    #[error("The duplicate decision is no longer available.")]
+    DuplicateDecisionUnavailable,
     #[error("Household Context must be resolved before confirming a Filing Decision.")]
     UnresolvedContext,
     #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
@@ -584,6 +670,21 @@ impl<V: CredentialVault> ConversationStore<V> {
             );
             CREATE INDEX IF NOT EXISTS filing_rule_events_household
                 ON filing_rule_events(household_id, id);
+            CREATE TABLE IF NOT EXISTS duplicate_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                household_id TEXT NOT NULL,
+                protected_payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS duplicate_preferences_household
+                ON duplicate_preferences(household_id, id);
+            CREATE TABLE IF NOT EXISTS duplicate_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                household_id TEXT NOT NULL,
+                arrival_id INTEGER NOT NULL,
+                protected_payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS duplicate_events_household
+                ON duplicate_events(household_id, id);
             CREATE INDEX IF NOT EXISTS audit_events_household
                 ON audit_events(household_id, id);
             CREATE UNIQUE INDEX IF NOT EXISTS audit_events_arrival
@@ -775,15 +876,42 @@ impl<V: CredentialVault> ConversationStore<V> {
             learned_rule: None,
             automatic_rule_id: None,
             filed_original: None,
+            duplicate_review: None,
+            duplicate_resolution: None,
         };
-        let protected = self.protect(household_id, &payload)?;
-        let connection = self.connect()?;
-        connection.execute(
-            "INSERT INTO document_arrivals (household_id, conversation_id, protected_payload)
-             VALUES (?1, ?2, ?3)",
-            params![household_id, conversation_id, protected],
-        )?;
-        let arrival_id = connection.last_insert_rowid();
+        let arrival_id = {
+            let protected = self.protect(household_id, &payload)?;
+            let connection = self.connect()?;
+            connection.execute(
+                "INSERT INTO document_arrivals (household_id, conversation_id, protected_payload)
+                 VALUES (?1, ?2, ?3)",
+                params![household_id, conversation_id, protected],
+            )?;
+            connection.last_insert_rowid()
+        };
+        if let Some(duplicate_review) =
+            self.find_duplicate_review(household_id, arrival_id, &payload)?
+        {
+            payload.processing_state = DocumentProcessingState::PossibleDuplicate;
+            payload.duplicate_review = Some(duplicate_review);
+            self.save_document_arrival_payload(
+                household_id,
+                arrival_id,
+                conversation_id,
+                payload.clone(),
+            )?;
+            if let Some(preference) = self.matching_duplicate_preference(household_id, &payload)? {
+                return self.resolve_duplicate_internal(
+                    household_id,
+                    arrival_id,
+                    preference.related_arrival_id,
+                    preference.decision,
+                    false,
+                    DuplicateAuditKind::DuplicatePreferenceApplied,
+                );
+            }
+            return self.document_arrival(household_id, arrival_id, conversation_id, payload);
+        }
         if let Some(rule) = self.matching_filing_rule(
             household_id,
             &payload.context_direction,
@@ -794,7 +922,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             payload.learned_rule = Some(rule.clone());
             payload.automatic_rule_id = Some(rule.id);
             let protected = self.protect(household_id, &payload)?;
-            connection.execute(
+            self.ensure_updated(
                 "UPDATE document_arrivals SET protected_payload = ?1 WHERE id = ?2 AND household_id = ?3",
                 params![protected, arrival_id, household_id],
             )?;
@@ -900,7 +1028,11 @@ impl<V: CredentialVault> ConversationStore<V> {
         arrivals
             .into_iter()
             .filter(|arrival| {
-                arrival.processing_state == DocumentProcessingState::NeedsMemberDirection
+                matches!(
+                    arrival.processing_state,
+                    DocumentProcessingState::NeedsMemberDirection
+                        | DocumentProcessingState::PossibleDuplicate
+                )
             })
             .map(|arrival| {
                 let conversation =
@@ -911,6 +1043,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                     conversation_title: conversation.title,
                     conversation_deleted: conversation.deleted,
                     document_name: arrival.original_name,
+                    processing_state: arrival.processing_state,
                 })
             })
             .collect()
@@ -956,6 +1089,56 @@ impl<V: CredentialVault> ConversationStore<V> {
                 })
             })
             .collect()
+    }
+
+    pub fn list_duplicate_audit_events(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<DuplicateAuditEvent>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, protected_payload FROM duplicate_events
+              WHERE household_id = ?1 ORDER BY id DESC",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected_rows
+            .into_iter()
+            .map(|(id, protected)| {
+                let payload: DuplicateAuditPayload =
+                    self.open_protected(household_id, &protected)?;
+                Ok(DuplicateAuditEvent {
+                    id,
+                    household_id: household_id.to_owned(),
+                    kind: payload.kind,
+                    decision: payload.decision,
+                    subject: payload.subject,
+                    outcome: payload.outcome,
+                    related_arrival_id: payload.related_arrival_id,
+                })
+            })
+            .collect()
+    }
+
+    pub fn resolve_duplicate(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        related_arrival_id: i64,
+        decision: DuplicateDecision,
+        remember_preference: bool,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.resolve_duplicate_internal(
+            household_id,
+            arrival_id,
+            related_arrival_id,
+            decision,
+            remember_preference,
+            DuplicateAuditKind::DuplicateDecisionRecorded,
+        )
     }
 
     pub fn list_filing_rules(
@@ -1318,10 +1501,11 @@ impl<V: CredentialVault> ConversationStore<V> {
                 .as_ref()
                 .ok_or(ConversationError::OriginalVerificationFailed)?;
             verify_existing_destination(&filed_original.final_path, &filed_original.checksum)?;
-            if payload.original_path.is_file() {
-                fs::remove_file(&payload.original_path)?;
-                remove_empty_staging_directory(&payload.original_path);
-            }
+            self.release_staged_original_if_unreferenced(
+                household_id,
+                arrival_id,
+                &payload.original_path,
+            )?;
             return self.document_arrival(household_id, arrival_id, conversation_id, payload);
         }
         let resuming = payload.processing_state == DocumentProcessingState::Filing;
@@ -1460,9 +1644,43 @@ impl<V: CredentialVault> ConversationStore<V> {
         )?;
         transaction.commit()?;
 
-        fs::remove_file(&payload.original_path)?;
-        remove_empty_staging_directory(&payload.original_path);
+        self.release_staged_original_if_unreferenced(
+            household_id,
+            arrival_id,
+            &payload.original_path,
+        )?;
         self.document_arrival(household_id, arrival_id, conversation_id, payload)
+    }
+
+    fn release_staged_original_if_unreferenced(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        original_path: &Path,
+    ) -> Result<(), ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, protected_payload FROM document_arrivals
+             WHERE household_id = ?1 AND id != ?2",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id, arrival_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (_, protected) in protected_rows {
+            let other: DocumentArrivalPayload = self.open_protected(household_id, &protected)?;
+            if other.processing_state != DocumentProcessingState::Filed
+                && other.original_path == original_path
+            {
+                return Ok(());
+            }
+        }
+        if original_path.is_file() {
+            fs::remove_file(original_path)?;
+            remove_empty_staging_directory(original_path);
+        }
+        Ok(())
     }
 
     pub fn resume_document_filings(
@@ -1518,6 +1736,203 @@ impl<V: CredentialVault> ConversationStore<V> {
                 Err(error) => Some(Err(error)),
             })
             .transpose()
+    }
+
+    fn find_duplicate_review(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        payload: &DocumentArrivalPayload,
+    ) -> Result<Option<DuplicateReview>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, protected_payload FROM document_arrivals
+              WHERE household_id = ?1 AND id != ?2 ORDER BY id DESC",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id, arrival_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut candidates = Vec::new();
+        for (existing_id, protected) in protected_rows {
+            let existing: DocumentArrivalPayload = self.open_protected(household_id, &protected)?;
+            let kind = if existing.checksum == payload.checksum {
+                Some(DuplicateKind::Exact)
+            } else if possible_duplicate(&existing, payload) {
+                Some(DuplicateKind::Possible)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                candidates.push(DuplicateCandidate {
+                    arrival_id: existing_id,
+                    kind,
+                    original_name: existing.original_name,
+                    checksum: existing.checksum,
+                    filed_destination: existing
+                        .filed_original
+                        .map(|filed| filed.filing_decision.cabinet_destination),
+                });
+            }
+        }
+        candidates.sort_by_key(|candidate| match candidate.kind {
+            DuplicateKind::Exact => 0,
+            DuplicateKind::Possible => 1,
+        });
+        Ok((!candidates.is_empty()).then_some(DuplicateReview { candidates }))
+    }
+
+    fn matching_duplicate_preference(
+        &self,
+        household_id: &str,
+        payload: &DocumentArrivalPayload,
+    ) -> Result<Option<DuplicatePreferencePayload>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT protected_payload FROM duplicate_preferences
+              WHERE household_id = ?1 ORDER BY id DESC",
+        )?;
+        let protected_rows = statement
+            .query_map(params![household_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected_rows
+            .into_iter()
+            .map(|protected| {
+                self.open_protected::<DuplicatePreferencePayload>(household_id, &protected)
+            })
+            .find_map(|result| match result {
+                Ok(preference)
+                    if preference.checksum == payload.checksum
+                        && duplicate_scope_matches(
+                            &preference.context_direction,
+                            &payload.context_direction,
+                        ) =>
+                {
+                    Some(Ok(preference))
+                }
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .transpose()
+    }
+
+    fn resolve_duplicate_internal(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        related_arrival_id: i64,
+        decision: DuplicateDecision,
+        remember_preference: bool,
+        audit_kind: DuplicateAuditKind,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::PossibleDuplicate {
+            return Err(ConversationError::DuplicateDecisionUnavailable);
+        }
+        let candidate = payload
+            .duplicate_review
+            .as_ref()
+            .and_then(|review| {
+                review
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.arrival_id == related_arrival_id)
+            })
+            .cloned()
+            .ok_or(ConversationError::DuplicateDecisionUnavailable)?;
+        if remember_preference && candidate.kind != DuplicateKind::Exact {
+            return Err(ConversationError::DuplicateDecisionUnavailable);
+        }
+        payload.duplicate_review = None;
+        payload.duplicate_resolution = Some(DuplicateResolution {
+            decision,
+            related_arrival_id,
+            related_original_name: candidate.original_name.clone(),
+        });
+        payload.processing_state = match decision {
+            DuplicateDecision::DiscardNew | DuplicateDecision::LinkCopies => {
+                DocumentProcessingState::Dismissed
+            }
+            DuplicateDecision::KeepBoth | DuplicateDecision::UpdatedVersion => {
+                DocumentProcessingState::NeedsMemberDirection
+            }
+        };
+        let saved = self.save_document_arrival_payload(
+            household_id,
+            arrival_id,
+            conversation_id,
+            payload.clone(),
+        )?;
+        if remember_preference {
+            let protected = self.protect(
+                household_id,
+                &DuplicatePreferencePayload {
+                    checksum: candidate.checksum.clone(),
+                    context_direction: payload.context_direction.clone(),
+                    decision,
+                    related_arrival_id,
+                },
+            )?;
+            self.connect()?.execute(
+                "INSERT INTO duplicate_preferences (household_id, protected_payload)
+                 VALUES (?1, ?2)",
+                params![household_id, protected],
+            )?;
+        }
+        self.insert_duplicate_audit_event(
+            household_id,
+            arrival_id,
+            &payload.original_name,
+            &candidate,
+            decision,
+            audit_kind,
+        )?;
+        Ok(saved)
+    }
+
+    fn insert_duplicate_audit_event(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        subject: &str,
+        candidate: &DuplicateCandidate,
+        decision: DuplicateDecision,
+        kind: DuplicateAuditKind,
+    ) -> Result<(), ConversationError> {
+        let outcome = match decision {
+            DuplicateDecision::KeepBoth => "kept both Originals",
+            DuplicateDecision::LinkCopies => "linked both Originals without filing the new copy",
+            DuplicateDecision::DiscardNew => "discarded the new duplicate Original",
+            DuplicateDecision::UpdatedVersion => {
+                "kept both Originals and marked the new copy as an updated version"
+            }
+        };
+        let protected = self.protect(
+            household_id,
+            &DuplicateAuditPayload {
+                kind,
+                decision,
+                subject: subject.to_owned(),
+                outcome: format!(
+                    "{}: {} ({})",
+                    outcome,
+                    candidate.original_name,
+                    match candidate.kind {
+                        DuplicateKind::Exact => "exact byte duplicate",
+                        DuplicateKind::Possible => "possible duplicate with changed bytes",
+                    }
+                ),
+                related_arrival_id: candidate.arrival_id,
+            },
+        )?;
+        self.connect()?.execute(
+            "INSERT INTO duplicate_events (household_id, arrival_id, protected_payload)
+             VALUES (?1, ?2, ?3)",
+            params![household_id, arrival_id, protected],
+        )?;
+        Ok(())
     }
 
     fn load_filing_rule(
@@ -1701,6 +2116,8 @@ impl<V: CredentialVault> ConversationStore<V> {
             review_card,
             processing_state: payload.processing_state,
             filed_original: payload.filed_original,
+            duplicate_review: payload.duplicate_review,
+            duplicate_resolution: payload.duplicate_resolution,
         })
     }
 
@@ -1802,7 +2219,6 @@ impl<V: CredentialVault> ConversationStore<V> {
         let directory = incoming.join(checksum);
         fs::create_dir_all(&directory)?;
         let original_path = directory.join(original_name);
-
         match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -2164,6 +2580,59 @@ fn filing_rule_matches(
     structured_match
         || (context_is_unresolved
             && extracted_text.is_some_and(|text| filing_rule_matches_text(rule, text)))
+}
+
+fn possible_duplicate(
+    existing: &DocumentArrivalPayload,
+    incoming: &DocumentArrivalPayload,
+) -> bool {
+    if existing.media_type != incoming.media_type || existing.checksum == incoming.checksum {
+        return false;
+    }
+    if !existing
+        .original_name
+        .eq_ignore_ascii_case(&incoming.original_name)
+    {
+        return false;
+    }
+    let existing_context = &existing.context_direction;
+    let incoming_context = &incoming.context_direction;
+    let core_context_matches = [
+        (
+            &existing_context.document_type,
+            &incoming_context.document_type,
+        ),
+        (
+            &existing_context.service_provider,
+            &incoming_context.service_provider,
+        ),
+        (&existing_context.addressee, &incoming_context.addressee),
+    ]
+    .into_iter()
+    .all(|(left, right)| left.is_some() && left == right);
+    let subject_matches =
+        existing_context.property.as_ref().is_some_and(|property| {
+            incoming_context.property.as_deref() == Some(property.as_str())
+        }) || existing_context
+            .account
+            .as_ref()
+            .is_some_and(|account| incoming_context.account.as_deref() == Some(account.as_str()));
+    core_context_matches && subject_matches
+}
+
+fn duplicate_scope_matches(
+    expected: &DocumentContextDirection,
+    incoming: &DocumentContextDirection,
+) -> bool {
+    [
+        (&expected.document_type, &incoming.document_type),
+        (&expected.service_provider, &incoming.service_provider),
+        (&expected.addressee, &incoming.addressee),
+        (&expected.property, &incoming.property),
+        (&expected.account, &incoming.account),
+    ]
+    .into_iter()
+    .all(|(expected, incoming)| expected.is_none() || expected == incoming)
 }
 
 fn filing_rule_matches_text(rule: &FilingRule, extracted_text: &str) -> bool {

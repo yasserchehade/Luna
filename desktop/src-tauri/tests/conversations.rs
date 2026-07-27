@@ -9,7 +9,8 @@ use std::{
 use luna_core::{
     AuditAuthority, AuditEventKind, ConfidenceState, ContextField, ContextRelevanceDirection,
     ConversationStore, CredentialVault, DocumentContextDirection, DocumentProcessingState,
-    FilingDecisionDirection, FilingRuleSummary, LocalOcr, TrustedDeviceManager, VaultError,
+    DuplicateDecision, DuplicateKind, FilingDecisionDirection, FilingRuleSummary, LocalOcr,
+    TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -1323,6 +1324,465 @@ fn filing_never_overwrites_an_existing_destination_and_keeps_staging_for_recover
         .list_audit_events("rivera-household")
         .expect("list History after exact destination conflict")
         .is_empty());
+}
+
+#[test]
+fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_remain_scoped() {
+    let directory = tempfile::tempdir().expect("temporary duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let original = digital_pdf_with_text("Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15");
+    let first_source = directory.path().join("first").join("statement.pdf");
+    let second_source = directory.path().join("second").join("statement.pdf");
+    let third_source = directory.path().join("third").join("statement.pdf");
+    let changed_source = directory.path().join("changed").join("statement.pdf");
+    for source in [
+        &first_source,
+        &second_source,
+        &third_source,
+        &changed_source,
+    ] {
+        fs::create_dir_all(source.parent().expect("source directory"))
+            .expect("create source directory");
+    }
+    fs::write(&first_source, &original).expect("write first Original");
+    fs::write(&second_source, &original).expect("write second Original");
+    fs::write(&third_source, &original).expect("write third Original");
+    fs::write(
+        &changed_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write changed Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Duplicate review")
+        .expect("create Conversation");
+
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first Original");
+    let second = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach exact duplicate");
+
+    assert_eq!(
+        second.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert_eq!(first.original_path, second.original_path);
+    let duplicate = second
+        .duplicate_review
+        .as_ref()
+        .expect("show duplicate review");
+    assert_eq!(duplicate.candidates.len(), 1);
+    assert_eq!(duplicate.candidates[0].kind, DuplicateKind::Exact);
+    assert_eq!(duplicate.candidates[0].arrival_id, first.id);
+
+    let discarded = store
+        .resolve_duplicate(
+            "rivera-household",
+            second.id,
+            first.id,
+            DuplicateDecision::DiscardNew,
+            true,
+        )
+        .expect("discard exact duplicate");
+    assert_eq!(
+        discarded.processing_state,
+        DocumentProcessingState::Dismissed
+    );
+    assert!(discarded.original_path.exists());
+    assert_eq!(
+        discarded
+            .duplicate_resolution
+            .as_ref()
+            .expect("record duplicate resolution")
+            .decision,
+        DuplicateDecision::DiscardNew
+    );
+
+    let automatically_discarded = store
+        .attach_document("rivera-household", conversation.id, &third_source, &cabinet)
+        .expect("apply scoped exact duplicate preference");
+    assert_eq!(
+        automatically_discarded.processing_state,
+        DocumentProcessingState::Dismissed
+    );
+    assert_eq!(
+        automatically_discarded
+            .duplicate_resolution
+            .as_ref()
+            .expect("record automatic duplicate resolution")
+            .decision,
+        DuplicateDecision::DiscardNew
+    );
+    let changed = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &changed_source,
+            &cabinet,
+        )
+        .expect("do not apply exact preference to changed bytes");
+    assert_eq!(
+        changed.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert_eq!(
+        changed
+            .duplicate_review
+            .as_ref()
+            .expect("show changed-byte duplicate review")
+            .candidates[0]
+            .kind,
+        DuplicateKind::Possible
+    );
+    assert!(
+        store
+            .list_duplicate_audit_events("rivera-household")
+            .expect("list duplicate History")
+            .len()
+            >= 2
+    );
+}
+
+#[test]
+fn changed_bytes_with_the_same_household_context_are_only_a_possible_duplicate() {
+    let directory = tempfile::tempdir().expect("temporary Possible Duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("july").join("statement.pdf");
+    let second_source = directory.path().join("august").join("statement.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    fs::write(
+        &first_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write first bill");
+    fs::write(
+        &second_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write changed bill");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Possible Duplicate review")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first bill");
+    let second = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach changed bill");
+
+    assert_ne!(first.checksum, second.checksum);
+    assert_eq!(
+        second.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert_eq!(
+        second
+            .duplicate_review
+            .as_ref()
+            .expect("show Possible Duplicate review")
+            .candidates[0]
+            .kind,
+        DuplicateKind::Possible
+    );
+}
+
+#[test]
+fn keep_both_exact_arrivals_release_shared_staging_only_after_both_are_filed() {
+    let directory = tempfile::tempdir().expect("temporary shared staging directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("first").join("statement.pdf");
+    let second_source = directory.path().join("second").join("statement.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    let original = digital_pdf_with_text("Household service statement for Sam Rivera");
+    fs::write(&first_source, &original).expect("write first Original");
+    fs::write(&second_source, &original).expect("write second Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Keep both")
+        .expect("create Conversation");
+    let direction = DocumentContextDirection {
+        document_type: Some("Household document".to_owned()),
+        document_type_resolved: true,
+        service_provider: Some("Household Service".to_owned()),
+        service_provider_resolved: true,
+        addressee: Some("Sam Rivera".to_owned()),
+        addressee_resolved: true,
+        property_resolved: true,
+        account_resolved: true,
+        amount_resolved: true,
+        relevant_dates_resolved: true,
+        service_provider_relevance: Some(ContextRelevanceDirection {
+            subject: "Household Service".to_owned(),
+            explanation: "Issues this household statement".to_owned(),
+        }),
+        ..Default::default()
+    };
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first Original");
+    store
+        .record_member_direction(
+            "rivera-household",
+            first.id,
+            direction.clone(),
+            "Household records",
+        )
+        .expect("record first context");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            first.id,
+            FilingDecisionDirection {
+                file_name: "first-filed.pdf".to_owned(),
+                cabinet_destination: "Household records/first-filed.pdf".to_owned(),
+            },
+        )
+        .expect("confirm first filing");
+    let second = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach exact second Original");
+    let shared_staging_path = first.original_path.clone();
+    let second = store
+        .resolve_duplicate(
+            "rivera-household",
+            second.id,
+            first.id,
+            DuplicateDecision::KeepBoth,
+            false,
+        )
+        .expect("keep both exact Originals");
+    store
+        .record_member_direction(
+            "rivera-household",
+            second.id,
+            direction,
+            "Household records",
+        )
+        .expect("record second context");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            second.id,
+            FilingDecisionDirection {
+                file_name: "second-filed.pdf".to_owned(),
+                cabinet_destination: "Household records/second-filed.pdf".to_owned(),
+            },
+        )
+        .expect("confirm second filing");
+    store
+        .file_document("rivera-household", first.id, &cabinet)
+        .expect("file first kept Original");
+    assert!(shared_staging_path.exists());
+    store
+        .file_document("rivera-household", second.id, &cabinet)
+        .expect("file second kept Original");
+    assert!(!shared_staging_path.exists());
+}
+
+#[test]
+fn updated_version_keeps_both_originals_links_provenance_and_never_overwrites() {
+    let directory = tempfile::tempdir().expect("temporary version directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("july").join("statement.pdf");
+    let updated_source = directory.path().join("updated").join("statement.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(updated_source.parent().expect("updated source directory"))
+        .expect("create updated source directory");
+    fs::write(
+        &first_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write first bill");
+    fs::write(
+        &updated_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write updated bill");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Versions")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first version");
+    store
+        .record_member_direction(
+            "rivera-household",
+            first.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("AGL Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: None,
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL Energy".to_owned(),
+                    explanation: "Supplies electricity to our home".to_owned(),
+                }),
+                property_relevance: Some(ContextRelevanceDirection {
+                    subject: "12 Seabreeze Avenue".to_owned(),
+                    explanation: "Our primary residence".to_owned(),
+                }),
+            },
+            "Household records",
+        )
+        .expect("record first version context");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            first.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill July 2026.pdf".to_owned(),
+                cabinet_destination: "Household records/AGL bill July 2026.pdf".to_owned(),
+            },
+        )
+        .expect("confirm first version Filing Decision");
+    let first = store
+        .file_document("rivera-household", first.id, &cabinet)
+        .expect("file first Original");
+    let conversation_id = first.conversation_id;
+    let updated = store
+        .attach_document(
+            "rivera-household",
+            conversation_id,
+            &updated_source,
+            &cabinet,
+        )
+        .expect("attach updated version");
+    let resolution = store
+        .resolve_duplicate(
+            "rivera-household",
+            updated.id,
+            first.id,
+            DuplicateDecision::UpdatedVersion,
+            false,
+        )
+        .expect("mark updated version");
+    assert_eq!(
+        resolution.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert_eq!(
+        resolution
+            .duplicate_resolution
+            .as_ref()
+            .expect("record updated version relationship")
+            .decision,
+        DuplicateDecision::UpdatedVersion
+    );
+
+    let direction = DocumentContextDirection {
+        document_type: Some("Electricity bill".to_owned()),
+        document_type_resolved: true,
+        service_provider: Some("AGL Energy".to_owned()),
+        service_provider_resolved: true,
+        addressee: Some("Sam Rivera".to_owned()),
+        addressee_resolved: true,
+        property: Some("12 Seabreeze Avenue".to_owned()),
+        property_resolved: true,
+        account: Some("12345678".to_owned()),
+        account_resolved: true,
+        amount: None,
+        amount_resolved: true,
+        relevant_dates: vec!["2026-08-15".to_owned()],
+        relevant_dates_resolved: true,
+        service_provider_relevance: Some(ContextRelevanceDirection {
+            subject: "AGL Energy".to_owned(),
+            explanation: "Supplies electricity to our home".to_owned(),
+        }),
+        property_relevance: Some(ContextRelevanceDirection {
+            subject: "12 Seabreeze Avenue".to_owned(),
+            explanation: "Our primary residence".to_owned(),
+        }),
+    };
+    store
+        .record_member_direction(
+            "rivera-household",
+            updated.id,
+            direction,
+            "Household records",
+        )
+        .expect("record updated version context");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            updated.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill August 2026.pdf".to_owned(),
+                cabinet_destination: "Household records/AGL bill August 2026.pdf".to_owned(),
+            },
+        )
+        .expect("confirm updated version Filing Decision");
+    let filed_updated = store
+        .file_document("rivera-household", updated.id, &cabinet)
+        .expect("file updated version");
+    assert!(first.filed_original.is_some());
+    assert!(filed_updated.filed_original.is_some());
+    assert_ne!(
+        first
+            .filed_original
+            .as_ref()
+            .expect("first Original")
+            .final_path,
+        filed_updated
+            .filed_original
+            .as_ref()
+            .expect("updated Original")
+            .final_path
+    );
+    assert!(store
+        .list_duplicate_audit_events("rivera-household")
+        .expect("list duplicate History")
+        .iter()
+        .any(|event| event.decision == DuplicateDecision::UpdatedVersion));
 }
 
 #[test]
