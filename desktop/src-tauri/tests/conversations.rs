@@ -1861,7 +1861,6 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
                     subject: "12 Seabreeze Avenue".to_owned(),
                     explanation: "Our primary residence".to_owned(),
                 }),
-                ..Default::default()
             },
             "Household records",
         )
