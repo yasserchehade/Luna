@@ -1965,10 +1965,12 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
         .pause_filing_rule("rivera-household", rules[0].id, false)
         .expect("resume Filing Rule");
     let resumed_source = directory.path().join("agl-august-resumed.pdf");
+    // Keep this Original distinct from the paused fixture so checksum-based
+    // manual-move discovery cannot select the still-staged paused copy.
     fs::write(
         &resumed_source,
         digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-16",
         ),
     )
     .expect("write resumed match");
