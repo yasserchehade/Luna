@@ -1,0 +1,48 @@
+name: Account service checks
+
+on:
+  pull_request:
+    paths:
+      - "desktop/account-contract/**"
+      - "desktop/src/account/**"
+      - "desktop/package.json"
+      - "supabase/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/account-service.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/account-contract/**"
+      - "desktop/src/account/**"
+      - "desktop/package.json"
+      - "supabase/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/account-service.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-account-service:
+    name: Verify account service on ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter luna-desktop supabase:start
+      - run: pnpm --filter luna-desktop supabase:lint
+      - run: pnpm --filter luna-desktop test:account-contract
