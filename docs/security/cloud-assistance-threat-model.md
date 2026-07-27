@@ -17,11 +17,11 @@ The Trusted Device owns protected Document Handling state and consent policy. Th
 | Threat | Control |
 | --- | --- |
 | Silent document upload | Local Inspection runs first; difficult Documents enter `NeedsCloudConsent`; the interface names the provider/model, disclosure and Keep local choice. |
-| Consent widening | Grants bind provider, model, capability, disclosed fields, member, time and one-time/document or reusable future scope. Revocation is inspectable. |
+| Consent widening | Grants bind provider, model, capability, disclosed fields, member, time and one-time/document or reusable future scope. Reusable scope also binds the media type and locally known context values shown before consent; any wider or changed request requires a new grant. Revocation is inspectable. |
 | Cross-provider or model fallback | Luna validates the exact route; LiteLLM retries/fallbacks are disabled; Luna retries only the identical route. |
 | Excessive disclosure | The Rust application layer builds the request from protected state and caps extracted text at 4,000 characters. The frontend cannot provide request content. |
-| Provider-owned authority | Results contain Evidence and candidate Direction Interpretations only. Owning-domain validation precedes Member Direction; no tools are exposed. |
-| Prompt or structured-output injection | Strict structured output, correlation/identity checks, allowed-field filtering, value limits and owning-domain validation. Provider text never reaches command dispatch. |
+| Provider-owned authority | Results contain Evidence and candidate Direction Interpretations only. Owning-domain validation rejects attempts to replace resolved Member Direction and validates monetary and ISO-date constraints before presentation; no tools are exposed. |
+| Prompt or structured-output injection | Strict structured output, correlation/identity checks, allowed-field filtering, value limits and owning-domain validation. Provider text never reaches command dispatch. Completion and later candidate disposition are separate immutable History events. |
 | Credential disclosure | Upstream credentials are server-side. The narrow desktop gateway credential is stored only in the OS vault. Errors expose bounded Luna failure categories. |
 | Content in infrastructure logs | Ordinary ingress logs must omit bodies and headers. LiteLLM message/raw logging is disabled, callbacks are absent, prompts are excluded from spend logs and upgrade verification is mandatory. |
 | Replay of one-time consent | One-time Consent Grants are durably recorded and marked consumed before transmission. |

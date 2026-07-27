@@ -45,11 +45,13 @@ For Direction Interpretation, Luna may transmit:
 
 Luna does not transmit the Household identifier, Cabinet or source paths, checksum, Filing Rules, duplicate state, History, credentials, the Original file, or complete Household state. Relevance to a Household, property or Service Provider remains Member Direction and is not requested from the provider.
 
+Before Luna offers reusable consent, the Conversation states its concrete future scope: the exact provider/model and capability, the current media type, the same locally known context values and no wider set of disclosed fields. The protected Consent Grant stores that local-scope Evidence and validates it against every attempted reuse. A changed media type, local context value, provider, model, capability or wider disclosed field set requires a new Consent Grant.
+
 ## Validation and authority
 
-The gateway result must echo the request, Document Arrival, provider and model identities. Luna rejects unknown fields, empty or oversized values, malformed structured results and mismatched correlation. Document Handling rejects candidate values that violate its constraints.
+The gateway result must echo the request, Document Arrival, provider and model identities. Luna rejects unknown fields, empty or oversized values, malformed structured results and mismatched correlation. Document Handling then rejects candidate fields that already have Member Direction, malformed monetary values and dates that are not valid ISO calendar dates, in addition to its existing bounds and control-character constraints.
 
-The provider result cannot create Member Direction or mutate a Document Arrival. A validated candidate is held in the review interface until a Household Member accepts or corrects it through the existing Member Direction command. History records that disposition.
+The provider result cannot create Member Direction or mutate a Document Arrival. A validated candidate is held in the review interface until a Household Member accepts or corrects it through the existing Member Direction command. History records provider completion and later candidate acceptance, correction or rejection as separate immutable events; an earlier event is never rewritten.
 
 ## Failure and retry
 

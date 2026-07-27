@@ -1107,17 +1107,47 @@ impl<V: CredentialVault> ConversationStore<V> {
         if payload.processing_state != DocumentProcessingState::InspectingWithAssistance {
             return Err(ConversationError::InvalidDirectionInterpretation);
         }
+        let unresolved_fields = clarification_questions(&payload.context_direction)
+            .into_iter()
+            .map(|question| question.field)
+            .collect::<Vec<_>>();
+        let candidate_fields = [
+            (
+                ContextField::DocumentType,
+                candidate.document_type.is_some(),
+            ),
+            (
+                ContextField::ServiceProvider,
+                candidate.service_provider.is_some(),
+            ),
+            (ContextField::Addressee, candidate.addressee.is_some()),
+            (ContextField::Property, candidate.property.is_some()),
+            (ContextField::Account, candidate.account.is_some()),
+            (ContextField::Amount, candidate.amount.is_some()),
+            (
+                ContextField::RelevantDates,
+                !candidate.relevant_dates.is_empty(),
+            ),
+        ];
+        if candidate_fields.iter().any(|(field, supplied)| {
+            *supplied
+                && !unresolved_fields
+                    .iter()
+                    .any(|unresolved| unresolved == field)
+        }) {
+            return Err(ConversationError::InvalidDirectionInterpretation);
+        }
         Ok(CandidateDirectionInterpretation {
             document_type: valid_candidate_value(candidate.document_type)?,
             service_provider: valid_candidate_value(candidate.service_provider)?,
             addressee: valid_candidate_value(candidate.addressee)?,
             property: valid_candidate_value(candidate.property)?,
             account: valid_candidate_value(candidate.account)?,
-            amount: valid_candidate_value(candidate.amount)?,
+            amount: valid_candidate_amount(candidate.amount)?,
             relevant_dates: candidate
                 .relevant_dates
                 .into_iter()
-                .map(|date| valid_candidate_value(Some(date)))
+                .map(valid_candidate_date)
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .flatten()
@@ -2928,6 +2958,70 @@ fn valid_candidate_value(value: Option<String>) -> Result<Option<String>, Conver
         return Err(ConversationError::InvalidDirectionInterpretation);
     }
     Ok(Some(value))
+}
+
+fn valid_candidate_amount(value: Option<String>) -> Result<Option<String>, ConversationError> {
+    let Some(value) = valid_candidate_value(value)? else {
+        return Ok(None);
+    };
+    let currency_code = value
+        .chars()
+        .filter(|character| character.is_ascii_alphabetic())
+        .collect::<String>();
+    let characters_are_monetary = value.chars().all(|character| {
+        character.is_ascii_digit()
+            || character.is_ascii_whitespace()
+            || matches!(
+                character,
+                '.' | ',' | '+' | '-' | '(' | ')' | '$' | '£' | '€' | '¥' | '₹'
+            )
+            || character.is_ascii_uppercase()
+    });
+    if !value.chars().any(|character| character.is_ascii_digit())
+        || !characters_are_monetary
+        || (!currency_code.is_empty() && currency_code.len() != 3)
+    {
+        return Err(ConversationError::InvalidDirectionInterpretation);
+    }
+    Ok(Some(value))
+}
+
+fn valid_candidate_date(value: String) -> Result<Option<String>, ConversationError> {
+    let Some(value) = valid_candidate_value(Some(value))? else {
+        return Ok(None);
+    };
+    if !valid_iso_calendar_date(&value) {
+        return Err(ConversationError::InvalidDirectionInterpretation);
+    }
+    Ok(Some(value))
+}
+
+fn valid_iso_calendar_date(value: &str) -> bool {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return false;
+    }
+    let Ok(year) = value[0..4].parse::<u32>() else {
+        return false;
+    };
+    let Ok(month) = value[5..7].parse::<u32>() else {
+        return false;
+    };
+    let Ok(day) = value[8..10].parse::<u32>() else {
+        return false;
+    };
+    let leap_year =
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days_in_month).contains(&day)
 }
 
 fn propose_filing_decision(

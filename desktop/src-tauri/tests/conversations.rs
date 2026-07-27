@@ -7,11 +7,11 @@ use std::{
 };
 
 use luna_core::{
-    AuditAuthority, AuditEventKind, CloudConsentDecision, CloudIntelligenceStore, ConfidenceState,
-    ContextField, ContextRelevanceDirection, ConversationStore, CredentialVault,
-    DeterministicIntelligenceGateway, DocumentContextDirection, DocumentIntelligenceService,
-    DocumentProcessingState, DuplicateDecision, DuplicateKind, FilingDecisionDirection,
-    FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
+    AuditAuthority, AuditEventKind, CandidateDirectionInterpretation, CloudConsentDecision,
+    CloudIntelligenceStore, ConfidenceState, ContextField, ContextRelevanceDirection,
+    ConversationStore, CredentialVault, DeterministicIntelligenceGateway, DocumentContextDirection,
+    DocumentIntelligenceService, DocumentProcessingState, DuplicateDecision, DuplicateKind,
+    FilingDecisionDirection, FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
     IntelligenceProviderDescriptor, IntelligenceSelection, LocalOcr, TrustedDeviceManager,
     VaultError,
 };
@@ -229,7 +229,7 @@ fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_
 }
 
 #[test]
-fn invalid_candidate_direction_is_rejected_into_a_recoverable_waiting_state() {
+fn invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let database = temporary.path().join("luna.db");
     let cabinet = temporary.path().join("Cabinet");
@@ -250,7 +250,7 @@ fn invalid_candidate_direction_is_rejected_into_a_recoverable_waiting_state() {
     let gateway = DeterministicIntelligenceGateway::new(
         "openai",
         "gpt-4.1-mini",
-        BTreeMap::from([("serviceProvider".to_owned(), "A".repeat(513))]),
+        BTreeMap::from([("amount".to_owned(), "not an amount".to_owned())]),
     );
     let intelligence = CloudIntelligenceStore::open_with_gateway(
         &database,
@@ -300,7 +300,7 @@ fn invalid_candidate_direction_is_rejected_into_a_recoverable_waiting_state() {
     let events = history
         .list_audit_events("rivera-household")
         .expect("list cloud assistance History");
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     assert_eq!(
         events[0].outcome,
         luna_core::CloudAssistanceOutcome::WaitingForRetry
@@ -309,6 +309,101 @@ fn invalid_candidate_direction_is_rejected_into_a_recoverable_waiting_state() {
         events[0].candidate_disposition,
         luna_core::CandidateDisposition::Rejected
     );
+    assert_eq!(
+        events[1].outcome,
+        luna_core::CloudAssistanceOutcome::Completed
+    );
+    assert_eq!(
+        events[1].candidate_disposition,
+        luna_core::CandidateDisposition::Pending
+    );
+    assert_ne!(events[0].id, events[1].id);
+}
+
+#[test]
+fn invalid_candidate_calendar_date_is_rejected_by_document_handling() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, _) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    conversations
+        .begin_cloud_assistance("rivera-household", arrival.id)
+        .expect("begin Cloud Assistance");
+
+    assert!(conversations
+        .validate_candidate_direction(
+            "rivera-household",
+            arrival.id,
+            CandidateDirectionInterpretation {
+                relevant_dates: vec!["2026-02-30".to_owned()],
+                ..CandidateDirectionInterpretation::default()
+            },
+        )
+        .is_err());
+}
+
+#[test]
+fn candidate_cannot_replace_context_that_already_has_member_direction() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, _) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    conversations
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                service_provider: Some("AGL".to_owned()),
+                service_provider_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL".to_owned(),
+                    explanation: "Household electricity provider".to_owned(),
+                }),
+                ..DocumentContextDirection::default()
+            },
+            "Bills & Services",
+        )
+        .expect("record existing Member Direction");
+    conversations
+        .begin_cloud_assistance("rivera-household", arrival.id)
+        .expect("begin Cloud Assistance");
+
+    assert!(conversations
+        .validate_candidate_direction(
+            "rivera-household",
+            arrival.id,
+            CandidateDirectionInterpretation {
+                service_provider: Some("Different provider".to_owned()),
+                ..CandidateDirectionInterpretation::default()
+            },
+        )
+        .is_err());
 }
 
 #[test]

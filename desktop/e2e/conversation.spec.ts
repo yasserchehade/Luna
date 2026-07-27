@@ -326,6 +326,9 @@ describe("Luna Conversation desk", () => {
 
     let arrival = await attach("cloud-scope");
     let assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await expect(assistance).toHaveText(expect.stringContaining(
+      "Reusable scope: future difficult application/pdf Documents with the same currently displayed local context values and disclosed fields.",
+    ));
     await assistance.$("button=Allow this scoped future use").click();
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 

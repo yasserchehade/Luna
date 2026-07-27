@@ -16,7 +16,7 @@ The first evaluated Luna-managed route is OpenAI `gpt-4.1-mini` through a Luna-m
 
 The desktop authenticates with a narrow, revocable Luna gateway credential held in the operating-system credential vault. The remote service holds the upstream OpenAI credential. Neither credential enters SQLite, Cabinet files, History, request content or diagnostics. Production gateway keys are attributable to a Trusted Device or Household for abuse controls and may be independently revoked.
 
-LiteLLM output is untrusted. Luna verifies correlation, provider, model, allowed fields, value constraints and the structured response before converting it to Evidence or a candidate Direction Interpretation. The owning Document Handling domain validates that candidate again. No result type contains action authority, tools, Member Direction, Filing Decisions, Filing Rules or duplicate decisions.
+LiteLLM output is untrusted. Luna verifies correlation, provider, model, allowed fields, value constraints and the structured response before converting it to Evidence or a candidate Direction Interpretation. The owning Document Handling domain validates that candidate again, including that the field still awaits Member Direction and that monetary and ISO-date values satisfy domain constraints. No result type contains action authority, tools, Member Direction, Filing Decisions, Filing Rules or duplicate decisions.
 
 ## Options considered
 
@@ -35,11 +35,12 @@ Direct Rust adapters reduce proxy infrastructure but duplicate provider transpor
 ## Provider selection and fallback restrictions
 
 - Luna approves and names the Intelligence Provider and model before invocation.
-- A Consent Grant is restricted to that provider, model, capability and disclosed scope.
+- A Consent Grant is restricted to that provider, model, capability and disclosed scope. Reusable consent additionally binds the current media type and locally known context values shown to the member; changed scope fails closed and requires a new grant.
 - One-time consent is persisted and consumed on its first transmission attempt.
 - No LiteLLM router, alias, load balancer or fallback may select another provider or materially different model.
 - Provider or gateway failure leaves Document Handling waiting with the Original and Local Inspection Evidence intact.
 - A named alternative requires a separate applicable Consent Grant.
+- Cloud completion and later candidate acceptance, correction or rejection are separate immutable History facts; Luna never rewrites the earlier event.
 
 ## Consequences and replacement
 

@@ -382,6 +382,8 @@ struct ConsentPayload {
     purpose: String,
     document_arrival_id: Option<String>,
     future_scope: Option<String>,
+    #[serde(default)]
+    future_scope_evidence: Vec<IntelligenceEvidence>,
     fields: Vec<String>,
     kind: ConsentGrantKind,
     granted_by: String,
@@ -550,10 +552,11 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         capability: IntelligenceCapability,
         purpose: &str,
         fields: Vec<String>,
+        future_scope_evidence: Vec<IntelligenceEvidence>,
         granted_by: &str,
-        future_scope: &str,
     ) -> Result<CloudConsentScope, IntelligenceFailure> {
         self.require_selection(selection)?;
+        let future_scope = reusable_scope_description(&future_scope_evidence);
         self.insert_consent(
             household_id,
             ConsentPayload {
@@ -562,7 +565,8 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                 capability,
                 purpose: purpose.trim().to_owned(),
                 document_arrival_id: None,
-                future_scope: Some(future_scope.trim().to_owned()),
+                future_scope: Some(future_scope),
+                future_scope_evidence,
                 fields: normalized_fields(fields),
                 kind: ConsentGrantKind::Reusable,
                 granted_by: granted_by.trim().to_owned(),
@@ -630,6 +634,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                     created_at: now(),
                     consumed_at: None,
                     revoked_at: None,
+                    future_scope_evidence: Vec::new(),
                 },
             )?,
             CloudConsentDecision::AllowForScope => self.grant_scope(
@@ -638,12 +643,11 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                 request.capability,
                 capability_purpose(request.capability),
                 disclosed_fields(&request),
+                request.evidence.clone(),
                 granted_by,
-                "Future difficult Documents requiring Direction Interpretation with the same disclosed fields.",
             )?,
             CloudConsentDecision::UseExistingScope => {
-                let id =
-                    existing_consent_grant_id.ok_or(IntelligenceFailure::ConsentRequired)?;
+                let id = existing_consent_grant_id.ok_or(IntelligenceFailure::ConsentRequired)?;
                 let payload = self.load_consent(household_id, id)?;
                 self.validate_consent(&payload, &selection, &request)?;
                 consent_scope(household_id, id, payload)
@@ -726,36 +730,9 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         request_id: &str,
         disposition: CandidateDisposition,
     ) -> Result<(), IntelligenceFailure> {
-        let connection = self.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, protected_payload FROM cloud_assistance_events
-                 WHERE household_id = ?1 ORDER BY id DESC",
-            )
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        let rows = statement
-            .query_map(params![household_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        for (id, protected) in rows {
-            let mut payload: AuditPayload = self.open_protected(household_id, &protected)?;
-            if payload.request_id == request_id {
-                payload.candidate_disposition = disposition;
-                let next = self.protect(household_id, &payload)?;
-                connection
-                    .execute(
-                        "UPDATE cloud_assistance_events SET protected_payload = ?1
-                         WHERE id = ?2 AND household_id = ?3",
-                        params![next, id, household_id],
-                    )
-                    .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-                return Ok(());
-            }
-        }
-        Err(IntelligenceFailure::StorageUnavailable)
+        let mut payload = self.load_latest_audit_payload(household_id, request_id)?;
+        payload.candidate_disposition = disposition;
+        self.append_audit_payload(household_id, &payload)
     }
 
     pub fn record_candidate_validation_failure(
@@ -763,38 +740,11 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         household_id: &str,
         request_id: &str,
     ) -> Result<(), IntelligenceFailure> {
-        let connection = self.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, protected_payload FROM cloud_assistance_events
-                 WHERE household_id = ?1 ORDER BY id DESC",
-            )
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        let rows = statement
-            .query_map(params![household_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        for (id, protected) in rows {
-            let mut payload: AuditPayload = self.open_protected(household_id, &protected)?;
-            if payload.request_id == request_id {
-                payload.outcome = CloudAssistanceOutcome::WaitingForRetry;
-                payload.candidate_disposition = CandidateDisposition::Rejected;
-                payload.reason = "Luna rejected the candidate Direction Interpretation during owning-domain validation; no Document Handling decision was made.".to_owned();
-                let next = self.protect(household_id, &payload)?;
-                connection
-                    .execute(
-                        "UPDATE cloud_assistance_events SET protected_payload = ?1
-                         WHERE id = ?2 AND household_id = ?3",
-                        params![next, id, household_id],
-                    )
-                    .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-                return Ok(());
-            }
-        }
-        Err(IntelligenceFailure::StorageUnavailable)
+        let mut payload = self.load_latest_audit_payload(household_id, request_id)?;
+        payload.outcome = CloudAssistanceOutcome::WaitingForRetry;
+        payload.candidate_disposition = CandidateDisposition::Rejected;
+        payload.reason = "Luna rejected the candidate Direction Interpretation during owning-domain validation; no Document Handling decision was made.".to_owned();
+        self.append_audit_payload(household_id, &payload)
     }
 
     pub fn list_audit_events(
@@ -871,15 +821,15 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         let same_selection = payload.provider_id == selection.provider_id
             && payload.model_id == selection.model_id
             && payload.capability == request.capability;
-        let same_document = payload
-            .document_arrival_id
-            .as_ref()
-            .is_none_or(|arrival| arrival == &request.document_arrival_id);
+        let same_document_or_future_scope = payload.document_arrival_id.as_ref().map_or_else(
+            || same_scope_evidence(&payload.future_scope_evidence, &request.evidence),
+            |arrival| arrival == &request.document_arrival_id,
+        );
         let requested = disclosed_fields(request);
         let fields_allowed = requested
             .iter()
             .all(|field| payload.fields.iter().any(|allowed| allowed == field));
-        if same_selection && same_document && fields_allowed {
+        if same_selection && same_document_or_future_scope && fields_allowed {
             Ok(())
         } else {
             Err(IntelligenceFailure::ConsentRequired)
@@ -985,7 +935,41 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             reason: reason.to_owned(),
             usage,
         };
-        let protected = self.protect(household_id, &payload)?;
+        self.append_audit_payload(household_id, &payload)
+    }
+
+    fn load_latest_audit_payload(
+        &self,
+        household_id: &str,
+        request_id: &str,
+    ) -> Result<AuditPayload, IntelligenceFailure> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT protected_payload FROM cloud_assistance_events
+                 WHERE household_id = ?1 ORDER BY id DESC",
+            )
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        let rows = statement
+            .query_map(params![household_id], |row| row.get::<_, String>(0))
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        for protected in rows {
+            let payload: AuditPayload = self.open_protected(household_id, &protected)?;
+            if payload.request_id == request_id {
+                return Ok(payload);
+            }
+        }
+        Err(IntelligenceFailure::StorageUnavailable)
+    }
+
+    fn append_audit_payload(
+        &self,
+        household_id: &str,
+        payload: &AuditPayload,
+    ) -> Result<(), IntelligenceFailure> {
+        let protected = self.protect(household_id, payload)?;
         self.connect()?
             .execute(
                 "INSERT INTO cloud_assistance_events (household_id, protected_payload)
@@ -1153,6 +1137,31 @@ fn normalized_fields(fields: Vec<String>) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn reusable_scope_description(evidence: &[IntelligenceEvidence]) -> String {
+    let media_type = evidence
+        .iter()
+        .find(|item| item.field == "mediaType")
+        .map(|item| item.value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("same-media-type");
+    format!(
+        "Future difficult {media_type} Documents with the same currently displayed local context values and disclosed fields."
+    )
+}
+
+fn same_scope_evidence(
+    allowed: &[IntelligenceEvidence],
+    requested: &[IntelligenceEvidence],
+) -> bool {
+    let normalize = |evidence: &[IntelligenceEvidence]| {
+        evidence
+            .iter()
+            .map(|item| (item.field.trim().to_owned(), item.value.trim().to_owned()))
+            .collect::<BTreeSet<_>>()
+    };
+    normalize(allowed) == normalize(requested)
 }
 
 fn validate_result(
@@ -1473,15 +1482,16 @@ mod tests {
             provider_id: "openai".to_owned(),
             model_id: "gpt-4.1-mini".to_owned(),
         };
+        let scope_request = authorised_request("arrival-a");
         let grant = store
             .grant_scope(
                 "household",
                 &openai,
                 IntelligenceCapability::DirectionInterpretation,
                 "direction-interpretation",
-                disclosed_fields(&authorised_request("arrival-a")),
+                disclosed_fields(&scope_request),
+                scope_request.evidence.clone(),
                 "organiser-1",
-                "Future difficult Documents with the same disclosed fields.",
             )
             .expect("grant OpenAI consent");
         let mut request = authorised_request("arrival-b");
@@ -1564,8 +1574,8 @@ mod tests {
                 request.capability,
                 "direction-interpretation",
                 disclosed_fields(&request),
+                request.evidence.clone(),
                 "organiser-1",
-                "Future difficult Documents with the same disclosed fields.",
             )
             .expect("grant reusable consent");
         assert_eq!(grant.kind, ConsentGrantKind::Reusable);
@@ -1650,10 +1660,70 @@ mod tests {
     }
 
     #[test]
-    fn gateway_credentials_never_enter_history_or_ordinary_configuration() {
+    fn candidate_disposition_appends_history_without_rewriting_the_presented_event() {
+        let gateway = DeterministicIntelligenceGateway::new(
+            "openai",
+            "gpt-4.1-mini",
+            BTreeMap::from([("documentType".to_owned(), "electricity bill".to_owned())]),
+        );
+        let store = store_with_gateway(gateway);
+        let request = authorised_request("arrival-history");
+
+        store
+            .evaluate_document(
+                "household",
+                IntelligenceSelection {
+                    provider_id: "openai".to_owned(),
+                    model_id: "gpt-4.1-mini".to_owned(),
+                },
+                request.clone(),
+                CloudConsentDecision::AllowOnce,
+                "organiser-1",
+                None,
+            )
+            .expect("evaluate document");
+        store
+            .record_candidate_disposition(
+                "household",
+                &request.request_id,
+                CandidateDisposition::Accepted,
+            )
+            .expect("record accepted candidate");
+
+        let events = store
+            .list_audit_events("household")
+            .expect("list immutable History");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].candidate_disposition,
+            CandidateDisposition::Accepted
+        );
+        assert_eq!(
+            events[1].candidate_disposition,
+            CandidateDisposition::Pending
+        );
+        assert_ne!(events[0].id, events[1].id);
+        assert_eq!(events[0].request_id, events[1].request_id);
+    }
+
+    #[test]
+    fn gateway_credentials_remain_in_the_vault_and_out_of_public_history() {
         let gateway =
             DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
-        let store = store_with_gateway(gateway);
+        let trusted_device = trusted_device();
+        let vault = trusted_device.vault().clone();
+        let database = std::env::temp_dir().join(format!(
+            "luna-credential-boundary-{}-{}.db",
+            std::process::id(),
+            now()
+        ));
+        let store = CloudIntelligenceStore::open_with_gateway(
+            database,
+            trusted_device,
+            gateway,
+            managed_provider_catalog(),
+        )
+        .expect("open Intelligence store");
         let secret = "narrow-gateway-secret-value";
         store
             .set_gateway_access_credential("household", secret.as_bytes())
@@ -1671,14 +1741,26 @@ mod tests {
                 None,
             )
             .expect("evaluate Document");
+        assert!(vault
+            .0
+            .lock()
+            .expect("test vault lock")
+            .values()
+            .any(|value| value == secret.as_bytes()));
         let events = store.list_audit_events("household").expect("list History");
-        assert!(events.iter().all(|event| !event.reason.contains(secret)));
-        let ordinary_database = std::fs::read(&store.database).expect("read test database");
-        assert!(!String::from_utf8_lossy(&ordinary_database).contains(secret));
+        let public_history = serde_json::to_string(&events).expect("serialize public History");
+        let public_consents = serde_json::to_string(
+            &store
+                .list_consent_scopes("household")
+                .expect("list public Consent Grants"),
+        )
+        .expect("serialize public Consent Grants");
+        assert!(!public_history.contains(secret));
+        assert!(!public_consents.contains(secret));
     }
 
     #[test]
-    fn reusable_consent_cannot_expand_to_new_response_fields_or_models() {
+    fn reusable_consent_cannot_expand_to_new_local_scope_response_fields_or_models() {
         let gateway =
             DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
         let providers = vec![IntelligenceProviderDescriptor {
@@ -1711,10 +1793,23 @@ mod tests {
                 request.capability,
                 "direction-interpretation",
                 disclosed_fields(&request),
+                request.evidence.clone(),
                 "organiser-1",
-                "Same disclosed fields.",
             )
             .expect("grant reusable consent");
+        let mut changed_local_scope = authorised_request("arrival-other-media");
+        changed_local_scope.evidence[0].value = "image/png".to_owned();
+        assert_eq!(
+            store.evaluate_document(
+                "household",
+                selection.clone(),
+                changed_local_scope,
+                CloudConsentDecision::UseExistingScope,
+                "organiser-1",
+                Some(grant.id),
+            ),
+            Err(IntelligenceFailure::ConsentRequired)
+        );
         let mut wider = authorised_request("arrival-wider");
         wider
             .expected_response
@@ -1780,25 +1875,67 @@ mod tests {
         assert!(scopes[0].consumed_at.is_none());
     }
 
+    #[derive(Clone)]
+    struct OversizedEvidenceGateway;
+
+    impl IntelligenceGateway for OversizedEvidenceGateway {
+        fn id(&self) -> &str {
+            "oversized-evidence-test"
+        }
+
+        fn requires_access_credential(&self) -> bool {
+            false
+        }
+
+        fn evaluate_document(
+            &self,
+            request: &IntelligenceRequest,
+            _access_credential: Option<&[u8]>,
+        ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure> {
+            Ok(UntrustedIntelligenceResult {
+                request_id: request.request_id.clone(),
+                document_arrival_id: request.document_arrival_id.clone(),
+                provider_id: request.provider_id.clone(),
+                model_id: request.model_id.clone(),
+                fields: BTreeMap::new(),
+                evidence: vec![AdditionalIntelligenceEvidence {
+                    field: "documentType".to_owned(),
+                    value: "x".repeat(1_025),
+                    source_reference: Some("invented source".to_owned()),
+                }],
+                source_references: vec!["invented source".to_owned()],
+                usage: IntelligenceUsage::default(),
+            })
+        }
+    }
+
     #[test]
-    fn oversized_or_untraceable_provider_evidence_is_rejected() {
+    fn oversized_or_untraceable_provider_evidence_is_rejected_through_the_gateway_boundary() {
         let request = authorised_request("arrival-untrusted");
-        let result = UntrustedIntelligenceResult {
-            request_id: request.request_id.clone(),
-            document_arrival_id: request.document_arrival_id.clone(),
-            provider_id: request.provider_id.clone(),
-            model_id: request.model_id.clone(),
-            fields: BTreeMap::new(),
-            evidence: vec![AdditionalIntelligenceEvidence {
-                field: "documentType".to_owned(),
-                value: "x".repeat(MAX_FIELD_VALUE_CHARS + 1),
-                source_reference: Some("invented source".to_owned()),
-            }],
-            source_references: vec!["invented source".to_owned()],
-            usage: IntelligenceUsage::default(),
-        };
+        let database = std::env::temp_dir().join(format!(
+            "luna-untrusted-boundary-{}-{}.db",
+            std::process::id(),
+            now()
+        ));
+        let store = CloudIntelligenceStore::open_with_gateway(
+            database,
+            trusted_device(),
+            OversizedEvidenceGateway,
+            managed_provider_catalog(),
+        )
+        .expect("open Intelligence store");
         assert_eq!(
-            validate_result(&request, 1, result),
+            store.evaluate_document(
+                "household",
+                IntelligenceSelection {
+                    provider_id: "openai".to_owned(),
+                    model_id: "gpt-4.1-mini".to_owned(),
+                },
+                request,
+                CloudConsentDecision::AllowOnce,
+                "organiser-1",
+                None,
+            ),
             Err(IntelligenceFailure::InvalidStructuredResult)
         );
     }

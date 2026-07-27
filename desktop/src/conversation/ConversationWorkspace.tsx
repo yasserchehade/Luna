@@ -408,6 +408,7 @@ function DocumentReviewEditor({
             {selectedCloudProvider?.descriptor.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
           </select></label>
           <p><strong>{selectedCloudProvider?.descriptor.name ?? "The selected Intelligence Provider"} {selectedCloudModel?.name ?? ""}</strong> would receive the media type, the names and currently displayed values of unresolved local fields, and at most 4,000 characters of locally extracted text. Cabinet paths, Household state, credentials, Filing Rules, and the Original file are not sent.</p>
+          <p><strong>Reusable scope:</strong> future difficult {arrival.mediaType} Documents with the same currently displayed local context values and disclosed fields. Reuse remains limited to Direction Interpretation by the selected provider and model.</p>
           {!selectedCloudProvider?.configured && <p className="muted">Connect this Trusted Device to Luna&apos;s managed gateway in Options before allowing Cloud Assistance.</p>}
           <div className="cloud-assistance-inline-actions">
             {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing Consent Grant</button>}
