@@ -14,7 +14,7 @@ export type ConversationMessage = {
   body: string;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "readyToFile" | "dismissed";
+export type DocumentProcessingState = "needsMemberDirection" | "readyToFile" | "filing" | "filed" | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -89,6 +89,26 @@ export type FilingDecisionDirection = {
   cabinetDestination: string;
 };
 
+export type FiledOriginal = {
+  arrivalId: number;
+  conversationId: number;
+  originalName: string;
+  finalPath: string;
+  checksum: string;
+  sourcePath: string;
+  filingDecision: FilingDecisionReview;
+};
+
+export type AuditEvent = {
+  id: number;
+  householdId: string;
+  kind: "documentFiled";
+  authority: "memberDirection";
+  subject: string;
+  outcome: string;
+  filedOriginal: FiledOriginal;
+};
+
 export type ReviewCard = {
   confidenceState: ConfidenceState;
   evidence: ReviewEvidence[];
@@ -111,6 +131,7 @@ export type DocumentArrival = {
   extractedText: string | null;
   reviewCard: ReviewCard;
   processingState: DocumentProcessingState;
+  filedOriginal: FiledOriginal | null;
 };
 
 export type TodoItem = {
@@ -131,8 +152,11 @@ export interface ConversationService {
   listMessages(householdId: string, conversationId: number): Promise<ConversationMessage[]>;
   selectDocumentFiles(): Promise<string[]>;
   attachDocument(householdId: string, conversationId: number, path: string): Promise<DocumentArrival>;
+  resumeDocumentFilings(householdId: string): Promise<void>;
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
   listTodoItems(householdId: string): Promise<TodoItem[]>;
+  listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
+  listAuditEvents(householdId: string): Promise<AuditEvent[]>;
   dismissDocumentArrival(householdId: string, arrivalId: number): Promise<void>;
   recordMemberDirection(
     householdId: string,
@@ -178,11 +202,20 @@ export const tauriConversationService: ConversationService = {
   attachDocument(householdId, conversationId, path) {
     return invoke<DocumentArrival>("attach_document", { householdId, conversationId, path });
   },
+  resumeDocumentFilings(householdId) {
+    return invoke("resume_document_filings", { householdId });
+  },
   listDocumentArrivals(householdId) {
     return invoke<DocumentArrival[]>("list_document_arrivals", { householdId });
   },
   listTodoItems(householdId) {
     return invoke<TodoItem[]>("list_todo_items", { householdId });
+  },
+  listFiledOriginals(householdId) {
+    return invoke<FiledOriginal[]>("list_filed_originals", { householdId });
+  },
+  listAuditEvents(householdId) {
+    return invoke<AuditEvent[]>("list_audit_events", { householdId });
   },
   dismissDocumentArrival(householdId, arrivalId) {
     return invoke("dismiss_document_arrival", { householdId, arrivalId });

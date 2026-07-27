@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:e2e": "tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
+    "build:review": "tauri build --debug",
+    "build:e2e": "node scripts/build-e2e.mjs",
+    "test:build-flavors": "node scripts/verify-build-flavors.mjs",
     "supabase:reset": "supabase db reset --workdir .. --no-seed",
     "supabase:lint": "supabase db lint --local --level error --workdir ..",
     "supabase:start": "supabase start --workdir ..",

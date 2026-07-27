@@ -10,11 +10,11 @@ pub use cabinet::{
     CabinetValidation,
 };
 pub use conversation::{
-    ClarificationQuestion, ConfidenceState, ContextField, ContextRelevanceDirection, Conversation,
-    ConversationError, ConversationMessage, ConversationStore, DocumentArrival,
-    DocumentContextDirection, DocumentContextReview, DocumentProcessingState,
-    FilingDecisionDirection, FilingDecisionReview, LocalOcr, ReviewCard, ReviewEvidence,
-    ReviewField, TesseractOcr, TodoItem,
+    AuditAuthority, AuditEvent, AuditEventKind, ClarificationQuestion, ConfidenceState,
+    ContextField, ContextRelevanceDirection, Conversation, ConversationError, ConversationMessage,
+    ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
+    DocumentProcessingState, FiledOriginal, FilingDecisionDirection, FilingDecisionReview,
+    LocalOcr, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -331,12 +331,49 @@ fn list_document_arrivals(
 }
 
 #[tauri::command]
+fn resume_document_filings(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+) -> Result<(), String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            "A Cabinet must be configured before resuming document filing.".to_owned()
+        })?;
+    store
+        .resume_document_filings(&household_id, configuration.root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn list_todo_items(
     store: State<'_, ConversationState>,
     household_id: String,
 ) -> Result<Vec<TodoItem>, String> {
     store
         .list_todo_items(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_filed_originals(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<FiledOriginal>, String> {
+    store
+        .list_filed_originals(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_audit_events(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<AuditEvent>, String> {
+    store
+        .list_audit_events(&household_id)
         .map_err(|error| error.to_string())
 }
 
@@ -375,12 +412,20 @@ fn record_member_direction(
 #[tauri::command]
 fn confirm_filing_decision(
     store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     arrival_id: i64,
     direction: FilingDecisionDirection,
 ) -> Result<DocumentArrival, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before filing a document.".to_owned())?;
     store
         .confirm_filing_decision(&household_id, arrival_id, direction)
+        .map_err(|error| error.to_string())?;
+    store
+        .file_document(&household_id, arrival_id, configuration.root)
         .map_err(|error| error.to_string())
 }
 
@@ -797,7 +842,10 @@ pub fn run() {
         list_conversation_messages,
         attach_document,
         list_document_arrivals,
+        resume_document_filings,
         list_todo_items,
+        list_filed_originals,
+        list_audit_events,
         dismiss_document_arrival,
         record_member_direction,
         confirm_filing_decision,

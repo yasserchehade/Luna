@@ -65,7 +65,9 @@ describe("Luna account access", () => {
     await $("button=Create cabinet").click();
 
     await expect($("h1=New conversation")).toBeDisplayed();
+    await $("button[aria-label='Conversation actions']").click();
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
+    await $("button[aria-label='Conversation actions']").click();
     await expect($(`strong=${testHousehold.organiserName}`)).toBeDisplayed();
     await $("button[aria-label='Cabinet']").click();
     await expect($("h1=Cabinet")).toBeDisplayed();
@@ -96,7 +98,9 @@ describe("Luna account access", () => {
       window.dispatchEvent(new Event("online"));
     });
     await expect($("[role='status']")).not.toBeExisting();
+    await $("button[aria-label='Conversation actions']").click();
     await expect($(`strong=${testHousehold.name}`)).toBeDisplayed();
+    await $("button[aria-label='Conversation actions']").click();
 
     const recoveryCoordination = await browser.execute(() => {
       const control = (window as typeof window & {
@@ -296,7 +300,10 @@ describe("Luna account access", () => {
     await $("#device-pin").setValue(testHousehold.replacementDevicePin);
     await $("#device-pin-confirmation").setValue(testHousehold.replacementDevicePin);
     await $("button=Save device PIN").click();
+    await expect($("button=Options")).toBeDisplayed();
+    await $("button[aria-label='Conversation actions']").click();
     await expect($("strong=Rivera Household")).toBeDisplayed();
+    await $("button[aria-label='Conversation actions']").click();
 
     await $("button[aria-label='Options']").click();
     await expect($("h1=Trusted devices")).toBeDisplayed();

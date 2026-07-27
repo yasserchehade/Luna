@@ -106,6 +106,10 @@ _Avoid_: File
 The exact received bytes of a document version, preserved without content modification.
 _Avoid_: Source copy
 
+**Filed Original**:
+An Original whose verified bytes exist at its confirmed Cabinet Destination and whose successful filing is recorded by an Audit Event.
+_Avoid_: Filing record, filed copy
+
 **Document Version**:
 A distinct original that updates, corrects or supersedes another original without erasing it.
 _Avoid_: Duplicate

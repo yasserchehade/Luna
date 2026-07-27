@@ -7,9 +7,9 @@ use std::{
 };
 
 use luna_core::{
-    ConfidenceState, ContextField, ContextRelevanceDirection, ConversationStore, CredentialVault,
-    DocumentContextDirection, DocumentProcessingState, FilingDecisionDirection, LocalOcr,
-    TrustedDeviceManager, VaultError,
+    AuditAuthority, AuditEventKind, ConfidenceState, ContextField, ContextRelevanceDirection,
+    ConversationStore, CredentialVault, DocumentContextDirection, DocumentProcessingState,
+    FilingDecisionDirection, LocalOcr, TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -57,11 +57,15 @@ impl LocalOcr for FixedLocalOcr {
 }
 
 fn digital_pdf_with_text(text: &str) -> Vec<u8> {
+    pdf_with_text_and_font_resource(text, "/F1 5 0 R")
+}
+
+fn pdf_with_text_and_font_resource(text: &str, font_resource: &str) -> Vec<u8> {
     let content = format!("BT\n/F1 12 Tf\n72 720 Td\n({text}) Tj\nET\n");
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
-        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_owned(),
+        format!("<< /Type /Page /Parent 2 0 R /Resources << /Font << {font_resource} >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>"),
         format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
     ];
@@ -157,6 +161,77 @@ fn open_conversation_store_with_ocr(
     let store = ConversationStore::open_with_ocr(database, trusted_device.clone(), FixedLocalOcr)
         .expect("open Conversation store");
     (store, trusted_device)
+}
+
+fn prepare_document_for_filing(
+    store: &TestConversationStore,
+    household_id: &str,
+    cabinet: &Path,
+    source: &Path,
+    final_name: &str,
+) -> luna_core::DocumentArrival {
+    prepare_document_for_destination(
+        store,
+        household_id,
+        cabinet,
+        source,
+        final_name,
+        &format!("Household records/{final_name}"),
+    )
+}
+
+fn prepare_document_for_destination(
+    store: &TestConversationStore,
+    household_id: &str,
+    cabinet: &Path,
+    source: &Path,
+    final_name: &str,
+    cabinet_destination: &str,
+) -> luna_core::DocumentArrival {
+    let conversation = store
+        .create_conversation(household_id, "Document filing")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document(household_id, conversation.id, source, cabinet)
+        .expect("stage Original");
+    store
+        .record_member_direction(
+            household_id,
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Household document".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("Household Service".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: None,
+                property_resolved: true,
+                account: None,
+                account_resolved: true,
+                amount: None,
+                amount_resolved: true,
+                relevant_dates: Vec::new(),
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "Household Service".to_owned(),
+                    explanation: "Issues this Household document".to_owned(),
+                }),
+                property_relevance: None,
+            },
+            "Household records",
+        )
+        .expect("record Member Direction");
+    store
+        .confirm_filing_decision(
+            household_id,
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: final_name.to_owned(),
+                cabinet_destination: cabinet_destination.to_owned(),
+            },
+        )
+        .expect("confirm Filing Decision")
 }
 
 #[cfg(unix)]
@@ -682,6 +757,30 @@ fn a_document_arrival_extracts_text_from_a_digital_pdf_locally() {
 }
 
 #[test]
+fn a_document_arrival_survives_a_pdf_parser_font_panic() {
+    let directory = tempfile::tempdir().expect("temporary utility bill directory");
+    let source = directory.path().join("utility bill.pdf");
+    fs::write(&source, pdf_with_text_and_font_resource("Utility bill", ""))
+        .expect("write utility bill parser fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Utility bill")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &source,
+            directory.path(),
+        )
+        .expect("attach utility bill PDF");
+
+    assert_eq!(arrival.original_name, "utility bill.pdf");
+    assert_eq!(arrival.media_type, "application/pdf");
+}
+
+#[test]
 fn an_unfamiliar_document_review_represents_context_and_asks_only_filing_questions() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("electricity bill.pdf");
@@ -1055,6 +1154,26 @@ fn only_a_resolved_editable_filing_decision_can_be_confirmed() {
             },
         )
         .is_err());
+    assert!(store
+        .confirm_filing_decision(
+            "rivera-household",
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "CON.pdf".to_owned(),
+                cabinet_destination: "Household records/CON.pdf".to_owned(),
+            },
+        )
+        .is_err());
+    assert!(store
+        .confirm_filing_decision(
+            "rivera-household",
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "CONIN$.pdf".to_owned(),
+                cabinet_destination: "Household records/CONIN$.pdf".to_owned(),
+            },
+        )
+        .is_err());
     let confirmed = store
         .confirm_filing_decision(
             "rivera-household",
@@ -1084,6 +1203,273 @@ fn only_a_resolved_editable_filing_decision_can_be_confirmed() {
         .list_todo_items("rivera-household")
         .expect("list To-do Items")
         .is_empty());
+}
+
+#[test]
+fn filing_verifies_the_untouched_original_before_recording_one_consistent_outcome() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let original = digital_pdf_with_text("AGL electricity bill");
+    let source = directory.path().join("source electricity bill.pdf");
+    fs::write(&source, &original).expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Electricity bill July 2026.pdf",
+    );
+    let staged_path = ready.original_path.clone();
+
+    let filed = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect("file and verify Original");
+
+    assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
+    assert!(!staged_path.exists(), "staging is removed after completion");
+    let filed_original = filed.filed_original.expect("completed Filed Original");
+    assert_eq!(
+        fs::read(&filed_original.final_path).expect("read Filed Original"),
+        original
+    );
+    assert_eq!(filed_original.original_name, "source electricity bill.pdf");
+    assert_eq!(filed_original.checksum, ready.checksum);
+    assert_eq!(filed_original.source_path, source);
+    assert_eq!(
+        filed_original.filing_decision.cabinet_destination,
+        "Household records/Electricity bill July 2026.pdf"
+    );
+    assert!(store
+        .list_todo_items("rivera-household")
+        .expect("list To-do Items")
+        .is_empty());
+    assert_eq!(
+        store
+            .list_filed_originals("rivera-household")
+            .expect("list Cabinet Originals"),
+        vec![filed_original.clone()]
+    );
+    let history = store
+        .list_audit_events("rivera-household")
+        .expect("list History");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].kind, AuditEventKind::DocumentFiled);
+    assert_eq!(history[0].authority, AuditAuthority::MemberDirection);
+    assert_eq!(history[0].subject, "source electricity bill.pdf");
+    assert_eq!(history[0].filed_original, filed_original);
+}
+
+#[test]
+fn filing_never_overwrites_an_existing_destination_and_keeps_staging_for_recovery() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet = directory.path().join("Cabinet");
+    let section = cabinet.join("Household records");
+    fs::create_dir_all(&section).expect("create Cabinet");
+    let source = directory.path().join("rates.png");
+    let original = image_fixture(image::ImageFormat::Png);
+    fs::write(&source, &original).expect("write source fixture");
+    let destination = section.join("Council rates.png");
+    fs::write(&destination, b"an existing household document").expect("write existing file");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Council rates.png",
+    );
+
+    let error = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect_err("refuse destination conflict");
+
+    assert_eq!(
+        error.to_string(),
+        "A different Original already occupies the Cabinet Destination."
+    );
+    assert_eq!(
+        fs::read(&destination).expect("read existing destination"),
+        b"an existing household document"
+    );
+    assert!(
+        ready.original_path.exists(),
+        "staged Original remains recoverable"
+    );
+    assert_eq!(
+        store
+            .list_document_arrivals("rivera-household")
+            .expect("list Conversation work")[0]
+            .processing_state,
+        DocumentProcessingState::ReadyToFile
+    );
+    assert!(store
+        .list_audit_events("rivera-household")
+        .expect("list History")
+        .is_empty());
+
+    fs::write(&destination, &original).expect("replace fixture with an exact duplicate");
+    assert!(store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .is_err());
+    assert!(ready.original_path.exists());
+    assert!(store
+        .list_audit_events("rivera-household")
+        .expect("list History after exact destination conflict")
+        .is_empty());
+}
+
+#[test]
+fn filing_rejects_a_destination_that_escapes_the_configured_cabinet_through_a_link() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet = directory.path().join("Cabinet");
+    let section = cabinet.join("Household records");
+    let outside = directory.path().join("Outside");
+    fs::create_dir_all(&section).expect("create Cabinet");
+    fs::create_dir(&outside).expect("create outside folder");
+    create_directory_link(&outside, &section.join("Escape"));
+    let source = directory.path().join("notice.pdf");
+    fs::write(&source, digital_pdf_with_text("Household notice")).expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_destination(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Notice.pdf",
+        "Household records/Escape/Notice.pdf",
+    );
+    let error = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect_err("reject linked destination outside Cabinet");
+
+    assert_eq!(
+        error.to_string(),
+        "The Cabinet Destination must be a safe relative path ending in the chosen filename."
+    );
+    assert!(!outside.join("Notice.pdf").exists());
+    assert!(ready.original_path.exists());
+}
+
+#[test]
+fn filing_recovers_after_the_verified_destination_was_written_before_event_recording() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let cabinet = directory.path().join("Cabinet");
+    let section = cabinet.join("Household records");
+    fs::create_dir_all(&section).expect("create Cabinet");
+    let original = digital_pdf_with_text("Interrupted filing");
+    let source = directory.path().join("interrupted.pdf");
+    fs::write(&source, &original).expect("write source fixture");
+    let database = directory.path().join("luna.db");
+    let (store, trusted_device) = open_conversation_store(&database);
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Recovered filing.pdf",
+    );
+    let destination = section.join("Recovered filing.pdf");
+    let interrupted_temporary =
+        section.join(format!(".luna-filing-{}-{}.tmp", ready.id, ready.checksum));
+    fs::create_dir(&interrupted_temporary).expect("block temporary filing write");
+    store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect_err("simulate interruption after durable Filing state");
+    assert_eq!(
+        store
+            .list_document_arrivals("rivera-household")
+            .expect("list interrupted filing")[0]
+            .processing_state,
+        DocumentProcessingState::Filing
+    );
+    fs::remove_dir(interrupted_temporary).expect("clear interrupted temporary write");
+    fs::write(&destination, &original).expect("simulate verified write before durable event");
+    drop(store);
+    let reopened = ConversationStore::open(&database, trusted_device)
+        .expect("reopen Conversation store after interruption");
+
+    reopened
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("resume interrupted filing");
+    let filed = reopened
+        .list_document_arrivals("rivera-household")
+        .expect("list resumed filing")
+        .remove(0);
+
+    assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
+    assert!(!ready.original_path.exists());
+    assert_eq!(
+        reopened
+            .list_audit_events("rivera-household")
+            .expect("list History")
+            .len(),
+        1
+    );
+
+    fs::create_dir_all(ready.original_path.parent().expect("staging directory"))
+        .expect("recreate staging after simulated cleanup interruption");
+    fs::write(&ready.original_path, &original).expect("restore staged Original");
+    reopened
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("resume cleanup after durable event");
+    assert!(!ready.original_path.exists());
+    assert_eq!(
+        reopened
+            .list_audit_events("rivera-household")
+            .expect("list History after idempotent recovery")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn pdf_jpg_and_png_originals_complete_the_verified_filing_journey() {
+    let fixtures = [
+        (
+            "statement.pdf",
+            digital_pdf_with_text("PDF statement"),
+            "Filed statement.pdf",
+        ),
+        (
+            "photo.jpg",
+            image_fixture(image::ImageFormat::Jpeg),
+            "Filed photo.jpg",
+        ),
+        (
+            "scan.png",
+            image_fixture(image::ImageFormat::Png),
+            "Filed scan.png",
+        ),
+    ];
+
+    for (index, (source_name, original, final_name)) in fixtures.into_iter().enumerate() {
+        let directory = tempfile::tempdir().expect("temporary device directory");
+        let cabinet = directory.path().join("Cabinet");
+        fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+        let source = directory.path().join(source_name);
+        fs::write(&source, &original).expect("write fixture");
+        let (store, _) = open_conversation_store(directory.path().join(format!("luna-{index}.db")));
+        let ready =
+            prepare_document_for_filing(&store, "rivera-household", &cabinet, &source, final_name);
+
+        let filed = store
+            .file_document("rivera-household", ready.id, &cabinet)
+            .expect("file supported Original");
+
+        assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
+        assert_eq!(
+            fs::read(
+                filed
+                    .filed_original
+                    .expect("completed Filed Original")
+                    .final_path
+            )
+            .expect("read filed fixture"),
+            original
+        );
+    }
 }
 
 #[test]

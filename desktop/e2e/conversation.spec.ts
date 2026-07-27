@@ -7,6 +7,9 @@ import { onboardTestHousehold } from "./onboardTestHousehold";
 describe("Luna Conversation desk", () => {
   it("keeps document work consistent between Conversation and To do", async () => {
     await onboardTestHousehold();
+    const openConversationActions = async () => {
+      await $("button[aria-label='Conversation actions']").click();
+    };
 
     for (const destination of ["Luna", "To do", "Cabinet", "History", "Options"]) {
       await expect($(`button[aria-label='${destination}']`)).toBeDisplayed();
@@ -19,15 +22,25 @@ describe("Luna Conversation desk", () => {
 
     await expect($(".member-message p")).toHaveText(message);
 
+    await openConversationActions();
     await $("button=Rename").click();
     const title = await $("input[aria-label='Conversation title']");
     await title.setValue("AGL electricity bill");
     await $("button=Save title").click();
     await expect($("h1=AGL electricity bill")).toBeDisplayed();
+    await expect($(".conversation-header")).toBeDisplayed();
+    await expect($(".conversation-title")).toHaveText("AGL electricity bill");
+    await expect($(".conversation-list")).toBeDisplayed();
+    await expect($(".conversation-list")).toHaveText(expect.stringContaining("AGL electricity bill"));
+    await expect((await $(".conversation-list button").getSize()).height).toBeLessThan(60);
+    await $(".conversation-list button").click();
+    await expect($("h1=AGL electricity bill")).toBeDisplayed();
 
     await $("button[aria-label='Attach document']").click();
     await expect($(".document-arrival h2")).toHaveText(expect.stringContaining("luna-e2e-document"));
     await expect($(".document-arrival p")).toHaveText("Needs your direction");
+    await expect($("label=Service provider relevance")).toBeDisplayed();
+    await expect($("label=Property relevance")).toBeDisplayed();
 
     await $("button[aria-label='To do']").click();
     await expect($("h1=To do")).toBeDisplayed();
@@ -57,11 +70,22 @@ describe("Luna Conversation desk", () => {
       "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
     );
     await review.$("button=Confirm Filing Decision").click();
-    await expect($(".document-arrival > div > p")).toHaveText("Ready to file");
+    await expect($(".document-arrival > div > p")).toHaveText("Filed");
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
+    await $("button[aria-label='Cabinet']").click();
+    await expect($(".filed-originals strong")).toHaveText("AGL bill July 2026.pdf");
+    await expect($(".filed-originals p")).toHaveText(
+      "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
+    );
+    await $("button[aria-label='History']").click();
+    await expect($(".history-event strong")).toHaveText("Document filed");
+    await expect($(".history-event small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
 
     await $("button[aria-label='Luna']").click();
+    await expect($(".attachment-zone p")).toHaveText(
+      "Drop a PDF, JPG, or PNG anywhere in Luna, or select a document.",
+    );
     const droppedDocument = join(tmpdir(), `luna-e2e-dropped-${Date.now()}.png`);
     writeFileSync(droppedDocument, Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
@@ -93,9 +117,13 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Luna']").click();
     await expect($$(".document-arrival > div > p")).toBeElementsArrayOfSize(2);
     await expect($$(".document-arrival > div > p")[0]).toHaveText("Dismissed");
-    await expect($$(".document-arrival > div > p")[1]).toHaveText("Ready to file");
+    await expect($$(".document-arrival > div > p")[1]).toHaveText("Filed");
 
+    await openConversationActions();
     await $("button=Archive").click();
+    await expect($("h1=Conversations")).toBeDisplayed();
+    await openConversationActions();
+    await $("label=Show archived").$("input").click();
     await expect($("button=Restore")).toBeDisplayed();
     await $("label=Show archived").$("input").click();
     await expect($("h1=Conversations")).toBeDisplayed();
@@ -109,12 +137,14 @@ describe("Luna Conversation desk", () => {
     await expect($("h1=AGL electricity bill")).toBeDisplayed();
     await $("button=Restore").click();
 
-    await $("button=＋ New Conversation").click();
+    await $("button[aria-label='New conversation']").click();
     await expect($("h1=New conversation")).toBeDisplayed();
+    await openConversationActions();
     await $("button=Delete").click();
     await expect($("h1=AGL electricity bill")).toBeDisplayed();
 
     await $("button[aria-label='Attach document']").click();
+    await openConversationActions();
     await $("button=Delete").click();
     await expect($("h1=Deleted Conversation")).toBeDisplayed();
     await $("button[aria-label='To do']").click();

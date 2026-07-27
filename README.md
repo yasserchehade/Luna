@@ -25,9 +25,12 @@ pnpm --filter luna-desktop tauri dev
 The installed-application seam is built and run separately:
 
 ```powershell
+pnpm --filter luna-desktop build:review
 pnpm --filter luna-desktop build:e2e
 pnpm --filter luna-desktop test:e2e
 ```
+
+Use `build:review` before reviewing the Windows desktop application. It rebuilds the frontend through Tauri's `beforeBuildCommand` and then rebuilds the debug executable at `desktop/src-tauri/target/debug/luna-desktop.exe`.
 
 Windows development requires Rust and the Visual Studio C++ build workload. macOS development requires Rust and Xcode command-line tools.
 

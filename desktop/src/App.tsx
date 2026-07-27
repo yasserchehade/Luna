@@ -9,7 +9,12 @@ import { TrustedDevicesOptions } from "./trusted-device/TrustedDevicesOptions";
 import { CabinetSetup } from "./cabinet/CabinetSetup";
 import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService";
 import { ConversationWorkspace } from "./conversation/ConversationWorkspace";
-import type { ConversationService } from "./conversation/conversationService";
+import type {
+  AuditEvent,
+  Conversation,
+  ConversationService,
+  FiledOriginal,
+} from "./conversation/conversationService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
 type TrustedDeviceMode = "first" | "recovery";
@@ -42,6 +47,15 @@ export default function App({ accountService, cabinetService, conversationServic
   const [activeDestination, setActiveDestination] = useState<(typeof destinations)[number]>("Luna");
   const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [todoCount, setTodoCount] = useState(0);
+  const [recentConversations, setRecentConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  const [conversationSelectionRequest, setConversationSelectionRequest] = useState<{
+    conversationId: number;
+    request: number;
+  } | null>(null);
+  const [filedOriginals, setFiledOriginals] = useState<FiledOriginal[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [documentSurfaceError, setDocumentSurfaceError] = useState("");
 
   const lockLuna = async () => {
     if (!session) return;
@@ -58,6 +72,11 @@ export default function App({ accountService, cabinetService, conversationServic
     setCabinetCheckFailed(false);
     setPendingUnlockSession(null);
     setPendingTrustedSession(null);
+    setRecentConversations([]);
+    setActiveConversationId(null);
+    setConversationSelectionRequest(null);
+    setActiveDestination("Luna");
+    setNewConversationRequest(0);
     setCoordinationNotice("");
     try {
       await accountService.signOut();
@@ -162,6 +181,16 @@ export default function App({ accountService, cabinetService, conversationServic
       active = false;
     };
   }, [cabinetCheckAttempt, cabinetService, session?.householdId]);
+
+  useEffect(() => {
+    if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
+    const request = activeDestination === "Cabinet"
+      ? conversationService.listFiledOriginals(session.householdId).then(setFiledOriginals)
+      : conversationService.listAuditEvents(session.householdId).then(setAuditEvents);
+    void request
+      .then(() => setDocumentSurfaceError(""))
+      .catch(() => setDocumentSurfaceError(`Luna could not open ${activeDestination}.`));
+  }, [activeDestination, conversationService, session]);
 
   if (isRestoringSession) {
     return <main className="account-screen"><section className="account-card">
@@ -270,10 +299,10 @@ export default function App({ accountService, cabinetService, conversationServic
     <div className="luna-shell">
       <aside className="sidebar">
         <div className="brand"><span aria-hidden="true">L</span><strong>Luna</strong></div>
-        <button className="new-conversation" type="button" onClick={() => {
+        <button aria-label="New conversation" className="new-conversation" type="button" onClick={() => {
           setActiveDestination("Luna");
           setNewConversationRequest((request) => request + 1);
-        }}>＋ New Conversation</button>
+        }}>+ New conversation</button>
         <nav aria-label="Primary destinations">
           {destinations.map((destination) => (
             <button
@@ -289,6 +318,23 @@ export default function App({ accountService, cabinetService, conversationServic
             </button>
           ))}
         </nav>
+        <section className="conversation-list" aria-label="Recent conversations">
+          <small>Conversations</small>
+          {recentConversations.length === 0
+            ? <p>No conversations yet.</p>
+            : recentConversations.map((conversation) => <button
+              className={activeConversationId === conversation.id && activeDestination === "Luna" ? "selected" : undefined}
+              key={conversation.id}
+              onClick={() => {
+                setActiveDestination("Luna");
+                setConversationSelectionRequest({
+                  conversationId: conversation.id,
+                  request: Date.now(),
+                });
+              }}
+              type="button"
+            >{conversation.title}</button>)}
+        </section>
         <div className="member"><span>{initials}</span><div><strong>{session.organiserName}</strong><small>Household Organiser</small></div><button type="button" onClick={lockLuna}>Lock Luna</button></div>
       </aside>
 
@@ -305,28 +351,43 @@ export default function App({ accountService, cabinetService, conversationServic
             <article><span aria-hidden="true">▰</span><strong>Incoming</strong></article>
             {cabinetValidation.configuration.sections.map((section) => <article key={section}><span aria-hidden="true">▰</span><strong>{section}</strong></article>)}
           </div>
+          {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
+          {filedOriginals.length === 0
+            ? <p className="empty-state">No Originals have been filed yet.</p>
+            : <div className="filed-originals">{filedOriginals.map((filedOriginal) => <article key={filedOriginal.arrivalId}>
+              <strong>{filedOriginal.filingDecision.fileName}</strong>
+              <p>{filedOriginal.filingDecision.cabinetDestination}</p>
+              <small>SHA-256 {filedOriginal.checksum}</small>
+            </article>)}</div>}
         </section>
       </main> : activeDestination === "History" ? <main className="conversation">
         <header><div><small>Household history</small><h1>History</h1></div></header>
-        <section className="messages"><p>History will show durable Audit Events as Luna handles documents.</p></section>
+        <section className="messages">
+          {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
+          {auditEvents.length === 0
+            ? <p className="empty-state">No consequential document actions yet.</p>
+            : auditEvents.map((event) => <article className="history-event" key={event.id}>
+              <strong>Document filed</strong>
+              <p>{event.subject}</p>
+              <small>{event.outcome} · Verified SHA-256 {event.filedOriginal.checksum}</small>
+            </article>)}
+        </section>
       </main> : <>
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
         <ConversationWorkspace
           conversationService={conversationService}
           destination={activeDestination}
           householdId={session.householdId}
+          householdName={session.householdName}
           newConversationRequest={newConversationRequest}
+          conversationSelectionRequest={conversationSelectionRequest}
+          onRecentConversationsChange={setRecentConversations}
+          onActiveConversationChange={setActiveConversationId}
           onOpenConversation={() => setActiveDestination("Luna")}
           onTodoCountChange={setTodoCount}
         />
       </>}
 
-      <aside className="context-panel">
-        <header>Household context</header>
-        <div><small>Household</small><strong>{session.householdName}</strong></div>
-        <div><small>Desk status</small><strong>Ready</strong><p>{cabinetValidation.configuration.root}</p></div>
-        <div className="privacy"><small>Processing</small><strong>Local by default</strong><p>Luna will ask before using Cloud Assistance.</p></div>
-      </aside>
     </div>
   );
 }
