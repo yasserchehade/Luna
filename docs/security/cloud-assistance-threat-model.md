@@ -10,7 +10,7 @@
 
 ## Trust boundaries
 
-The Trusted Device owns protected Document Handling state and consent policy. The Luna-managed remote gateway is an external processor. LiteLLM and the selected Intelligence Provider are untrusted for authority and durable state.
+The Trusted Device owns protected Document Handling state and consent policy. The separately operated Luna-managed gateway is an external processor, even when an operator runs the prototype canary on loopback. LiteLLM and the selected Intelligence Provider are untrusted for authority and durable state.
 
 ## Threats and controls
 
@@ -29,7 +29,7 @@ The Trusted Device owns protected Document Handling state and consent policy. Th
 
 ## Credential ownership
 
-The operating-system-vault acceptance criterion applies to the desktop's Luna gateway access credential and any future Bring-your-own Intelligence credential. For Luna-managed Intelligence, the upstream OpenAI credential is owned by the remote service and never delivered to the desktop.
+The operating-system-vault acceptance criterion applies to the desktop's Luna gateway access credential and any future Bring-your-own Intelligence credential. For Luna-managed Intelligence, the upstream OpenAI credential is owned by the separately operated gateway environment and never delivered to the desktop application or its storage.
 
 The gateway credential must be narrow, revocable and attributable for abuse controls. It must not be written to environment files in the repository, frontend storage, SQLite, Cabinet content, History or diagnostics.
 
@@ -46,3 +46,5 @@ Before a gateway release:
 7. record safe usage metadata and delete the test request.
 
 LiteLLM configuration flags are not the only control; network ingress and log sinks must independently prevent body capture.
+
+For prototype acceptance, this verification may use the pinned Compose deployment bound to loopback, a fixed synthetic request and disposable credentials. That exception does not authorise a desktop sidecar or real Household information. Before external testing, the gateway must run remotely behind authenticated TLS ingress with managed secrets, attributable client credentials and abuse controls; issue #53 owns that pre-production evidence.

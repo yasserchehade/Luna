@@ -12,8 +12,8 @@ flowchart TD
     Consent --> Request["Build bounded Intelligence Request"]
     Request --> Gateway["Luna-owned Intelligence Gateway"]
     Gateway --> Adapter["Private LiteLLM adapter"]
-    Adapter --> Remote["Luna-managed remote LiteLLM"]
-    Remote --> Provider["Exact OpenAI model"]
+    Adapter --> Deployment["Isolated LiteLLM deployment"]
+    Deployment --> Provider["Exact OpenAI model"]
     Provider --> Untrusted["Structured untrusted result"]
     Untrusted --> Validation["Luna schema, identity and correlation validation"]
     Validation --> Domain["Document Handling validation"]
@@ -30,9 +30,11 @@ The production catalogue contains one evaluated route:
 
 | Intelligence Provider | Model | Mode | Harness |
 | --- | --- | --- | --- |
-| OpenAI | `gpt-4.1-mini` | Luna-managed Intelligence | remote LiteLLM |
+| OpenAI | `gpt-4.1-mini` | Luna-managed Intelligence | isolated LiteLLM; remote before external testing |
 
 `DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
+
+For prototype acceptance, an operator may run the pinned gateway deployment ephemerally on loopback and send only the fixed synthetic canary. This validates the real provider contract without adding LiteLLM or Python to the desktop. Before external testing, the same boundary moves behind authenticated remote HTTPS ingress with managed secrets and attributable gateway credentials.
 
 ## Minimisation
 

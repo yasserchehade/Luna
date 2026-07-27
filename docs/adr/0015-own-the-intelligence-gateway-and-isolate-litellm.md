@@ -4,7 +4,7 @@ status: accepted
 
 # Own the Intelligence Gateway and isolate LiteLLM
 
-Luna will own a provider-neutral `IntelligenceGateway` contract and use a remotely operated LiteLLM proxy as the provisional first Luna-managed implementation. Document Handling and Conversation depend only on Luna-owned request, result, failure, Consent Grant and Direction Interpretation types. LiteLLM translation, HTTP details and error mapping remain inside one private Rust adapter.
+Luna will own a provider-neutral `IntelligenceGateway` contract and use an isolated, separately operated LiteLLM proxy as the provisional first Luna-managed implementation. Document Handling and Conversation depend only on Luna-owned request, result, failure, Consent Grant and Direction Interpretation types. LiteLLM translation, HTTP details and error mapping remain inside one private Rust adapter.
 
 ## Context
 
@@ -12,19 +12,25 @@ Cloud Assistance must support more than one Intelligence Provider without allowi
 
 ## Decision
 
-The first evaluated Luna-managed route is OpenAI `gpt-4.1-mini` through a Luna-managed remote LiteLLM gateway. Luna selects that exact Intelligence Provider and model, validates a provider-and-model-specific Consent Grant, constructs a bounded structured request, and only then calls the gateway. The adapter sends `openai/gpt-4.1-mini` explicitly and disables LiteLLM retries and fallbacks. Luna may perform a bounded safe retry using the unchanged request, provider and model.
+The first evaluated Luna-managed route is OpenAI `gpt-4.1-mini` through an isolated LiteLLM gateway. Luna selects that exact Intelligence Provider and model, validates a provider-and-model-specific Consent Grant, constructs a bounded structured request, and only then calls the gateway. The adapter sends `openai/gpt-4.1-mini` explicitly and disables LiteLLM retries and fallbacks. Luna may perform a bounded safe retry using the unchanged request, provider and model.
 
-The desktop authenticates with a narrow, revocable Luna gateway credential held in the operating-system credential vault. The remote service holds the upstream OpenAI credential. Neither credential enters SQLite, Cabinet files, History, request content or diagnostics. Production gateway keys are attributable to a Trusted Device or Household for abuse controls and may be independently revoked.
+The desktop authenticates with a narrow, revocable Luna gateway credential held in the operating-system credential vault. The separately operated gateway holds the upstream OpenAI credential. Neither credential enters SQLite, Cabinet files, History, request content or diagnostics. Production gateway keys are attributable to a Trusted Device or Household for abuse controls and may be independently revoked.
 
 LiteLLM output is untrusted. Luna verifies correlation, provider, model, allowed fields, value constraints and the structured response before converting it to Evidence or a candidate Direction Interpretation. The owning Document Handling domain validates that candidate again, including that the field still awaits Member Direction and that monetary and ISO-date values satisfy domain constraints. No result type contains action authority, tools, Member Direction, Filing Decisions, Filing Rules or duplicate decisions.
 
+## Prototype evaluation boundary
+
+The evaluated-real-provider canary may run against the pinned LiteLLM Compose deployment on an operator's loopback interface. This is an ephemeral release-environment test using synthetic content and disposable credentials; it is not a desktop sidecar, a member-facing deployment or permission to use real Household information. LiteLLM remains outside the desktop process and lifecycle, and the upstream credential exists only in the operator-controlled gateway environment.
+
+Before Luna is released to external testers, the same gateway contract must be operated remotely behind authenticated TLS ingress, managed secrets, attributable client credentials, body-free infrastructure logs and abuse controls. That pre-production deployment gate is tracked separately from the prototype's provider-contract evaluation.
+
 ## Options considered
 
-### Luna-managed remote LiteLLM gateway — selected
+### Luna-managed isolated LiteLLM gateway — selected
 
 This keeps upstream credentials server-side, provides one multi-provider harness, supports narrow client authentication and avoids shipping Python. It adds an operated service and requires strict request-body logging controls.
 
-### Local LiteLLM sidecar — rejected for the first vertical
+### Desktop LiteLLM sidecar — rejected for the first vertical
 
 A sidecar would add Python packaging, lifecycle, patching and process-isolation work to every desktop installation. It would also move managed upstream credential handling onto the Trusted Device. A future Local-only Intelligence distribution may use a different local adapter without changing Document Handling.
 
@@ -46,4 +52,4 @@ Direct Rust adapters reduce proxy infrastructure but duplicate provider transpor
 
 LiteLLM is an infrastructure detail, not an irreversible platform choice. Adding Anthropic, Gemini, Azure, Bedrock, a supported local endpoint, Portkey or a direct adapter changes the provider catalogue and gateway implementation, not Document Handling workflows. Before LiteLLM becomes long-lived infrastructure, Luna must evaluate it against Portkey and direct adapters for privacy controls, structured-output fidelity, failure semantics, operating burden, cost metadata and provider coverage.
 
-The remote deployment must pin and evaluate a LiteLLM version, disable raw request/response and message-content logging, keep ordinary ingress logs body-free, verify those controls after upgrades and retain only privacy-safe usage metadata. LiteLLM's own logging switches are defence in depth rather than the sole privacy control.
+Every deployment must pin and evaluate a LiteLLM version, disable raw request/response and message-content logging and retain only privacy-safe usage metadata. A pre-production or production remote deployment must additionally keep ordinary ingress logs body-free and verify those controls after upgrades. LiteLLM's own logging switches are defence in depth rather than the sole privacy control.
