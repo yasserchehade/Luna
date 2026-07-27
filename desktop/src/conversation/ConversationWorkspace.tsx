@@ -94,6 +94,9 @@ function DocumentReviewEditor({
   const [cabinetDestination, setCabinetDestination] = useState(
     decision?.cabinetDestination ?? "",
   );
+  const clarificationQuestions = arrival.processingState === "needsMemberDirection"
+    ? arrival.reviewCard.questions.filter(({ field }) => field !== "amount")
+    : arrival.reviewCard.questions;
 
   useEffect(() => {
     const refreshed = directionFromReview(arrival);
@@ -162,9 +165,9 @@ function DocumentReviewEditor({
       <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
       <button type="submit">Save Household Context</button>
     </form>}
-    {arrival.reviewCard.questions.length > 0 && <div className="clarification-questions">
+    {clarificationQuestions.length > 0 && <div className="clarification-questions">
       <small>Luna still needs to know</small>
-      {arrival.reviewCard.questions.map((question) => <p key={question.field}>{question.prompt}</p>)}
+      {clarificationQuestions.map((question) => <p key={question.field}>{question.prompt}</p>)}
     </div>}
     {decision && !decision.confirmed && <form className="filing-decision-form" onSubmit={(event) => {
       event.preventDefault();
@@ -177,6 +180,10 @@ function DocumentReviewEditor({
     {arrival.filedOriginal
       ? <p className="confirmed-destination">Filed at: {arrival.filedOriginal.filingDecision.cabinetDestination}</p>
       : decision?.confirmed && <p className="confirmed-destination">Confirmed destination: {decision.cabinetDestination}</p>}
+    {arrival.reviewCard.learnedRule && <aside className="learned-rule" aria-label="Learned filing rule">
+      <small>Learned filing rule</small>
+      <p>For {arrival.reviewCard.learnedRule.documentType} from {arrival.reviewCard.learnedRule.serviceProvider} addressed to {arrival.reviewCard.learnedRule.addressee}{arrival.reviewCard.learnedRule.property ? ` at ${arrival.reviewCard.learnedRule.property}` : ""}{arrival.reviewCard.learnedRule.account ? ` on account ${arrival.reviewCard.learnedRule.account}` : ""}, Luna can file an exact match at {arrival.reviewCard.learnedRule.cabinetDestination}.</p>
+    </aside>}
   </section>;
 }
 
@@ -210,7 +217,9 @@ export function ConversationWorkspace({
   const lastNewRequest = useRef(newConversationRequest);
 
   const selectedConversation = conversations.find(({ id }) => id === selectedConversationId) ?? null;
-  const selectedArrivals = arrivals.filter(({ conversationId }) => conversationId === selectedConversationId);
+  const selectedArrivals = arrivals
+    .filter(({ conversationId }) => conversationId === selectedConversationId)
+    .sort((left, right) => left.id - right.id);
 
   useEffect(() => {
     onActiveConversationChange(selectedConversationId);
@@ -239,6 +248,7 @@ export function ConversationWorkspace({
       )) return current;
       return loadedConversations[0]?.id ?? null;
     });
+    return loadedArrivals;
   }, [conversationService, focusedArrivalId, householdId, includeArchived, onRecentConversationsChange, onTodoCountChange, search]);
 
   const createConversation = useCallback(async () => {
@@ -324,7 +334,12 @@ export function ConversationWorkspace({
         await conversationService.attachDocument(householdId, selectedConversationId, path);
       }
       setError("");
-      await loadHouseholdWork();
+      const loadedArrivals = await loadHouseholdWork();
+      const conversationArrivals = loadedArrivals.filter(
+        ({ conversationId }) => conversationId === selectedConversationId,
+      );
+      const newestArrival = [...conversationArrivals].sort((left, right) => right.id - left.id)[0];
+      setFocusedArrivalId(newestArrival?.id ?? null);
     } catch (attachmentError) {
       setError(String(attachmentError));
     }

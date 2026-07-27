@@ -39,8 +39,15 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Attach document']").click();
     await expect($(".document-arrival h2")).toHaveText(expect.stringContaining("luna-e2e-document"));
     await expect($(".document-arrival p")).toHaveText("Needs your direction");
+    await expect($(".document-arrival[data-focused='true']")).toBeDisplayed();
     await expect($("label=Service provider relevance")).toBeDisplayed();
     await expect($("label=Property relevance")).toBeDisplayed();
+    const reviewCard = $(".document-arrival .review-card");
+    await expect(reviewCard.$$("input[aria-label='Amount']")).toBeElementsArrayOfSize(1);
+    const clarificationPromptElements = await reviewCard.$$(".clarification-questions p");
+    const clarificationPrompts: string[] = [];
+    for (const prompt of clarificationPromptElements) clarificationPrompts.push(await prompt.getText());
+    expect(clarificationPrompts.some((prompt) => prompt.toLowerCase().includes("amount"))).toBe(false);
 
     await $("button[aria-label='To do']").click();
     await expect($("h1=To do")).toBeDisplayed();
@@ -71,6 +78,7 @@ describe("Luna Conversation desk", () => {
     );
     await review.$("button=Confirm Filing Decision").click();
     await expect($(".document-arrival > div > p")).toHaveText("Filed");
+    await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
     await $("button[aria-label='Cabinet']").click();
@@ -110,14 +118,17 @@ describe("Luna Conversation desk", () => {
       throw new Error(`The dropped document was rejected: ${await attachmentError.getText()}`);
     }
     await expect($$(".document-arrival")).toBeElementsArrayOfSize(2);
+    const arrivalHeadings = await $$(".document-arrival h2");
+    await expect(arrivalHeadings[0]).toHaveText(expect.stringContaining("luna-e2e-document"));
+    await expect(arrivalHeadings[1]).toHaveText(expect.stringContaining("luna-e2e-dropped"));
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $(".todo-list article").$("button=Dismiss").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
     await $("button[aria-label='Luna']").click();
     await expect($$(".document-arrival > div > p")).toBeElementsArrayOfSize(2);
-    await expect($$(".document-arrival > div > p")[0]).toHaveText("Dismissed");
-    await expect($$(".document-arrival > div > p")[1]).toHaveText("Filed");
+    await expect($$(".document-arrival > div > p")[0]).toHaveText("Filed");
+    await expect($$(".document-arrival > div > p")[1]).toHaveText("Dismissed");
 
     await openConversationActions();
     await $("button=Archive").click();
@@ -154,6 +165,46 @@ describe("Luna Conversation desk", () => {
     await expect($(".document-arrival[data-focused='true']")).toBeDisplayed();
     await $(".document-arrival[data-focused='true']").$("button=Dismiss").click();
     await $("button[aria-label='To do']").click();
+    await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
+
+    await $("button[aria-label='New conversation']").click();
+    await expect($("h1=New conversation")).toBeDisplayed();
+    const matchingDocument = await browser.tauri.execute(({ core }) => (
+      core.invoke("select_e2e_context_document_file", { kind: "matching" })
+    )) as string;
+    await browser.execute((documentPath) => (
+      window as unknown as {
+        __TAURI_INTERNALS__: {
+          invoke(command: string, args: object): Promise<void>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "tauri://drag-drop",
+      payload: { paths: [documentPath], position: { x: 40, y: 40 } },
+    }), matchingDocument);
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Filed");
+    await $("button[aria-label='History']").click();
+    await expect($(".history-event strong")).toHaveText("Automatically filed by learned rule");
+    await $("button[aria-label='Luna']").click();
+    await expect($(".document-arrival > div > p")).toHaveText("Filed");
+    await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
+    const changedDocument = await browser.tauri.execute(({ core }) => (
+      core.invoke("select_e2e_context_document_file", { kind: "changed-provider" })
+    )) as string;
+    await browser.execute((documentPath) => (
+      window as unknown as {
+        __TAURI_INTERNALS__: {
+          invoke(command: string, args: object): Promise<void>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "tauri://drag-drop",
+      payload: { paths: [documentPath], position: { x: 40, y: 40 } },
+    }), changedDocument);
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    await $("button[aria-label='To do']").click();
+    await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
+    await $(".todo-list article").$("button=Dismiss").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
   });
 });

@@ -48,11 +48,11 @@ impl CredentialVault for MemoryCredentialVault {
 
 type TestConversationStore = ConversationStore<MemoryCredentialVault>;
 
-struct FixedLocalOcr;
+struct FixedLocalOcr(&'static str);
 
 impl LocalOcr for FixedLocalOcr {
     fn extract_text(&self, _original: &Path, _media_type: &str) -> Option<String> {
-        Some("Council rates notice".to_owned())
+        Some(self.0.to_owned())
     }
 }
 
@@ -136,6 +136,7 @@ fn open_conversation_store(
 
 fn open_conversation_store_with_ocr(
     database: impl AsRef<Path>,
+    extracted_text: &'static str,
 ) -> (
     TestConversationStore,
     TrustedDeviceManager<MemoryCredentialVault>,
@@ -158,8 +159,12 @@ fn open_conversation_store_with_ocr(
     trusted_device
         .configure_device_pin(household_id, "246810")
         .expect("unlock test Trusted Device");
-    let store = ConversationStore::open_with_ocr(database, trusted_device.clone(), FixedLocalOcr)
-        .expect("open Conversation store");
+    let store = ConversationStore::open_with_ocr(
+        database,
+        trusted_device.clone(),
+        FixedLocalOcr(extracted_text),
+    )
+    .expect("open Conversation store");
     (store, trusted_device)
 }
 
@@ -1477,7 +1482,8 @@ fn a_document_arrival_uses_local_ocr_for_an_image() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("council-rates.png");
     fs::write(&document, image_fixture(image::ImageFormat::Png)).expect("write PNG");
-    let (store, _) = open_conversation_store_with_ocr(directory.path().join("luna.db"));
+    let (store, _) =
+        open_conversation_store_with_ocr(directory.path().join("luna.db"), "Council rates notice");
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
         .expect("create Conversation");
@@ -1502,7 +1508,8 @@ fn a_document_arrival_uses_local_ocr_for_an_image_only_pdf() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("council-rates-scan.pdf");
     fs::write(&document, digital_pdf_with_text("")).expect("write image-only PDF");
-    let (store, _) = open_conversation_store_with_ocr(directory.path().join("luna.db"));
+    let (store, _) =
+        open_conversation_store_with_ocr(directory.path().join("luna.db"), "Council rates notice");
     let conversation = store
         .create_conversation("rivera-household", "Council rates")
         .expect("create Conversation");
@@ -1571,4 +1578,238 @@ fn conversation_content_is_protected_and_requires_an_unlocked_trusted_device() {
         .list_conversations("rivera-household", None, false)
         .is_err());
     assert!(store.list_todo_items("rivera-household").is_err());
+}
+
+#[test]
+fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automatically() {
+    let directory = tempfile::tempdir().expect("temporary rule directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("agl-july.pdf");
+    fs::write(
+        &first_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write first bill");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bills")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first bill");
+    let direction = DocumentContextDirection {
+        document_type: Some("Electricity bill".to_owned()),
+        document_type_resolved: true,
+        service_provider: Some("AGL Energy".to_owned()),
+        service_provider_resolved: true,
+        addressee: Some("Sam Rivera".to_owned()),
+        addressee_resolved: true,
+        property: Some("12 Seabreeze Avenue".to_owned()),
+        property_resolved: true,
+        account: Some("12345678".to_owned()),
+        account_resolved: true,
+        amount: None,
+        amount_resolved: true,
+        relevant_dates: vec!["2026-07-15".to_owned()],
+        relevant_dates_resolved: true,
+        service_provider_relevance: Some(ContextRelevanceDirection {
+            subject: "AGL Energy".to_owned(),
+            explanation: "Supplies electricity to our home".to_owned(),
+        }),
+        property_relevance: Some(ContextRelevanceDirection {
+            subject: "12 Seabreeze Avenue".to_owned(),
+            explanation: "Our primary residence".to_owned(),
+        }),
+    };
+    store
+        .record_member_direction("rivera-household", first.id, direction, "Household records")
+        .expect("record first Member Direction");
+    store
+        .confirm_filing_decision(
+            "rivera-household",
+            first.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill July 2026.pdf".to_owned(),
+                cabinet_destination:
+                    "Household records/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf"
+                        .to_owned(),
+            },
+        )
+        .expect("confirm first Filing Decision");
+    let filed = store
+        .file_document("rivera-household", first.id, &cabinet)
+        .expect("file first bill");
+    assert!(filed.review_card.learned_rule.is_some());
+
+    let second_source = directory.path().join("agl-august.pdf");
+    fs::write(
+        &second_source,
+        digital_pdf_with_text("AGL Energy electricity bill for Sam Rivera at 12 Seabreeze Avenue, account 12345678, issued 2026-08-15"),
+    )
+    .expect("write second bill");
+    let automatically_filed = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach exact contextual match");
+    assert_eq!(
+        automatically_filed.processing_state,
+        DocumentProcessingState::Filed
+    );
+    assert!(automatically_filed.filed_original.is_some());
+    assert!(automatically_filed.review_card.learned_rule.is_some());
+    let history = store
+        .list_audit_events("rivera-household")
+        .expect("list filing history");
+    assert_eq!(
+        history[0].kind,
+        AuditEventKind::ExactMatchHandledAutomatically
+    );
+    assert_eq!(history[0].authority, AuditAuthority::FilingRule);
+
+    let unstructured_changed = directory.path().join("origin-unstructured.pdf");
+    fs::write(
+        &unstructured_changed,
+        digital_pdf_with_text(
+            "Origin Energy electricity bill for Sam Rivera at 12 Seabreeze Avenue, account 12345678, issued 2026-09-15; previously AGL Energy",
+        ),
+    )
+    .expect("write unstructured changed-provider bill");
+    let unstructured_changed_arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unstructured_changed,
+            &cabinet,
+        )
+        .expect("attach unstructured changed-provider bill");
+    assert_eq!(
+        unstructured_changed_arrival.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+
+    let unstructured_account_changed = directory.path().join("account-unstructured.pdf");
+    fs::write(
+        &unstructured_account_changed,
+        digital_pdf_with_text(
+            "AGL Energy electricity bill for Sam Rivera at 12 Seabreeze Avenue, account 98765432, issued 2026-09-15; previously account 12345678",
+        ),
+    )
+    .expect("write unstructured changed-account bill");
+    let unstructured_account_changed_arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unstructured_account_changed,
+            &cabinet,
+        )
+        .expect("attach unstructured changed-account bill");
+    assert_eq!(
+        unstructured_account_changed_arrival.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+
+    let changed_contexts = [
+        (
+            "provider",
+            "Electricity bill",
+            "Origin Energy",
+            "Sam Rivera",
+            "12 Seabreeze Avenue",
+            "12345678",
+        ),
+        (
+            "addressee",
+            "Electricity bill",
+            "AGL Energy",
+            "Jordan Rivera",
+            "12 Seabreeze Avenue",
+            "12345678",
+        ),
+        (
+            "property",
+            "Electricity bill",
+            "AGL Energy",
+            "Sam Rivera",
+            "14 Seabreeze Avenue",
+            "12345678",
+        ),
+        (
+            "account",
+            "Electricity bill",
+            "AGL Energy",
+            "Sam Rivera",
+            "12 Seabreeze Avenue",
+            "98765432",
+        ),
+        (
+            "document type",
+            "Gas bill",
+            "AGL Energy",
+            "Sam Rivera",
+            "12 Seabreeze Avenue",
+            "12345678",
+        ),
+    ];
+    for (index, (label, document_type, provider, addressee, property, account)) in
+        changed_contexts.into_iter().enumerate()
+    {
+        let source = directory.path().join(format!("changed-{index}.pdf"));
+        fs::write(
+            &source,
+            digital_pdf_with_text(&format!(
+                "Document Type: {document_type}; Service Provider: {provider}; Addressee: {addressee}; Property: {property}; Account: {account}; Relevant Date: 2026-09-{:02}",
+                index + 1,
+            )),
+        )
+        .expect("write changed-context bill");
+        let changed = store
+            .attach_document("rivera-household", conversation.id, &source, &cabinet)
+            .unwrap_or_else(|_| panic!("attach changed-{label} bill"));
+        assert_eq!(
+            changed.processing_state,
+            DocumentProcessingState::NeedsMemberDirection,
+            "changed {label} must not inherit the learned rule",
+        );
+        assert!(
+            changed.review_card.filing_decision.is_none(),
+            "changed {label} must not receive an automatic destination",
+        );
+    }
+}
+
+#[test]
+fn a_font_unsupported_pdf_still_provides_local_text_for_rule_matching() {
+    let directory = tempfile::tempdir().expect("temporary fallback directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(&cabinet).expect("create Cabinet");
+    let source = directory.path().join("utility bill.pdf");
+    fs::write(
+        &source,
+        pdf_with_text_and_font_resource("Account Number: 12345678", ""),
+    )
+    .expect("write utility bill fallback fixture");
+    let (store, _) = open_conversation_store_with_ocr(
+        directory.path().join("luna.db"),
+        "Account Number: 12345678",
+    );
+    let conversation = store
+        .create_conversation("rivera-household", "Fallback")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach utility bill");
+    let extracted = arrival.extracted_text.expect("fallback text");
+    let compact = extracted
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    assert!(compact.contains("accountnumber"));
 }
