@@ -282,6 +282,8 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='New conversation']").click();
 
     const attach = async (kind: string) => {
+      const arrivalSelector = ".messages > .document-arrival";
+      const initialArrivalCount = await $$(arrivalSelector).length;
       const documentPath = await browser.tauri.execute(({ core }, selectedKind) => (
         core.invoke("select_e2e_context_document_file", { kind: selectedKind })
       ), kind) as string;
@@ -295,7 +297,21 @@ describe("Luna Conversation desk", () => {
         event: "tauri://drag-drop",
         payload: { paths: [path], position: { x: 40, y: 40 } },
       }), documentPath);
-      const arrival = $(".messages > .document-arrival:last-child");
+      await browser.waitUntil(async () => {
+        const currentArrivalCount = await $$(arrivalSelector).length;
+        return currentArrivalCount > initialArrivalCount
+          || await $("[role='alert']").isExisting();
+      }, {
+        timeout: 60_000,
+        timeoutMsg: `The ${kind} test document was neither attached nor rejected.`,
+      });
+      const attachmentError = $("[role='alert']");
+      if (await attachmentError.isExisting()) {
+        throw new Error(`The ${kind} test document was rejected: ${await attachmentError.getText()}`);
+      }
+      const arrivals = await $$(arrivalSelector);
+      const arrivalCount = await arrivals.length;
+      const arrival = arrivals[arrivalCount - 1];
       await expect(arrival).toBeDisplayed();
       const keepBoth = arrival.$("button=Keep both");
       if (await keepBoth.isExisting()) {
