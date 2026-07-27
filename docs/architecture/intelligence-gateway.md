@@ -1,0 +1,58 @@
+# Intelligence Gateway architecture
+
+ADR 0015 implements ADR 0003's provider-neutral Cloud Assistance boundary.
+
+```mermaid
+flowchart TD
+    Handling["Document Handling"] --> Inspect["Local Inspection"]
+    Inspect --> Need["Local Evidence is insufficient"]
+    Need --> Capability["Luna selects Direction Interpretation"]
+    Capability --> Selection["Luna selects OpenAI + gpt-4.1-mini"]
+    Selection --> Consent["Validate or request provider/model-specific Consent Grant"]
+    Consent --> Request["Build bounded Intelligence Request"]
+    Request --> Gateway["Luna-owned Intelligence Gateway"]
+    Gateway --> Adapter["Private LiteLLM adapter"]
+    Adapter --> Remote["Luna-managed remote LiteLLM"]
+    Remote --> Provider["Exact OpenAI model"]
+    Provider --> Untrusted["Structured untrusted result"]
+    Untrusted --> Validation["Luna schema, identity and correlation validation"]
+    Validation --> Domain["Document Handling validation"]
+    Domain --> Evidence["Evidence or candidate Direction Interpretation"]
+```
+
+## Public boundary
+
+`IntelligenceGateway` receives a Luna-owned `IntelligenceRequest` and returns a Luna-owned `UntrustedIntelligenceResult` or `IntelligenceFailure`. The request carries a safe request identifier, Document Arrival correlation, capability, exact provider/model, selected Local Inspection Evidence, bounded content excerpts, expected response schema, Consent Grant reference and execution constraints.
+
+`DocumentIntelligenceService` is the application seam joining protected Document Handling state to that boundary. The frontend supplies only a Document Arrival identifier, exact selection, consent choice, granting Luna Account and optional existing Consent Grant. It cannot construct an arbitrary provider payload.
+
+The production catalogue contains one evaluated route:
+
+| Intelligence Provider | Model | Mode | Harness |
+| --- | --- | --- | --- |
+| OpenAI | `gpt-4.1-mini` | Luna-managed Intelligence | remote LiteLLM |
+
+`DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
+
+## Minimisation
+
+For Direction Interpretation, Luna may transmit:
+
+- media type;
+- local values for unresolved document fields;
+- the names of fields Luna asks the provider to interpret;
+- at most 4,000 characters of locally extracted text.
+
+Luna does not transmit the Household identifier, Cabinet or source paths, checksum, Filing Rules, duplicate state, History, credentials, the Original file, or complete Household state. Relevance to a Household, property or Service Provider remains Member Direction and is not requested from the provider.
+
+## Validation and authority
+
+The gateway result must echo the request, Document Arrival, provider and model identities. Luna rejects unknown fields, empty or oversized values, malformed structured results and mismatched correlation. Document Handling rejects candidate values that violate its constraints.
+
+The provider result cannot create Member Direction or mutate a Document Arrival. A validated candidate is held in the review interface until a Household Member accepts or corrects it through the existing Member Direction command. History records that disposition.
+
+## Failure and retry
+
+Luna maps infrastructure failures to its own categories. Only `ProviderUnavailable`, `GatewayUnavailable` and `TimedOut` receive one bounded retry, using the byte-equivalent Luna request and the same provider/model. LiteLLM receives `num_retries: 0` and an empty fallback list.
+
+Exhausted, invalid, rejected, authentication or rate-limit failures leave Document Handling in `WaitingForCloudAssistance`. Keep local returns it to `NeedsMemberDirection` without a gateway call. Existing Filing Rules and duplicate/version handling never call this gateway and remain offline-capable.

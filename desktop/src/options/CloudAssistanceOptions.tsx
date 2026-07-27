@@ -5,23 +5,10 @@ import type {
   IntelligenceProviderStatus,
 } from "../conversation/conversationService";
 
-const evaluationFields = [
-  "documentName",
-  "mediaType",
-  "extractedText",
-  "documentType",
-  "serviceProvider",
-  "addressee",
-  "property",
-  "account",
-  "amount",
-  "relevantDates",
-];
-
 export function CloudAssistanceOptions({ conversationService, householdId }: { conversationService: ConversationService; householdId: string }) {
   const [providers, setProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [scopes, setScopes] = useState<CloudConsentScope[]>([]);
-  const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
+  const [gatewayCredential, setGatewayCredential] = useState("");
   const [error, setError] = useState("");
 
   const refresh = async () => {
@@ -40,30 +27,21 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
 
   useEffect(() => { void refresh(); }, [conversationService, householdId]);
 
-  const saveCredential = async (providerId: string) => {
-    const credential = credentialDrafts[providerId]?.trim();
+  const saveGatewayCredential = async () => {
+    const credential = gatewayCredential.trim();
     if (!credential) return;
     try {
-      await conversationService.setCloudProviderCredential(householdId, providerId, credential);
-      setCredentialDrafts((current) => ({ ...current, [providerId]: "" }));
+      await conversationService.setLunaGatewayCredential(householdId, credential);
+      setGatewayCredential("");
       await refresh();
     } catch (reason) {
       setError(String(reason));
     }
   };
 
-  const clearCredential = async (providerId: string) => {
+  const clearGatewayCredential = async () => {
     try {
-      await conversationService.clearCloudProviderCredential(householdId, providerId);
-      await refresh();
-    } catch (reason) {
-      setError(String(reason));
-    }
-  };
-
-  const grant = async (providerId: string) => {
-    try {
-      await conversationService.grantCloudConsentScope(householdId, providerId, "document-evaluation", evaluationFields);
+      await conversationService.clearLunaGatewayCredential(householdId);
       await refresh();
     } catch (reason) {
       setError(String(reason));
@@ -79,30 +57,37 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
     }
   };
 
+  const gatewayConfigured = providers.some(({ configured }) => configured);
+
   return <section className="cloud-assistance-options" aria-label="Cloud assistance">
     <h2>Cloud assistance</h2>
-    <p className="muted">Luna stays local by default. Bring your own provider key; it is kept in this device&apos;s credential vault and never written to Household history.</p>
+    <p className="muted">Luna stays local by default. Luna selects an exact Intelligence Provider and model before requesting a provider-specific Consent Grant. Upstream provider credentials remain on Luna&apos;s managed gateway and never reach this desktop.</p>
+    <div className="cloud-credential-entry">
+      <label>Luna gateway access credential<input type="password" value={gatewayCredential} onChange={(event) => setGatewayCredential(event.target.value)} autoComplete="off" /></label>
+      <button type="button" disabled={!gatewayCredential.trim()} onClick={() => void saveGatewayCredential()}>Save in operating-system vault</button>
+      {gatewayConfigured && <button type="button" onClick={() => void clearGatewayCredential()}>Remove gateway access</button>}
+    </div>
+    <p className="muted">This narrow, revocable credential authenticates the Trusted Device to Luna&apos;s gateway. It is not an OpenAI API key and never enters ordinary configuration or History.</p>
     <div className="cloud-provider-list">
       {providers.map(({ descriptor, configured }) => <article className="cloud-provider-card" key={descriptor.id}>
         <div className="cloud-provider-heading">
           <div><strong>{descriptor.name}</strong><span>{descriptor.description}</span></div>
-          <small>{configured ? "Connected" : "Not connected"}</small>
+          <small>{configured ? "Gateway ready" : "Gateway access unavailable"}</small>
         </div>
-        {descriptor.authUrl && <a href={descriptor.authUrl} target="_blank" rel="noreferrer">Open {descriptor.name} API keys</a>}
-        {descriptor.authUrl && !configured && <div className="cloud-credential-entry">
-          <label>API key<input type="password" value={credentialDrafts[descriptor.id] ?? ""} onChange={(event) => setCredentialDrafts((current) => ({ ...current, [descriptor.id]: event.target.value }))} autoComplete="off" /></label>
-          <button type="button" disabled={!credentialDrafts[descriptor.id]?.trim()} onClick={() => void saveCredential(descriptor.id)}>Save in vault</button>
-        </div>}
-        {descriptor.authUrl && configured && <button type="button" onClick={() => void clearCredential(descriptor.id)}>Disconnect and remove key</button>}
-        <button type="button" onClick={() => void grant(descriptor.id)}>Allow future document evaluations</button>
+        <p>Approved models: {descriptor.models.map(({ name }) => name).join(", ")}</p>
       </article>)}
     </div>
-    <h3>Consent scopes</h3>
+    <h3>Consent Grants</h3>
     {scopes.length === 0
-      ? <p className="muted">No future cloud consent is active.</p>
+      ? <p className="muted">No Consent Grant has been recorded.</p>
       : <ul className="consent-scope-list">{scopes.map((scope) => <li key={scope.id} className={scope.revoked ? "revoked" : undefined}>
-        <div><strong>{scope.providerId}</strong><span>{scope.purpose} · {scope.fields.join(", ")}</span><small>{scope.revoked ? "Revoked" : "Active"} · {scope.createdAt}</small></div>
-        {!scope.revoked && <button type="button" onClick={() => void revoke(scope.id)}>Revoke</button>}
+        <div>
+          <strong>{scope.providerId} · {scope.modelId}</strong>
+          <span>{scope.purpose} · {scope.kind === "oneTime" ? `Document ${scope.documentArrivalId ?? ""}` : scope.futureScope}</span>
+          <span>Disclosed fields: {scope.fields.join(", ")}</span>
+          <small>{scope.revoked ? "Revoked" : scope.consumedAt ? "Used" : "Active"} · granted by {scope.grantedBy} · {scope.createdAt}</small>
+        </div>
+        {!scope.revoked && scope.kind === "reusable" && <button type="button" onClick={() => void revoke(scope.id)}>Revoke</button>}
       </li>)}</ul>}
     {error && <p role="alert" className="error">{error}</p>}
   </section>;

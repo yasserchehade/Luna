@@ -72,7 +72,7 @@ A Filing Rule is independently visible, editable and revocable. It records the c
 
 ### Consent Grant
 
-A Consent Grant is independently visible and revocable. It names the Intelligence Provider, permitted content and scope; it never implies permission to use another provider.
+A Consent Grant is independently visible and revocable. It names the Intelligence Provider, approved model, capability, permitted content, granting member, creation time and document or future scope. A one-time grant is consumed by its first transmission attempt; a reusable grant remains restricted to its declared scope. It never implies permission to use another provider or model.
 
 ### Conversation
 
@@ -123,7 +123,10 @@ stateDiagram-v2
     NeedsCloudConsent --> NeedsMemberDirection: kept local
     InspectingWithAssistance --> NeedsMemberDirection
     InspectingWithAssistance --> ReadyToFile
+    InspectingWithAssistance --> WaitingForCloudAssistance: provider, gateway or result failure
     WaitingForConnectivity --> InspectingWithAssistance: connectivity restored
+    WaitingForCloudAssistance --> InspectingWithAssistance: same provider and model retried
+    WaitingForCloudAssistance --> NeedsMemberDirection: kept local
 
     PossibleDuplicate --> NeedsMemberDirection
     NeedsMemberDirection --> ReadyToFile: filing decision confirmed

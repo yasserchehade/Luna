@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cabinet::ensure_incoming_folder;
+use crate::intelligence::CandidateDirectionInterpretation;
 use crate::trusted_device::{
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -32,6 +33,9 @@ pub struct Conversation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DocumentProcessingState {
+    NeedsCloudConsent,
+    InspectingWithAssistance,
+    WaitingForCloudAssistance,
     NeedsMemberDirection,
     PossibleDuplicate,
     ReadyToFile,
@@ -589,6 +593,8 @@ pub enum ConversationError {
     DuplicateDecisionUnavailable,
     #[error("Household Context must be resolved before confirming a Filing Decision.")]
     UnresolvedContext,
+    #[error("The candidate Direction Interpretation violates Document Handling constraints.")]
+    InvalidDirectionInterpretation,
     #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
     InvalidCabinetDestination,
     #[error("The selected document is unavailable.")]
@@ -863,6 +869,14 @@ impl<V: CredentialVault> ConversationStore<V> {
             &*self.local_ocr,
         );
         let context_direction = local_context_direction(extracted_text.as_deref());
+        let processing_state = if local_evidence_needs_direction_interpretation(
+            extracted_text.as_deref(),
+            &context_direction,
+        ) {
+            DocumentProcessingState::NeedsCloudConsent
+        } else {
+            DocumentProcessingState::NeedsMemberDirection
+        };
         let mut payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
             original_path,
@@ -870,7 +884,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             checksum,
             media_type: media_type.to_owned(),
             extracted_text,
-            processing_state: DocumentProcessingState::NeedsMemberDirection,
+            processing_state,
             context_direction,
             filing_decision: None,
             learned_rule: None,
@@ -1023,6 +1037,94 @@ impl<V: CredentialVault> ConversationStore<V> {
             .collect()
     }
 
+    pub fn begin_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[
+                DocumentProcessingState::NeedsCloudConsent,
+                DocumentProcessingState::WaitingForCloudAssistance,
+                DocumentProcessingState::NeedsMemberDirection,
+            ],
+            DocumentProcessingState::InspectingWithAssistance,
+        )
+    }
+
+    pub fn keep_document_local(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[
+                DocumentProcessingState::NeedsCloudConsent,
+                DocumentProcessingState::WaitingForCloudAssistance,
+                DocumentProcessingState::InspectingWithAssistance,
+            ],
+            DocumentProcessingState::NeedsMemberDirection,
+        )
+    }
+
+    pub fn complete_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[DocumentProcessingState::InspectingWithAssistance],
+            DocumentProcessingState::NeedsMemberDirection,
+        )
+    }
+
+    pub fn wait_for_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[DocumentProcessingState::InspectingWithAssistance],
+            DocumentProcessingState::WaitingForCloudAssistance,
+        )
+    }
+
+    pub fn validate_candidate_direction(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        candidate: CandidateDirectionInterpretation,
+    ) -> Result<CandidateDirectionInterpretation, ConversationError> {
+        let (_, payload) = self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::InspectingWithAssistance {
+            return Err(ConversationError::InvalidDirectionInterpretation);
+        }
+        Ok(CandidateDirectionInterpretation {
+            document_type: valid_candidate_value(candidate.document_type)?,
+            service_provider: valid_candidate_value(candidate.service_provider)?,
+            addressee: valid_candidate_value(candidate.addressee)?,
+            property: valid_candidate_value(candidate.property)?,
+            account: valid_candidate_value(candidate.account)?,
+            amount: valid_candidate_value(candidate.amount)?,
+            relevant_dates: candidate
+                .relevant_dates
+                .into_iter()
+                .map(|date| valid_candidate_value(Some(date)))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
+        })
+    }
+
     pub fn list_todo_items(&self, household_id: &str) -> Result<Vec<TodoItem>, ConversationError> {
         let arrivals = self.list_document_arrivals(household_id)?;
         arrivals
@@ -1030,7 +1132,10 @@ impl<V: CredentialVault> ConversationStore<V> {
             .filter(|arrival| {
                 matches!(
                     arrival.processing_state,
-                    DocumentProcessingState::NeedsMemberDirection
+                    DocumentProcessingState::NeedsCloudConsent
+                        | DocumentProcessingState::InspectingWithAssistance
+                        | DocumentProcessingState::WaitingForCloudAssistance
+                        | DocumentProcessingState::NeedsMemberDirection
                         | DocumentProcessingState::PossibleDuplicate
                 )
             })
@@ -1424,7 +1529,12 @@ impl<V: CredentialVault> ConversationStore<V> {
         let mut payload: DocumentArrivalPayload =
             self.open_protected(household_id, &protected.ok_or(ConversationError::NotFound)?)?;
         payload.restore_legacy_original_path();
-        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+        if !matches!(
+            payload.processing_state,
+            DocumentProcessingState::NeedsCloudConsent
+                | DocumentProcessingState::WaitingForCloudAssistance
+                | DocumentProcessingState::NeedsMemberDirection
+        ) {
             return Err(ConversationError::NotFound);
         }
         payload.processing_state = DocumentProcessingState::Dismissed;
@@ -1445,9 +1555,15 @@ impl<V: CredentialVault> ConversationStore<V> {
     ) -> Result<DocumentArrival, ConversationError> {
         let (conversation_id, mut payload) =
             self.load_document_arrival_payload(household_id, arrival_id)?;
-        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+        if !matches!(
+            payload.processing_state,
+            DocumentProcessingState::NeedsCloudConsent
+                | DocumentProcessingState::WaitingForCloudAssistance
+                | DocumentProcessingState::NeedsMemberDirection
+        ) {
             return Err(ConversationError::NotFound);
         }
+        payload.processing_state = DocumentProcessingState::NeedsMemberDirection;
         payload.context_direction = direction.normalized();
         payload.filing_decision = clarification_questions(&payload.context_direction)
             .is_empty()
@@ -2198,6 +2314,22 @@ impl<V: CredentialVault> ConversationStore<V> {
         Ok(())
     }
 
+    fn transition_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        allowed_from: &[DocumentProcessingState],
+        next: DocumentProcessingState,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if !allowed_from.contains(&payload.processing_state) {
+            return Err(ConversationError::NotFound);
+        }
+        payload.processing_state = next;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
+    }
+
     fn connect(&self) -> rusqlite::Result<Connection> {
         Connection::open(&self.database)
     }
@@ -2760,6 +2892,42 @@ fn clarification_questions(context: &DocumentContextDirection) -> Vec<Clarificat
         });
     }
     questions
+}
+
+fn local_evidence_needs_direction_interpretation(
+    extracted_text: Option<&str>,
+    context: &DocumentContextDirection,
+) -> bool {
+    let has_content_to_minimise = extracted_text.is_some_and(|text| !text.trim().is_empty());
+    has_content_to_minimise
+        && clarification_questions(context).iter().any(|question| {
+            matches!(
+                question.field,
+                ContextField::DocumentType
+                    | ContextField::ServiceProvider
+                    | ContextField::Addressee
+                    | ContextField::Property
+                    | ContextField::Account
+            )
+        })
+}
+
+fn valid_candidate_value(value: Option<String>) -> Result<Option<String>, ConversationError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 512
+        || value
+            .chars()
+            .any(|character| character.is_control() && !character.is_whitespace())
+    {
+        return Err(ConversationError::InvalidDirectionInterpretation);
+    }
+    Ok(Some(value))
 }
 
 fn propose_filing_decision(

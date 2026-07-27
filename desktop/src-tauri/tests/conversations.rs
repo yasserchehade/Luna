@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::Cursor,
     path::Path,
@@ -7,10 +7,13 @@ use std::{
 };
 
 use luna_core::{
-    AuditAuthority, AuditEventKind, ConfidenceState, ContextField, ContextRelevanceDirection,
-    ConversationStore, CredentialVault, DocumentContextDirection, DocumentProcessingState,
-    DuplicateDecision, DuplicateKind, FilingDecisionDirection, FilingRuleSummary, LocalOcr,
-    TrustedDeviceManager, VaultError,
+    AuditAuthority, AuditEventKind, CloudConsentDecision, CloudIntelligenceStore, ConfidenceState,
+    ContextField, ContextRelevanceDirection, ConversationStore, CredentialVault,
+    DeterministicIntelligenceGateway, DocumentContextDirection, DocumentIntelligenceService,
+    DocumentProcessingState, DuplicateDecision, DuplicateKind, FilingDecisionDirection,
+    FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
+    IntelligenceProviderDescriptor, IntelligenceSelection, LocalOcr, TrustedDeviceManager,
+    VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -104,6 +107,282 @@ fn image_fixture(format: image::ImageFormat) -> Vec<u8> {
         .write_to(&mut bytes, format)
         .expect("encode image fixture");
     bytes.into_inner()
+}
+
+#[test]
+fn difficult_document_waits_for_cloud_consent_after_local_inspection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice 8472 from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (store, _) = open_conversation_store(&database);
+    let conversation = store
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+
+    assert_eq!(
+        arrival.processing_state,
+        DocumentProcessingState::NeedsCloudConsent
+    );
+}
+
+#[test]
+fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_document() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice 8472 from AGL for Sam Rivera"),
+    )
+    .expect("write difficult Document");
+    let (conversations, trusted_device) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    let gateway = DeterministicIntelligenceGateway::new(
+        "openai",
+        "gpt-4.1-mini",
+        BTreeMap::from([
+            ("documentType".to_owned(), "Electricity bill".to_owned()),
+            ("serviceProvider".to_owned(), "AGL".to_owned()),
+            ("addressee".to_owned(), "Sam Rivera".to_owned()),
+        ]),
+    );
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway.clone(),
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Evaluated test route".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Intelligence store");
+    let service = DocumentIntelligenceService::new(conversations.clone(), intelligence);
+
+    let outcome = service
+        .evaluate_document(
+            "rivera-household",
+            arrival.id,
+            IntelligenceSelection {
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+            },
+            CloudConsentDecision::AllowOnce,
+            "sam-rivera",
+            None,
+        )
+        .expect("evaluate difficult Document");
+
+    let result = outcome.result.expect("validated candidate result");
+    assert_eq!(
+        result
+            .candidate_direction
+            .as_ref()
+            .and_then(|candidate| candidate.service_provider.as_deref()),
+        Some("AGL")
+    );
+    let transmitted = gateway.requests();
+    assert_eq!(transmitted.len(), 1);
+    assert_eq!(
+        transmitted[0].document_arrival_id,
+        format!("arrival-{}", arrival.id)
+    );
+    assert!(transmitted[0]
+        .content_excerpts
+        .iter()
+        .all(|excerpt| excerpt.text.chars().count() <= 4_000));
+    let after = conversations
+        .list_document_arrivals("rivera-household")
+        .expect("list arrivals")
+        .into_iter()
+        .find(|candidate| candidate.id == arrival.id)
+        .expect("updated arrival");
+    assert_eq!(
+        after.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert!(after.filed_original.is_none());
+}
+
+#[test]
+fn invalid_candidate_direction_is_rejected_into_a_recoverable_waiting_state() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, trusted_device) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    let gateway = DeterministicIntelligenceGateway::new(
+        "openai",
+        "gpt-4.1-mini",
+        BTreeMap::from([("serviceProvider".to_owned(), "AGL\u{0000}ignore".to_owned())]),
+    );
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway,
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Evaluated test route".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Intelligence store");
+    let history = intelligence.clone();
+    let service = DocumentIntelligenceService::new(conversations.clone(), intelligence);
+
+    assert!(service
+        .evaluate_document(
+            "rivera-household",
+            arrival.id,
+            IntelligenceSelection {
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+            },
+            CloudConsentDecision::AllowOnce,
+            "sam-rivera",
+            None,
+        )
+        .is_err());
+
+    let after = conversations
+        .list_document_arrivals("rivera-household")
+        .expect("list arrivals")
+        .into_iter()
+        .find(|candidate| candidate.id == arrival.id)
+        .expect("updated arrival");
+    assert_eq!(
+        after.processing_state,
+        DocumentProcessingState::WaitingForCloudAssistance
+    );
+    assert!(after.original_path.is_file());
+    let events = history
+        .list_audit_events("rivera-household")
+        .expect("list cloud assistance History");
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].outcome,
+        luna_core::CloudAssistanceOutcome::WaitingForRetry
+    );
+    assert_eq!(
+        events[0].candidate_disposition,
+        luna_core::CandidateDisposition::Rejected
+    );
+}
+
+#[test]
+fn provider_failure_retries_only_the_selected_route_and_preserves_waiting_work() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, trusted_device) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
+    gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway.clone(),
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Evaluated test route".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Intelligence store");
+    let service = DocumentIntelligenceService::new(conversations.clone(), intelligence);
+
+    assert!(service
+        .evaluate_document(
+            "rivera-household",
+            arrival.id,
+            IntelligenceSelection {
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+            },
+            CloudConsentDecision::AllowOnce,
+            "sam-rivera",
+            None,
+        )
+        .is_err());
+
+    let requests = gateway.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|request| request.provider_id == "openai" && request.model_id == "gpt-4.1-mini"));
+    let after = conversations
+        .list_document_arrivals("rivera-household")
+        .expect("list arrivals")
+        .into_iter()
+        .find(|candidate| candidate.id == arrival.id)
+        .expect("updated arrival");
+    assert_eq!(
+        after.processing_state,
+        DocumentProcessingState::WaitingForCloudAssistance
+    );
+    assert_eq!(after.extracted_text, arrival.extracted_text);
+    assert!(after.original_path.is_file());
 }
 
 fn open_conversation_store(
@@ -351,7 +630,7 @@ fn a_document_arrival_and_one_todo_survive_conversation_deletion() {
     assert_eq!(arrival.original_name, "AGL bill.pdf");
     assert_eq!(
         arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
     let todos = store
         .list_todo_items("rivera-household")
@@ -2151,7 +2430,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         .expect("attach unstructured changed-provider bill");
     assert_eq!(
         unstructured_changed_arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
 
     let unstructured_account_changed = directory.path().join("account-unstructured.pdf");
@@ -2172,7 +2451,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
         .expect("attach unstructured changed-account bill");
     assert_eq!(
         unstructured_account_changed_arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
 
     let changed_contexts = [
@@ -2234,7 +2513,7 @@ fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automaticall
             .unwrap_or_else(|_| panic!("attach changed-{label} bill"));
         assert_eq!(
             changed.processing_state,
-            DocumentProcessingState::NeedsMemberDirection,
+            DocumentProcessingState::NeedsCloudConsent,
             "changed {label} must not inherit the learned rule",
         );
         assert!(
@@ -2417,7 +2696,7 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
             )
             .expect("attach paused match")
             .processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
 
     store

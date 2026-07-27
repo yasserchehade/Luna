@@ -14,7 +14,16 @@ export type ConversationMessage = {
   body: string;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "possibleDuplicate" | "readyToFile" | "filing" | "filed" | "dismissed";
+export type DocumentProcessingState =
+  | "needsCloudConsent"
+  | "inspectingWithAssistance"
+  | "waitingForCloudAssistance"
+  | "needsMemberDirection"
+  | "possibleDuplicate"
+  | "readyToFile"
+  | "filing"
+  | "filed"
+  | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -137,6 +146,8 @@ export type IntelligenceProviderDescriptor = {
   id: string;
   name: string;
   description: string;
+  models: Array<{ id: string; name: string }>;
+  managedByLuna: boolean;
   authUrl: string | null;
 };
 
@@ -145,18 +156,34 @@ export type IntelligenceProviderStatus = {
   configured: boolean;
 };
 
-export type IntelligenceRequest = {
-  purpose: string;
-  documentName: string;
-  mediaType: string;
-  evidence: Array<{ field: string; value: string }>;
-  unresolvedFields: string[];
+export type IntelligenceSelection = {
+  providerId: string;
+  modelId: string;
 };
 
 export type IntelligenceResult = {
+  requestId: string;
+  documentArrivalId: string;
   providerId: string;
+  modelId: string;
+  consentGrantId: number;
   fields: Record<string, string>;
-  evidence: Array<{ field: string; value: string }>;
+  evidence: Array<{ field: string; value: string; sourceReference: string | null }>;
+  sourceReferences: string[];
+  candidateDirection: {
+    documentType: string | null;
+    serviceProvider: string | null;
+    addressee: string | null;
+    property: string | null;
+    account: string | null;
+    amount: string | null;
+    relevantDates: string[];
+  } | null;
+  usage: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+    estimatedCostUsd: number | null;
+  };
 };
 
 export type CloudConsentDecision = "allowOnce" | "allowForScope" | "keepLocal" | "useExistingScope";
@@ -165,20 +192,41 @@ export type CloudConsentScope = {
   id: number;
   householdId: string;
   providerId: string;
+  modelId: string;
+  capability: "directionInterpretation";
   purpose: string;
+  documentArrivalId: string | null;
+  futureScope: string | null;
   fields: string[];
+  kind: "oneTime" | "reusable";
+  grantedBy: string;
   createdAt: string;
+  consumedAt: string | null;
+  revokedAt: string | null;
   revoked: boolean;
 };
 
 export type CloudAssistanceAuditEvent = {
   id: number;
   householdId: string;
+  requestId: string;
+  documentArrivalId: string;
   providerId: string;
+  modelId: string;
+  capability: "directionInterpretation";
   purpose: string;
   consent: CloudConsentDecision;
-  outcome: "completed" | "denied" | "waitingForConnectivity";
+  consentGrantId: number | null;
+  grantedBy: string;
+  outcome: "completed" | "denied" | "waitingForRetry" | "cancelled";
+  candidateDisposition: "pending" | "accepted" | "corrected" | "rejected";
   reason: string;
+  usage: IntelligenceResult["usage"];
+};
+
+export type CloudAssistanceResolution = {
+  result: IntelligenceResult | null;
+  processingState: DocumentProcessingState;
 };
 
 export type ManualMoveCandidate = {
@@ -320,11 +368,22 @@ export interface ConversationService {
   listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
   listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
-  grantCloudConsentScope(householdId: string, providerId: string, purpose: string, fields: string[]): Promise<CloudConsentScope>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
-  setCloudProviderCredential(householdId: string, providerId: string, credential: string): Promise<void>;
-  clearCloudProviderCredential(householdId: string, providerId: string): Promise<void>;
-  evaluateCloudRequest(householdId: string, request: IntelligenceRequest, providerId: string, consent: CloudConsentDecision): Promise<IntelligenceResult>;
+  setLunaGatewayCredential(householdId: string, credential: string): Promise<void>;
+  clearLunaGatewayCredential(householdId: string): Promise<void>;
+  evaluateDocumentWithCloudAssistance(
+    householdId: string,
+    arrivalId: number,
+    selection: IntelligenceSelection,
+    consent: CloudConsentDecision,
+    grantedBy: string,
+    existingConsentGrantId: number | null,
+  ): Promise<CloudAssistanceResolution>;
+  recordCloudCandidateDisposition(
+    householdId: string,
+    requestId: string,
+    disposition: "accepted" | "corrected" | "rejected",
+  ): Promise<void>;
 }
 
 export const tauriConversationService: ConversationService = {
@@ -447,24 +506,28 @@ export const tauriConversationService: ConversationService = {
   listCloudConsentScopes(householdId) {
     return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
   },
-  grantCloudConsentScope(householdId, providerId, purpose, fields) {
-    return invoke<CloudConsentScope>("grant_cloud_consent_scope", {
-      householdId,
-      providerId,
-      purpose,
-      fields,
-    });
-  },
   revokeCloudConsentScope(householdId, scopeId) {
     return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
   },
-  setCloudProviderCredential(householdId, providerId, credential) {
-    return invoke("set_cloud_provider_credential", { householdId, providerId, credential });
+  setLunaGatewayCredential(householdId, credential) {
+    return invoke("set_luna_gateway_credential", { householdId, credential });
   },
-  clearCloudProviderCredential(householdId, providerId) {
-    return invoke("clear_cloud_provider_credential", { householdId, providerId });
+  clearLunaGatewayCredential(householdId) {
+    return invoke("clear_luna_gateway_credential", { householdId });
   },
-  evaluateCloudRequest(householdId, request, providerId, consent) {
-    return invoke<IntelligenceResult>("evaluate_cloud_request", { householdId, request, providerId, consent });
+  evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, grantedBy, existingConsentGrantId) {
+    return invoke<CloudAssistanceResolution>("evaluate_document_with_cloud_assistance", {
+      input: {
+        householdId,
+        arrivalId,
+        selection,
+        consent,
+        grantedBy,
+        existingConsentGrantId,
+      },
+    });
+  },
+  recordCloudCandidateDisposition(householdId, requestId, disposition) {
+    return invoke("record_cloud_candidate_disposition", { householdId, requestId, disposition });
   },
 };

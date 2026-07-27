@@ -1,7 +1,9 @@
 mod account_session;
 mod cabinet;
 mod conversation;
+mod document_intelligence;
 mod intelligence;
+mod litellm;
 mod settings;
 mod trusted_device;
 
@@ -21,11 +23,19 @@ pub use conversation::{
     FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
     TesseractOcr, TodoItem,
 };
+pub use document_intelligence::{
+    CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
+};
 pub use intelligence::{
+    AdditionalIntelligenceEvidence, CandidateDirectionInterpretation, CandidateDisposition,
     CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
-    CloudIntelligenceStore, IntelligenceEvidence, IntelligenceProviderDescriptor,
-    IntelligenceProviderStatus, IntelligenceRequest, IntelligenceResult, LunaManagedProvider,
-    ProviderError,
+    CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
+    DocumentContentExcerpt, IntelligenceCapability, IntelligenceEvidence,
+    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceGateway,
+    IntelligenceModelDescriptor, IntelligenceProviderDescriptor, IntelligenceProviderStatus,
+    IntelligenceRequest, IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection,
+    IntelligenceUsage, UntrustedIntelligenceResult, MANAGED_INTELLIGENCE_MODEL_ID,
+    MANAGED_INTELLIGENCE_PROVIDER_ID,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -420,16 +430,32 @@ fn list_intelligence_provider_statuses(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn evaluate_cloud_request(
-    store: State<'_, IntelligenceState>,
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudAssistanceCommand {
     household_id: String,
-    request: IntelligenceRequest,
-    provider_id: String,
+    arrival_id: i64,
+    selection: IntelligenceSelection,
     consent: CloudConsentDecision,
-) -> Result<IntelligenceResult, String> {
-    store
-        .evaluate(&household_id, &request, &provider_id, consent)
+    granted_by: String,
+    existing_consent_grant_id: Option<i64>,
+}
+
+#[tauri::command]
+fn evaluate_document_with_cloud_assistance(
+    conversations: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    input: CloudAssistanceCommand,
+) -> Result<CloudAssistanceResolution, String> {
+    DocumentIntelligenceService::new(conversations.inner().clone(), intelligence.inner().clone())
+        .evaluate_document(
+            &input.household_id,
+            input.arrival_id,
+            input.selection,
+            input.consent,
+            &input.granted_by,
+            input.existing_consent_grant_id,
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -440,19 +466,6 @@ fn list_cloud_consent_scopes(
 ) -> Result<Vec<CloudConsentScope>, String> {
     store
         .list_consent_scopes(&household_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn grant_cloud_consent_scope(
-    store: State<'_, IntelligenceState>,
-    household_id: String,
-    provider_id: String,
-    purpose: String,
-    fields: Vec<String>,
-) -> Result<CloudConsentScope, String> {
-    store
-        .grant_scope(&household_id, &provider_id, &purpose, fields)
         .map_err(|error| error.to_string())
 }
 
@@ -468,39 +481,41 @@ fn revoke_cloud_consent_scope(
 }
 
 #[tauri::command]
-fn set_cloud_provider_credential(
+fn set_luna_gateway_credential(
     store: State<'_, IntelligenceState>,
     device: State<'_, DeviceManager>,
     household_id: String,
-    provider_id: String,
     credential: String,
 ) -> Result<(), String> {
     if !device
         .is_current_device_unlocked(&household_id)
         .map_err(|error| error.to_string())?
     {
-        return Err("Unlock this Trusted Device before changing provider credentials.".to_owned());
+        return Err(
+            "Unlock this Trusted Device before changing the Luna gateway credential.".to_owned(),
+        );
     }
     store
-        .set_provider_credential(&household_id, &provider_id, credential.as_bytes())
+        .set_gateway_access_credential(&household_id, credential.as_bytes())
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn clear_cloud_provider_credential(
+fn clear_luna_gateway_credential(
     store: State<'_, IntelligenceState>,
     device: State<'_, DeviceManager>,
     household_id: String,
-    provider_id: String,
 ) -> Result<(), String> {
     if !device
         .is_current_device_unlocked(&household_id)
         .map_err(|error| error.to_string())?
     {
-        return Err("Unlock this Trusted Device before changing provider credentials.".to_owned());
+        return Err(
+            "Unlock this Trusted Device before changing the Luna gateway credential.".to_owned(),
+        );
     }
     store
-        .clear_provider_credential(&household_id, &provider_id)
+        .clear_gateway_access_credential(&household_id)
         .map_err(|error| error.to_string())
 }
 
@@ -511,6 +526,18 @@ fn list_cloud_assistance_audit_events(
 ) -> Result<Vec<CloudAssistanceAuditEvent>, String> {
     store
         .list_audit_events(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_cloud_candidate_disposition(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+    request_id: String,
+    disposition: CandidateDisposition,
+) -> Result<(), String> {
+    store
+        .record_candidate_disposition(&household_id, &request_id, disposition)
         .map_err(|error| error.to_string())
 }
 
@@ -1135,13 +1162,13 @@ pub fn run() {
         list_duplicate_audit_events,
         list_intelligence_providers,
         list_intelligence_provider_statuses,
-        evaluate_cloud_request,
+        evaluate_document_with_cloud_assistance,
         list_cloud_consent_scopes,
-        grant_cloud_consent_scope,
         revoke_cloud_consent_scope,
-        set_cloud_provider_credential,
-        clear_cloud_provider_credential,
+        set_luna_gateway_credential,
+        clear_luna_gateway_credential,
         list_cloud_assistance_audit_events,
+        record_cloud_candidate_disposition,
         resolve_duplicate,
         list_filing_rules,
         update_filing_rule,
