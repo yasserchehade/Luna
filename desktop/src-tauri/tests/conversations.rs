@@ -2282,7 +2282,6 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
                     subject: "12 Seabreeze Avenue".to_owned(),
                     explanation: "Our primary residence".to_owned(),
                 }),
-                ..Default::default()
             },
             "Household records",
         )
@@ -2386,6 +2385,8 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
         .pause_filing_rule("rivera-household", rules[0].id, false)
         .expect("resume Filing Rule");
     let resumed_source = directory.path().join("agl-august-resumed.pdf");
+    // Keep this Original distinct from the paused fixture so checksum-based
+    // manual-move discovery cannot select the still-staged paused copy.
     fs::write(
         &resumed_source,
         digital_pdf_with_text(
