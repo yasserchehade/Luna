@@ -1336,7 +1336,12 @@ fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_
     let second_source = directory.path().join("second").join("statement.pdf");
     let third_source = directory.path().join("third").join("statement.pdf");
     let changed_source = directory.path().join("changed").join("statement.pdf");
-    for source in [&first_source, &second_source, &third_source, &changed_source] {
+    for source in [
+        &first_source,
+        &second_source,
+        &third_source,
+        &changed_source,
+    ] {
         fs::create_dir_all(source.parent().expect("source directory"))
             .expect("create source directory");
     }
@@ -1359,10 +1364,18 @@ fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_
         .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
         .expect("attach first Original");
     let second = store
-        .attach_document("rivera-household", conversation.id, &second_source, &cabinet)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
         .expect("attach exact duplicate");
 
-    assert_eq!(second.processing_state, DocumentProcessingState::PossibleDuplicate);
+    assert_eq!(
+        second.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
     assert_eq!(first.original_path, second.original_path);
     let duplicate = second
         .duplicate_review
@@ -1381,7 +1394,10 @@ fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_
             true,
         )
         .expect("discard exact duplicate");
-    assert_eq!(discarded.processing_state, DocumentProcessingState::Dismissed);
+    assert_eq!(
+        discarded.processing_state,
+        DocumentProcessingState::Dismissed
+    );
     assert!(discarded.original_path.exists());
     assert_eq!(
         discarded
@@ -1408,9 +1424,17 @@ fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_
         DuplicateDecision::DiscardNew
     );
     let changed = store
-        .attach_document("rivera-household", conversation.id, &changed_source, &cabinet)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &changed_source,
+            &cabinet,
+        )
         .expect("do not apply exact preference to changed bytes");
-    assert_eq!(changed.processing_state, DocumentProcessingState::PossibleDuplicate);
+    assert_eq!(
+        changed.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
     assert_eq!(
         changed
             .duplicate_review
@@ -1420,11 +1444,13 @@ fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_
             .kind,
         DuplicateKind::Possible
     );
-    assert!(store
-        .list_duplicate_audit_events("rivera-household")
-        .expect("list duplicate History")
-        .len()
-        >= 2);
+    assert!(
+        store
+            .list_duplicate_audit_events("rivera-household")
+            .expect("list duplicate History")
+            .len()
+            >= 2
+    );
 }
 
 #[test]
@@ -1460,11 +1486,19 @@ fn changed_bytes_with_the_same_household_context_are_only_a_possible_duplicate()
         .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
         .expect("attach first bill");
     let second = store
-        .attach_document("rivera-household", conversation.id, &second_source, &cabinet)
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
         .expect("attach changed bill");
 
     assert_ne!(first.checksum, second.checksum);
-    assert_eq!(second.processing_state, DocumentProcessingState::PossibleDuplicate);
+    assert_eq!(
+        second.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
     assert_eq!(
         second
             .duplicate_review
@@ -1512,12 +1546,7 @@ fn keep_both_exact_arrivals_release_shared_staging_only_after_both_are_filed() {
         ..Default::default()
     };
     let first = store
-        .attach_document(
-            "rivera-household",
-            conversation.id,
-            &first_source,
-            &cabinet,
-        )
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
         .expect("attach first Original");
     store
         .record_member_direction(
@@ -1661,7 +1690,12 @@ fn updated_version_keeps_both_originals_links_provenance_and_never_overwrites() 
         .expect("file first Original");
     let conversation_id = first.conversation_id;
     let updated = store
-        .attach_document("rivera-household", conversation_id, &updated_source, &cabinet)
+        .attach_document(
+            "rivera-household",
+            conversation_id,
+            &updated_source,
+            &cabinet,
+        )
         .expect("attach updated version");
     let resolution = store
         .resolve_duplicate(
@@ -1672,7 +1706,10 @@ fn updated_version_keeps_both_originals_links_provenance_and_never_overwrites() 
             false,
         )
         .expect("mark updated version");
-    assert_eq!(resolution.processing_state, DocumentProcessingState::NeedsMemberDirection);
+    assert_eq!(
+        resolution.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
     assert_eq!(
         resolution
             .duplicate_resolution
@@ -1730,20 +1767,22 @@ fn updated_version_keeps_both_originals_links_provenance_and_never_overwrites() 
     assert!(first.filed_original.is_some());
     assert!(filed_updated.filed_original.is_some());
     assert_ne!(
-        first.filed_original.as_ref().expect("first Original").final_path,
+        first
+            .filed_original
+            .as_ref()
+            .expect("first Original")
+            .final_path,
         filed_updated
             .filed_original
             .as_ref()
             .expect("updated Original")
             .final_path
     );
-    assert!(
-        store
-            .list_duplicate_audit_events("rivera-household")
-            .expect("list duplicate History")
-            .iter()
-            .any(|event| event.decision == DuplicateDecision::UpdatedVersion)
-    );
+    assert!(store
+        .list_duplicate_audit_events("rivera-household")
+        .expect("list duplicate History")
+        .iter()
+        .any(|event| event.decision == DuplicateDecision::UpdatedVersion));
 }
 
 #[test]
@@ -2282,7 +2321,6 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
                     subject: "12 Seabreeze Avenue".to_owned(),
                     explanation: "Our primary residence".to_owned(),
                 }),
-                ..Default::default()
             },
             "Household records",
         )
@@ -2386,6 +2424,8 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
         .pause_filing_rule("rivera-household", rules[0].id, false)
         .expect("resume Filing Rule");
     let resumed_source = directory.path().join("agl-august-resumed.pdf");
+    // Keep this Original distinct from the paused fixture so checksum-based
+    // manual-move discovery cannot select the still-staged paused copy.
     fs::write(
         &resumed_source,
         digital_pdf_with_text(

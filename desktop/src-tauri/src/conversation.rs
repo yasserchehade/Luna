@@ -889,11 +889,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             )?;
             connection.last_insert_rowid()
         };
-        if let Some(duplicate_review) = self.find_duplicate_review(
-            household_id,
-            arrival_id,
-            &payload,
-        )? {
+        if let Some(duplicate_review) =
+            self.find_duplicate_review(household_id, arrival_id, &payload)?
+        {
             payload.processing_state = DocumentProcessingState::PossibleDuplicate;
             payload.duplicate_review = Some(duplicate_review);
             self.save_document_arrival_payload(
@@ -902,10 +900,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                 conversation_id,
                 payload.clone(),
             )?;
-            if let Some(preference) = self.matching_duplicate_preference(
-                household_id,
-                &payload,
-            )? {
+            if let Some(preference) = self.matching_duplicate_preference(household_id, &payload)? {
                 return self.resolve_duplicate_internal(
                     household_id,
                     arrival_id,
@@ -1803,7 +1798,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             .collect::<Result<Vec<_>, _>>()?;
         protected_rows
             .into_iter()
-            .map(|protected| self.open_protected::<DuplicatePreferencePayload>(household_id, &protected))
+            .map(|protected| {
+                self.open_protected::<DuplicatePreferencePayload>(household_id, &protected)
+            })
             .find_map(|result| match result {
                 Ok(preference)
                     if preference.checksum == payload.checksum
@@ -1908,7 +1905,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             DuplicateDecision::KeepBoth => "kept both Originals",
             DuplicateDecision::LinkCopies => "linked both Originals without filing the new copy",
             DuplicateDecision::DiscardNew => "discarded the new duplicate Original",
-            DuplicateDecision::UpdatedVersion => "kept both Originals and marked the new copy as an updated version",
+            DuplicateDecision::UpdatedVersion => {
+                "kept both Originals and marked the new copy as an updated version"
+            }
         };
         let protected = self.protect(
             household_id,
@@ -2590,13 +2589,19 @@ fn possible_duplicate(
     if existing.media_type != incoming.media_type || existing.checksum == incoming.checksum {
         return false;
     }
-    if !existing.original_name.eq_ignore_ascii_case(&incoming.original_name) {
+    if !existing
+        .original_name
+        .eq_ignore_ascii_case(&incoming.original_name)
+    {
         return false;
     }
     let existing_context = &existing.context_direction;
     let incoming_context = &incoming.context_direction;
     let core_context_matches = [
-        (&existing_context.document_type, &incoming_context.document_type),
+        (
+            &existing_context.document_type,
+            &incoming_context.document_type,
+        ),
         (
             &existing_context.service_provider,
             &incoming_context.service_provider,
@@ -2605,11 +2610,13 @@ fn possible_duplicate(
     ]
     .into_iter()
     .all(|(left, right)| left.is_some() && left == right);
-    let subject_matches = existing_context.property.as_ref().is_some_and(|property| {
-        incoming_context.property.as_deref() == Some(property.as_str())
-    }) || existing_context.account.as_ref().is_some_and(|account| {
-        incoming_context.account.as_deref() == Some(account.as_str())
-    });
+    let subject_matches =
+        existing_context.property.as_ref().is_some_and(|property| {
+            incoming_context.property.as_deref() == Some(property.as_str())
+        }) || existing_context
+            .account
+            .as_ref()
+            .is_some_and(|account| incoming_context.account.as_deref() == Some(account.as_str()));
     core_context_matches && subject_matches
 }
 
