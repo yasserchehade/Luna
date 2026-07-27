@@ -1,42 +1,55 @@
-name: Desktop foundation
+name: Pull request checks
 
 on:
   pull_request:
     paths:
       - "desktop/**"
-      - "supabase/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/desktop.yml"
-  push:
-    branches: [main]
-    paths:
-      - "desktop/**"
-      - "supabase/**"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/desktop.yml"
+      - ".github/workflows/full-desktop.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  verify-account-service:
-    name: Verify account service
+  verify-core:
+    name: Verify core on ubuntu-latest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop
+          workspaces: "desktop/src-tauri -> target"
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter luna-desktop supabase:start
-      - run: pnpm --filter luna-desktop supabase:lint
-      - run: pnpm --filter luna-desktop test:account-contract
+      - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --all -- --check
+      - run: pnpm --filter luna-desktop test
+      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+      - run: pnpm --filter luna-desktop typecheck
 
-  verify-desktop:
-    name: Verify on ${{ matrix.os }}
+  verify-platform:
+    name: Verify desktop build on ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -44,20 +57,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop/src-tauri
+          shared-key: desktop
+          workspaces: "desktop/src-tauri -> target"
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter luna-desktop test
-      - run: pnpm --filter luna-desktop typecheck
-      - run: pnpm --filter luna-desktop build:e2e
-      - run: pnpm --filter luna-desktop test:e2e
-      - run: pnpm --filter luna-desktop tauri build --no-bundle
+      - run: pnpm --filter luna-desktop tauri build --debug --no-bundle

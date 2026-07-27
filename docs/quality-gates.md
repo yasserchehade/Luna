@@ -42,11 +42,24 @@ Tauri supports unit and integration testing through its mock runtime and desktop
 ### Every ticket pull request
 
 - Every acceptance criterion is demonstrated through an approved seam.
-- Windows and macOS CI are green.
+- The required Ubuntu core check is green: Rust formatting, the complete Rust suite, strict Clippy and TypeScript typechecking.
+- Windows and macOS desktop build checks are green.
+- Account-service lint and contract checks are green when account or Supabase paths change.
+- A final-head `Full desktop validation` run is green before merging changes that affect runtime behaviour, the interface, configuration or packaging.
 - The Standards review passes against repository guidance and the smell baseline.
 - The Spec review passes against the originating GitHub issue and parent specification.
 - No unresolved P0 or P1 finding remains.
 - CI output and any required manual evidence are attached to the issue.
+
+## GitHub Actions execution policy
+
+Pull requests run the fast core suite once on `ubuntu-latest` and compile the desktop application on `windows-latest` and `macos-latest`. The account-service workflow is path-scoped so unrelated desktop changes do not start Supabase. Documentation-only changes do not start desktop workflows.
+
+Full installed-application E2E and release-mode no-bundle builds run automatically after relevant changes reach `main`. They can also be dispatched manually against the final pull-request head. This avoids repeating the most expensive Windows and macOS work after every intermediate push without weakening the final acceptance gate: runtime, interface, configuration and packaging changes still require a successful manually dispatched full run before merge.
+
+All workflows use only standard GitHub-hosted runners. Dependency downloads use pnpm caching through `actions/setup-node`, while Rust registry, Git and suitable `target` outputs use `Swatinem/rust-cache`. Workflow-level concurrency cancels superseded runs on the same ref.
+
+Path-filtered workflow names must not be configured as unconditional repository ruleset checks because GitHub leaves a path-skipped required workflow pending. If required status checks are added, use always-created aggregate checks or rules scoped to the paths they protect.
 
 ## Milestone checkpoints
 
