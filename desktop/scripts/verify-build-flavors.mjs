@@ -5,7 +5,7 @@ import path from "node:path";
 const desktopRoot = process.cwd();
 const executableName = process.platform === "win32" ? "luna-desktop.exe" : "luna-desktop";
 const e2eExecutable = path.join(desktopRoot, "src-tauri", "target", "e2e", "debug", executableName);
-const normalExecutable = path.join(desktopRoot, "src-tauri", "target", "debug", executableName);
+const normalExecutable = path.join(desktopRoot, "src-tauri", "target", "release", executableName);
 
 const containsE2eMarker = (bytes) => Buffer.from(bytes).includes(Buffer.from("e2eAccountService"));
 

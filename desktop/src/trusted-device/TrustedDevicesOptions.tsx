@@ -79,9 +79,8 @@ export function TrustedDevicesOptions({
       .finally(() => setIsSubmitting(false));
   };
 
-  return <main className="conversation options-view">
-    <header><div><small>Options</small><h1>Trusted devices</h1></div><span>Household security</span></header>
-    <section className="device-settings">
+  return <section className="device-settings options-section" aria-label="Trusted devices">
+      <div className="options-section-heading"><div><small>Household security</small><h2>Trusted devices</h2></div><span>Protected access</span></div>
       <p>Only active Trusted Devices can open Household memory. Revocation rotates the Household key for every device that remains active.</p>
       {error && <p className="account-error" role="alert">{error}</p>}
       <ul>
@@ -116,6 +115,5 @@ export function TrustedDevicesOptions({
         <p>Lock Luna for everyday privacy. Sign out only when you want to remove this account session from the device; your next visit will require full account authentication.</p>
         <button type="button" onClick={onSignOut}>Sign out on this device</button>
       </section>
-    </section>
-  </main>;
+    </section>;
 }

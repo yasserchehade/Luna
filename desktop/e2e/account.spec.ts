@@ -177,7 +177,8 @@ describe("Luna account access", () => {
     expect(openedState).toBe("state received after remote rotation");
 
     await $("button[aria-label='Options']").click();
-    await expect($("h1=Trusted devices")).toBeDisplayed();
+    await expect($("h1=Options")).toBeDisplayed();
+    await expect($("h2=Trusted devices")).toBeDisplayed();
     const recoveryBeforeCancellation = await browser.execute(() => (
       (window as typeof window & {
         __LUNA_E2E_ACCOUNT__: {
@@ -306,7 +307,8 @@ describe("Luna account access", () => {
     await $("button[aria-label='Conversation actions']").click();
 
     await $("button[aria-label='Options']").click();
-    await expect($("h1=Trusted devices")).toBeDisplayed();
+    await expect($("h1=Options")).toBeDisplayed();
+    await expect($("h2=Trusted devices")).toBeDisplayed();
     await expect($("[data-device-label='This device']")).toHaveText(expect.stringContaining("Active"));
     await expect($("[data-device-label='Recovered device']")).toHaveText(expect.stringContaining("This device"));
     await $("button[aria-label='Revoke This device']").click();

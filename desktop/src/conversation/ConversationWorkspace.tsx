@@ -270,6 +270,26 @@ export function ConversationWorkspace({
     onOpenConversation();
   }, [conversationService, householdId, onOpenConversation, onRecentConversationsChange, onTodoCountChange]);
 
+  const deleteConversationAndRecoverWorkspace = useCallback(async (conversationId: number) => {
+    try {
+      await conversationService.deleteConversation(householdId, conversationId);
+      const remainingConversations = await conversationService.listConversations(
+        householdId,
+        undefined,
+        false,
+      );
+      if (remainingConversations.length === 0) {
+        await createConversation();
+      } else {
+        setSearch("");
+        setIncludeArchived(false);
+        await loadHouseholdWork();
+      }
+    } catch {
+      setError("Luna could not delete that Conversation.");
+    }
+  }, [conversationService, createConversation, householdId, loadHouseholdWork]);
+
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
@@ -516,8 +536,7 @@ export function ConversationWorkspace({
             </button>
             <button type="button" className="conversation-delete-action" onClick={() => {
               setActionsOpen(false);
-              void conversationService.deleteConversation(householdId, selectedConversation.id)
-                .then(() => loadHouseholdWork(selectedConversation.id));
+              void deleteConversationAndRecoverWorkspace(selectedConversation.id);
             }}>Delete</button>
           </div>}
         </div>}

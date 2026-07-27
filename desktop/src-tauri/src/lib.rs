@@ -14,7 +14,9 @@ pub use conversation::{
     ContextField, ContextRelevanceDirection, Conversation, ConversationError, ConversationMessage,
     ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
     DocumentProcessingState, FiledOriginal, FilingDecisionDirection, FilingDecisionReview,
-    LocalOcr, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    FilingRuleAuditEvent, FilingRuleAuditKind, FilingRuleReorganizationDocument,
+    FilingRuleReorganizationPreview, FilingRuleSummary, FilingRuleUpdate, LocalOcr,
+    ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -432,6 +434,105 @@ fn confirm_filing_decision(
 #[cfg(feature = "e2e")]
 fn e2e_digital_pdf() -> Vec<u8> {
     e2e_pdf_with_text("Luna E2E fixture")
+}
+
+#[tauri::command]
+fn list_filing_rules(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<FilingRuleSummary>, String> {
+    store
+        .list_filing_rules(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_filing_rule(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    rule_id: i64,
+    update: FilingRuleUpdate,
+) -> Result<FilingRuleSummary, String> {
+    store
+        .update_filing_rule(&household_id, rule_id, update)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn pause_filing_rule(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    rule_id: i64,
+    paused: bool,
+) -> Result<FilingRuleSummary, String> {
+    store
+        .pause_filing_rule(&household_id, rule_id, paused)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_filing_rule(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    rule_id: i64,
+) -> Result<FilingRuleSummary, String> {
+    store
+        .delete_filing_rule(&household_id, rule_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_filing_rule_audit_events(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<FilingRuleAuditEvent>, String> {
+    store
+        .list_filing_rule_audit_events(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn preview_filing_rule_reorganization(
+    store: State<'_, ConversationState>,
+    household_id: String,
+    rule_id: i64,
+    proposed_directory: String,
+) -> Result<FilingRuleReorganizationPreview, String> {
+    store
+        .preview_filing_rule_reorganization(&household_id, rule_id, &proposed_directory)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_manual_move_candidates(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+) -> Result<Vec<ManualMoveCandidate>, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before checking manual moves.".to_owned())?;
+    store
+        .list_manual_move_candidates(&household_id, configuration.root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_manual_move_decision(
+    store: State<'_, ConversationState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    arrival_id: i64,
+    teaches_rule: bool,
+) -> Result<DocumentArrival, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A Cabinet must be configured before recording a manual move.".to_owned())?;
+    store
+        .record_manual_move_decision(&household_id, arrival_id, configuration.root, teaches_rule)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "e2e")]
@@ -867,6 +968,14 @@ pub fn run() {
         list_todo_items,
         list_filed_originals,
         list_audit_events,
+        list_filing_rules,
+        update_filing_rule,
+        pause_filing_rule,
+        delete_filing_rule,
+        list_filing_rule_audit_events,
+        preview_filing_rule_reorganization,
+        list_manual_move_candidates,
+        record_manual_move_decision,
         dismiss_document_arrival,
         record_member_direction,
         confirm_filing_decision,

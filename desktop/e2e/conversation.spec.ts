@@ -90,6 +90,22 @@ describe("Luna Conversation desk", () => {
     await expect($(".history-event strong")).toHaveText("Document filed");
     await expect($(".history-event small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
 
+    await $("button[aria-label='Options']").click();
+    await expect($("h1=Options")).toBeDisplayed();
+    await $("button[aria-label='Learned Filing Rules options']").click();
+    await expect($("h2=Learned Filing Rules")).toBeDisplayed();
+    await expect($("section[aria-label='Learned Filing Rules']")).toBeDisplayed();
+    const learnedRule = $(".filing-rule-card");
+    await expect(learnedRule).toHaveText(expect.stringContaining("Electricity bill from AGL"));
+    await learnedRule.$("button=Edit rule").click();
+    await $("button=Preview historical impact").click();
+    await expect($("section[aria-label='Historical Filing Rule preview']")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
+    await $("button=Cancel").click();
+    await learnedRule.$("button=Pause rule").click();
+    await expect(learnedRule).toHaveText(expect.stringContaining("Paused rule"));
+    await learnedRule.$("button=Resume rule").click();
+    await expect(learnedRule).toHaveText(expect.stringContaining("Active rule"));
+
     await $("button[aria-label='Luna']").click();
     await expect($(".attachment-zone p")).toHaveText(
       "Drop a PDF, JPG, or PNG anywhere in Luna, or select a document.",
@@ -157,7 +173,11 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Attach document']").click();
     await openConversationActions();
     await $("button=Delete").click();
-    await expect($("h1=Deleted Conversation")).toBeDisplayed();
+    await expect($("h1=New conversation")).toBeDisplayed();
+    const recoveredMessage = "The recovered conversation is writable.";
+    await $("#message-composer").setValue(recoveredMessage);
+    await $("button[aria-label='Send message']").click();
+    await expect($(".member-message p")).toHaveText(recoveredMessage);
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $("button=Open Conversation item").click();

@@ -75,6 +75,44 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .cabinet-summary > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .cabinet-summary article { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid #d8dbd2; border-radius: 12px; background: #fffdf8; }
 
+.filing-rules { display: grid; gap: 14px; margin-top: 28px; padding-top: 28px; border-top: 1px solid #dfe2da; }
+.filing-rules > p { max-width: 760px; color: #687068; font-size: 12px; line-height: 1.6; }
+.section-heading, .filing-rule-card-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.section-heading h2, .filing-rule-card h3, .filing-rule-editor h3 { margin: 3px 0 0; font-family: Georgia, serif; font-weight: 500; }
+.section-heading h2 { font-size: 22px; }
+.section-heading span, .filing-rule-card-heading > span { color: #687068; font-size: 12px; }
+.filing-rule-list { display: grid; gap: 12px; }
+.filing-rule-card, .filing-rule-editor { display: grid; gap: 10px; padding: 16px; border: 1px solid #d9ddd4; border-radius: 12px; background: #fffdf8; }
+.filing-rule-card.deleted { opacity: .65; }
+.filing-rule-card h3 { font-size: 18px; }
+.filing-rule-card p, .filing-rule-card small, .filing-rule-editor p { color: #687068; font-size: 12px; line-height: 1.5; }
+.filing-rule-card details { color: #687068; font-size: 12px; }
+.filing-rule-card details ul { margin: 8px 0 0; padding-left: 18px; }
+.filing-rule-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.filing-rule-actions button { padding: 8px 11px; border: 1px solid #ccd2ca; border-radius: 8px; color: #394139; background: #fff; }
+.filing-rule-editor form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.filing-rule-editor label { display: grid; gap: 5px; color: #394139; font-size: 12px; font-weight: 650; }
+.filing-rule-editor input { min-width: 0; padding: 9px; border: 1px solid #ccd2ca; border-radius: 8px; }
+.filing-rule-editor .wide-field { grid-column: 1 / -1; }
+.filing-rule-preview { display: grid; gap: 8px; padding: 12px; border-radius: 9px; background: #f2f3ed; }
+.filing-rule-preview p, .filing-rule-preview li { color: #687068; font-size: 12px; line-height: 1.5; }
+.filing-rule-preview ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.filing-rule-preview li { display: grid; gap: 3px; }
+.filing-rule-preview li small { overflow-wrap: anywhere; }
+.manual-move-prompts { display: grid; gap: 10px; padding: 14px; border: 1px solid #d8cda9; border-radius: 10px; background: #fff9e8; }
+.manual-move-prompts h3 { margin: 0; font-family: Georgia, serif; font-weight: 500; }
+.manual-move-prompts p, .manual-move-prompts small { color: #687068; font-size: 12px; line-height: 1.5; }
+.manual-move-prompts article { display: grid; gap: 5px; padding-top: 8px; border-top: 1px solid #eadfbf; }
+.options-workspace { overflow: auto; }
+.options-section-nav { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 32px; border-bottom: 1px solid #eef0ec; background: #fff; }
+.options-section-nav button { padding: 9px 13px; border: 1px solid #d5dad2; border-radius: 9px; color: #59635b; background: #fff; }
+.options-section-nav button.selected { border-color: #356b57; color: #173229; background: #edf4ef; font-weight: 700; }
+.options-section { margin-top: 0; padding: 30px clamp(30px, 7vw, 92px); overflow: visible; border-top: 0; }
+.options-section.filing-rules { display: grid; }
+.options-section-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.options-section-heading h2 { margin: 3px 0 0; font-family: Georgia, serif; font-size: 24px; font-weight: 500; }
+.options-section-heading > span { color: #687068; font-size: 12px; }
+
 .conversation-toolbar { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 20px; border-bottom: 1px solid #eef0ec; background: #fff; }
 .conversation-toolbar input:not([type="checkbox"]), .conversation-toolbar select { min-width: 150px; padding: 6px 8px; border: 1px solid #e0e4df; border-radius: 6px; color: #3d473f; background: #f8f9f7; }
 .conversation-toolbar label { display: flex; align-items: center; gap: 5px; color: #626a63; font-size: 11px; }

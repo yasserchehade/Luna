@@ -71,6 +71,43 @@ export type FilingRule = {
   cabinetDestination: string;
 };
 
+export type FilingRuleSummary = FilingRule & {
+  teacher: string;
+  createdAt: string;
+  paused: boolean;
+  deleted: boolean;
+  affectedDocuments: string[];
+};
+
+export type FilingRuleUpdate = Omit<FilingRule, "id">;
+
+export type FilingRuleAuditEvent = {
+  id: number;
+  householdId: string;
+  ruleId: number;
+  kind: "updated" | "paused" | "resumed" | "deleted";
+  subject: string;
+  outcome: string;
+};
+
+export type FilingRuleReorganizationPreview = {
+  ruleId: number;
+  proposedDirectory: string;
+  documents: Array<{
+    arrivalId: number;
+    originalName: string;
+    currentDestination: string;
+    proposedDestination: string;
+  }>;
+};
+
+export type ManualMoveCandidate = {
+  arrivalId: number;
+  originalName: string;
+  previousDestination: string;
+  currentDestination: string;
+};
+
 export type ContextRelevanceDirection = {
   subject: string;
   explanation: string;
@@ -169,6 +206,14 @@ export interface ConversationService {
   listTodoItems(householdId: string): Promise<TodoItem[]>;
   listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
   listAuditEvents(householdId: string): Promise<AuditEvent[]>;
+  listFilingRules(householdId: string): Promise<FilingRuleSummary[]>;
+  updateFilingRule(householdId: string, ruleId: number, update: FilingRuleUpdate): Promise<FilingRuleSummary>;
+  pauseFilingRule(householdId: string, ruleId: number, paused: boolean): Promise<FilingRuleSummary>;
+  deleteFilingRule(householdId: string, ruleId: number): Promise<FilingRuleSummary>;
+  listFilingRuleAuditEvents(householdId: string): Promise<FilingRuleAuditEvent[]>;
+  previewFilingRuleReorganization(householdId: string, ruleId: number, proposedDirectory: string): Promise<FilingRuleReorganizationPreview>;
+  listManualMoveCandidates(householdId: string): Promise<ManualMoveCandidate[]>;
+  recordManualMoveDecision(householdId: string, arrivalId: number, teachesRule: boolean): Promise<DocumentArrival>;
   dismissDocumentArrival(householdId: string, arrivalId: number): Promise<void>;
   recordMemberDirection(
     householdId: string,
@@ -228,6 +273,38 @@ export const tauriConversationService: ConversationService = {
   },
   listAuditEvents(householdId) {
     return invoke<AuditEvent[]>("list_audit_events", { householdId });
+  },
+  listFilingRules(householdId) {
+    return invoke<FilingRuleSummary[]>("list_filing_rules", { householdId });
+  },
+  updateFilingRule(householdId, ruleId, update) {
+    return invoke<FilingRuleSummary>("update_filing_rule", { householdId, ruleId, update });
+  },
+  pauseFilingRule(householdId, ruleId, paused) {
+    return invoke<FilingRuleSummary>("pause_filing_rule", { householdId, ruleId, paused });
+  },
+  deleteFilingRule(householdId, ruleId) {
+    return invoke<FilingRuleSummary>("delete_filing_rule", { householdId, ruleId });
+  },
+  listFilingRuleAuditEvents(householdId) {
+    return invoke<FilingRuleAuditEvent[]>("list_filing_rule_audit_events", { householdId });
+  },
+  previewFilingRuleReorganization(householdId, ruleId, proposedDirectory) {
+    return invoke<FilingRuleReorganizationPreview>("preview_filing_rule_reorganization", {
+      householdId,
+      ruleId,
+      proposedDirectory,
+    });
+  },
+  listManualMoveCandidates(householdId) {
+    return invoke<ManualMoveCandidate[]>("list_manual_move_candidates", { householdId });
+  },
+  recordManualMoveDecision(householdId, arrivalId, teachesRule) {
+    return invoke<DocumentArrival>("record_manual_move_decision", {
+      householdId,
+      arrivalId,
+      teachesRule,
+    });
   },
   dismissDocumentArrival(householdId, arrivalId) {
     return invoke("dismiss_document_arrival", { householdId, arrivalId });

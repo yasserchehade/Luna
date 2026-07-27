@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:review": "tauri build --debug",
+    "build:review": "tauri build --no-bundle",
     "build:e2e": "node scripts/build-e2e.mjs",
     "test:build-flavors": "node scripts/verify-build-flavors.mjs",
     "supabase:reset": "supabase db reset --workdir .. --no-seed",
