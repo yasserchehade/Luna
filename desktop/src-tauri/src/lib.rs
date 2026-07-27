@@ -15,10 +15,10 @@ pub use conversation::{
     ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
     DocumentProcessingState, DuplicateAuditEvent, DuplicateAuditKind, DuplicateCandidate,
     DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
-    FilingDecisionDirection, FilingDecisionReview,
-    FilingRuleAuditEvent, FilingRuleAuditKind, FilingRuleReorganizationDocument,
-    FilingRuleReorganizationPreview, FilingRuleSummary, FilingRuleUpdate, LocalOcr,
-    ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    FilingDecisionDirection, FilingDecisionReview, FilingRuleAuditEvent, FilingRuleAuditKind,
+    FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
+    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
+    TesseractOcr, TodoItem,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
