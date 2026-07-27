@@ -250,7 +250,7 @@ fn invalid_candidate_direction_is_rejected_into_a_recoverable_waiting_state() {
     let gateway = DeterministicIntelligenceGateway::new(
         "openai",
         "gpt-4.1-mini",
-        BTreeMap::from([("serviceProvider".to_owned(), "AGL\u{0000}ignore".to_owned())]),
+        BTreeMap::from([("serviceProvider".to_owned(), "A".repeat(513))]),
     );
     let intelligence = CloudIntelligenceStore::open_with_gateway(
         &database,

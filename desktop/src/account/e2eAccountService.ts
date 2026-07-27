@@ -6,6 +6,9 @@ import type {
   TrustedDeviceRecord,
 } from "./accountService";
 import { e2eAccountFixture } from "./e2eAccountFixture";
+import { tauriAccountSessionStorage } from "./tauriAccountSessionStorage";
+
+const householdSessionStorageKey = "luna-household-session";
 
 let registration: RegisterAccountRequest | undefined;
 let verified = false;
@@ -91,6 +94,10 @@ export const e2eAccountService: AccountService = {
       householdId: e2eAccountFixture.householdId as HouseholdId,
       householdName,
     };
+    await tauriAccountSessionStorage.setItem(
+      householdSessionStorageKey,
+      JSON.stringify(householdSession),
+    );
     return householdSession;
   },
   async requestPasswordReset(email) {
@@ -241,6 +248,10 @@ export const e2eAccountService: AccountService = {
     if (!registration || !householdSession || registration.email !== email || currentPassword !== password) {
       throw new Error("Invalid credentials.");
     }
+    await tauriAccountSessionStorage.setItem(
+      householdSessionStorageKey,
+      JSON.stringify(householdSession),
+    );
     return householdSession;
   },
   async signOut() {
@@ -249,5 +260,6 @@ export const e2eAccountService: AccountService = {
       throw new Error("The account session vault is unavailable.");
     }
     authenticatorVerified = false;
+    await tauriAccountSessionStorage.removeItem(householdSessionStorageKey);
   },
 };

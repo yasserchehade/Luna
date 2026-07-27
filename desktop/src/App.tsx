@@ -412,7 +412,6 @@ export default function App({ accountService, cabinetService, conversationServic
           conversationService={conversationService}
           destination={activeDestination}
           householdId={session.householdId}
-          grantedBy={session.accountId}
           householdName={session.householdName}
           newConversationRequest={newConversationRequest}
           conversationSelectionRequest={conversationSelectionRequest}

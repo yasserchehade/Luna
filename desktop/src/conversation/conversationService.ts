@@ -376,11 +376,11 @@ export interface ConversationService {
     arrivalId: number,
     selection: IntelligenceSelection,
     consent: CloudConsentDecision,
-    grantedBy: string,
     existingConsentGrantId: number | null,
   ): Promise<CloudAssistanceResolution>;
   recordCloudCandidateDisposition(
     householdId: string,
+    arrivalId: number,
     requestId: string,
     disposition: "accepted" | "corrected" | "rejected",
   ): Promise<void>;
@@ -515,19 +515,23 @@ export const tauriConversationService: ConversationService = {
   clearLunaGatewayCredential(householdId) {
     return invoke("clear_luna_gateway_credential", { householdId });
   },
-  evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, grantedBy, existingConsentGrantId) {
+  evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, existingConsentGrantId) {
     return invoke<CloudAssistanceResolution>("evaluate_document_with_cloud_assistance", {
       input: {
         householdId,
         arrivalId,
         selection,
         consent,
-        grantedBy,
         existingConsentGrantId,
       },
     });
   },
-  recordCloudCandidateDisposition(householdId, requestId, disposition) {
-    return invoke("record_cloud_candidate_disposition", { householdId, requestId, disposition });
+  recordCloudCandidateDisposition(householdId, arrivalId, requestId, disposition) {
+    return invoke("record_cloud_candidate_disposition", {
+      householdId,
+      arrivalId,
+      requestId,
+      disposition,
+    });
   },
 };

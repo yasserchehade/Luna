@@ -26,7 +26,9 @@ use crate::{
 pub const MANAGED_INTELLIGENCE_PROVIDER_ID: &str = "openai";
 pub const MANAGED_INTELLIGENCE_MODEL_ID: &str = "gpt-4.1-mini";
 const MAX_SAFE_RETRY_ATTEMPTS: usize = 2;
-const MAX_FIELD_VALUE_CHARS: usize = 512;
+const MAX_FIELD_VALUE_CHARS: usize = 1_024;
+const MAX_EVIDENCE_ITEMS: usize = 32;
+const MAX_SOURCE_REFERENCE_CHARS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +150,7 @@ pub struct IntelligenceRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct AdditionalIntelligenceEvidence {
     pub field: String,
     pub value: String,
@@ -647,7 +650,6 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             }
             CloudConsentDecision::KeepLocal => unreachable!(),
         };
-        self.consume_if_one_time(household_id, &grant)?;
         request.consent_grant_id = Some(grant.id);
 
         let credential = self
@@ -665,6 +667,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             )?;
             return Err(IntelligenceFailure::AuthenticationUnavailable);
         }
+        self.consume_if_one_time(household_id, &grant)?;
 
         let mut last_failure = IntelligenceFailure::GatewayUnavailable;
         for attempt in 0..MAX_SAFE_RETRY_ATTEMPTS {
@@ -691,7 +694,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                         &request,
                         consent,
                         Some(&grant),
-                        granted_by,
+                        &grant.granted_by,
                         CloudAssistanceOutcome::Completed,
                         "Cloud Assistance returned validated Evidence and a candidate Direction Interpretation.",
                         result.usage.clone(),
@@ -1084,7 +1087,7 @@ impl IntelligenceFailure {
     }
 }
 
-fn managed_provider_catalog() -> Vec<IntelligenceProviderDescriptor> {
+pub(crate) fn managed_provider_catalog() -> Vec<IntelligenceProviderDescriptor> {
     vec![IntelligenceProviderDescriptor {
         id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
         name: "OpenAI".to_owned(),
@@ -1131,6 +1134,7 @@ fn disclosed_fields(request: &IntelligenceRequest) -> Vec<String> {
             .evidence
             .iter()
             .map(|evidence| evidence.field.clone())
+            .chain(request.expected_response.allowed_fields.iter().cloned())
             .chain(
                 request
                     .content_excerpts
@@ -1168,14 +1172,39 @@ fn validate_result(
         .allowed_fields
         .iter()
         .collect::<BTreeSet<_>>();
+    let allowed_sources = request
+        .evidence
+        .iter()
+        .map(|evidence| evidence.source.as_str())
+        .chain(
+            request
+                .content_excerpts
+                .iter()
+                .map(|excerpt| excerpt.source.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
     if result.fields.iter().any(|(field, value)| {
         !allowed.contains(field)
             || value.trim().is_empty()
             || value.chars().count() > MAX_FIELD_VALUE_CHARS
-    }) || result
-        .evidence
-        .iter()
-        .any(|evidence| !allowed.contains(&evidence.field) || evidence.value.trim().is_empty())
+            || has_invalid_control_character(value)
+    }) || result.evidence.iter().any(|evidence| {
+        !allowed.contains(&evidence.field)
+            || evidence.value.trim().is_empty()
+            || evidence.value.chars().count() > MAX_FIELD_VALUE_CHARS
+            || has_invalid_control_character(&evidence.value)
+            || evidence.source_reference.as_ref().is_some_and(|reference| {
+                reference.chars().count() > MAX_SOURCE_REFERENCE_CHARS
+                    || has_invalid_control_character(reference)
+                    || !allowed_sources.contains(reference.as_str())
+            })
+    }) || result.evidence.len() > MAX_EVIDENCE_ITEMS
+        || result.source_references.len() > MAX_EVIDENCE_ITEMS
+        || result.source_references.iter().any(|reference| {
+            reference.chars().count() > MAX_SOURCE_REFERENCE_CHARS
+                || has_invalid_control_character(reference)
+                || !allowed_sources.contains(reference.as_str())
+        })
     {
         return Err(IntelligenceFailure::InvalidStructuredResult);
     }
@@ -1196,6 +1225,12 @@ fn validate_result(
         candidate_direction,
         usage: result.usage,
     })
+}
+
+fn has_invalid_control_character(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_control() && !character.is_whitespace())
 }
 
 fn candidate_from_fields(fields: &BTreeMap<String, String>) -> CandidateDirectionInterpretation {
@@ -1640,5 +1675,131 @@ mod tests {
         assert!(events.iter().all(|event| !event.reason.contains(secret)));
         let ordinary_database = std::fs::read(&store.database).expect("read test database");
         assert!(!String::from_utf8_lossy(&ordinary_database).contains(secret));
+    }
+
+    #[test]
+    fn reusable_consent_cannot_expand_to_new_response_fields_or_models() {
+        let gateway =
+            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+        let providers = vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Test routes".to_owned(),
+            models: vec![
+                IntelligenceModelDescriptor {
+                    id: "gpt-4.1-mini".to_owned(),
+                    name: "GPT-4.1 mini".to_owned(),
+                },
+                IntelligenceModelDescriptor {
+                    id: "another-model".to_owned(),
+                    name: "Another model".to_owned(),
+                },
+            ],
+            managed_by_luna: true,
+            auth_url: None,
+        }];
+        let store = store_with_gateway_and_catalog(gateway.clone(), providers);
+        let selection = IntelligenceSelection {
+            provider_id: "openai".to_owned(),
+            model_id: "gpt-4.1-mini".to_owned(),
+        };
+        let request = authorised_request("arrival-scope");
+        let grant = store
+            .grant_scope(
+                "household",
+                &selection,
+                request.capability,
+                "direction-interpretation",
+                disclosed_fields(&request),
+                "organiser-1",
+                "Same disclosed fields.",
+            )
+            .expect("grant reusable consent");
+        let mut wider = authorised_request("arrival-wider");
+        wider
+            .expected_response
+            .allowed_fields
+            .push("serviceProvider".to_owned());
+        assert_eq!(
+            store.evaluate_document(
+                "household",
+                selection.clone(),
+                wider,
+                CloudConsentDecision::UseExistingScope,
+                "organiser-1",
+                Some(grant.id),
+            ),
+            Err(IntelligenceFailure::ConsentRequired)
+        );
+        let mut changed_model = authorised_request("arrival-model");
+        changed_model.model_id = "another-model".to_owned();
+        assert_eq!(
+            store.evaluate_document(
+                "household",
+                IntelligenceSelection {
+                    provider_id: "openai".to_owned(),
+                    model_id: "another-model".to_owned(),
+                },
+                changed_model,
+                CloudConsentDecision::UseExistingScope,
+                "organiser-1",
+                Some(grant.id),
+            ),
+            Err(IntelligenceFailure::ConsentRequired)
+        );
+        assert!(gateway.requests().is_empty());
+    }
+
+    #[test]
+    fn missing_gateway_authentication_does_not_consume_one_time_consent() {
+        let database = std::env::temp_dir().join(format!(
+            "luna-auth-consent-{}-{}.db",
+            std::process::id(),
+            now()
+        ));
+        let store =
+            CloudIntelligenceStore::open(database, trusted_device()).expect("open Intelligence");
+        assert_eq!(
+            store.evaluate_document(
+                "household",
+                IntelligenceSelection {
+                    provider_id: "openai".to_owned(),
+                    model_id: "gpt-4.1-mini".to_owned(),
+                },
+                authorised_request("arrival-auth"),
+                CloudConsentDecision::AllowOnce,
+                "organiser-1",
+                None,
+            ),
+            Err(IntelligenceFailure::AuthenticationUnavailable)
+        );
+        let scopes = store
+            .list_consent_scopes("household")
+            .expect("list consent");
+        assert_eq!(scopes.len(), 1);
+        assert!(scopes[0].consumed_at.is_none());
+    }
+
+    #[test]
+    fn oversized_or_untraceable_provider_evidence_is_rejected() {
+        let request = authorised_request("arrival-untrusted");
+        let result = UntrustedIntelligenceResult {
+            request_id: request.request_id.clone(),
+            document_arrival_id: request.document_arrival_id.clone(),
+            provider_id: request.provider_id.clone(),
+            model_id: request.model_id.clone(),
+            fields: BTreeMap::new(),
+            evidence: vec![AdditionalIntelligenceEvidence {
+                field: "documentType".to_owned(),
+                value: "x".repeat(MAX_FIELD_VALUE_CHARS + 1),
+                source_reference: Some("invented source".to_owned()),
+            }],
+            source_references: vec!["invented source".to_owned()],
+            usage: IntelligenceUsage::default(),
+        };
+        assert_eq!(
+            validate_result(&request, 1, result),
+            Err(IntelligenceFailure::InvalidStructuredResult)
+        );
     }
 }

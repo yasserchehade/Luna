@@ -242,6 +242,7 @@ fn parse_litellm_response(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct LiteLlmStructuredResult {
     request_id: String,
     document_arrival_id: String,

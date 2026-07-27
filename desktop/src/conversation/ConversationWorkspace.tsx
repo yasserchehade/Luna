@@ -18,7 +18,6 @@ type ConversationWorkspaceProps = {
   conversationService: ConversationService;
   destination: "Luna" | "To do";
   householdId: string;
-  grantedBy: string;
   newConversationRequest: number;
   conversationSelectionRequest: { conversationId: number; request: number } | null;
   onRecentConversationsChange(conversations: Conversation[]): void;
@@ -65,7 +64,6 @@ type DocumentReviewEditorProps = {
   arrival: DocumentArrival;
   conversationService: ConversationService;
   householdId: string;
-  grantedBy: string;
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
   onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
@@ -134,7 +132,6 @@ function DocumentReviewEditor({
   arrival,
   conversationService,
   householdId,
-  grantedBy,
   onConfirm,
   onRecord,
   onResolveDuplicate,
@@ -244,7 +241,6 @@ function DocumentReviewEditor({
         arrival.id,
         { providerId: cloudProviderId, modelId: cloudModelId },
         consent,
-        grantedBy,
         consent === "useExistingScope" ? existingCloudScope?.id ?? null : null,
       );
       if (!outcome.result) {
@@ -299,7 +295,12 @@ function DocumentReviewEditor({
       amountResolved: true,
       relevantDatesResolved: true,
     };
-    await onRecord(submitted);
+    try {
+      await onRecord(submitted);
+    } catch (reason) {
+      setCloudError(String(reason));
+      return;
+    }
     if (cloudSuggestion) {
       const submittedValues: Record<string, string> = {
         documentType: submitted.documentType ?? "",
@@ -315,6 +316,7 @@ function DocumentReviewEditor({
       );
       await conversationService.recordCloudCandidateDisposition(
         householdId,
+        arrival.id,
         cloudSuggestion.requestId,
         accepted ? "accepted" : "corrected",
       );
@@ -350,7 +352,12 @@ function DocumentReviewEditor({
       <p>{duplicateResolutionLabels[arrival.duplicateResolution.decision]}</p>
       <small>Related Original: {arrival.duplicateResolution.relatedOriginalName}</small>
     </aside>}
-    {(arrival.processingState === "needsMemberDirection" || cloudReadyForMemberDirection) && <form className="context-review-form" onSubmit={(event) => {
+    {(
+      arrival.processingState === "needsMemberDirection"
+      || arrival.processingState === "needsCloudConsent"
+      || arrival.processingState === "waitingForCloudAssistance"
+      || cloudReadyForMemberDirection
+    ) && <form className="context-review-form" onSubmit={(event) => {
       event.preventDefault();
       void saveDirection();
     }}>
@@ -440,7 +447,6 @@ export function ConversationWorkspace({
   conversationService,
   destination,
   householdId,
-  grantedBy,
   newConversationRequest,
   conversationSelectionRequest,
   onRecentConversationsChange,
@@ -676,6 +682,7 @@ export function ConversationWorkspace({
       await loadHouseholdWork();
     } catch (directionError) {
       setError(String(directionError));
+      throw directionError;
     }
   };
 
@@ -830,7 +837,6 @@ export function ConversationWorkspace({
             arrival={arrival}
             conversationService={conversationService}
             householdId={householdId}
-            grantedBy={grantedBy}
             onConfirm={(direction) => confirmDecision(arrival.id, direction)}
             onRecord={(direction) => recordDirection(arrival.id, direction)}
             onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}
