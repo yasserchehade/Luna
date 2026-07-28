@@ -54,6 +54,8 @@ Deno.serve(async (request) => {
         requested_household_id: input.householdId,
         requested_device_id: input.deviceId,
         requested_gateway_key_alias: input.alias,
+        requested_budget_scope_id: input.budgetScopeId,
+        requested_max_budget_usd: input.maxBudgetUsd,
       });
       if (error) throw new Error("Managed Trusted Device access is no longer eligible.");
     },

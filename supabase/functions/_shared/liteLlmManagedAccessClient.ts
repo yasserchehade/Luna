@@ -107,12 +107,17 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
       if (typeof generated.key !== "string" || generated.key.trim() === "") {
         throw new Error("Managed gateway provisioning returned an invalid credential.");
       }
+      const issuedAt = configuration.now?.() ?? new Date();
       const calculatedExpiry = new Date(
-        (configuration.now?.() ?? new Date()).getTime() + configuration.durationHours * 60 * 60 * 1_000,
+        issuedAt.getTime() + configuration.durationHours * 60 * 60 * 1_000,
       ).toISOString();
       const expiresAt = typeof generated.expires === "string" && !Number.isNaN(Date.parse(generated.expires))
         ? generated.expires
         : calculatedExpiry;
+      if (Date.parse(expiresAt) <= issuedAt.getTime() || Date.parse(expiresAt) > Date.parse(calculatedExpiry)) {
+        await requireJson("/key/delete", "POST", { keys: [generated.key] }).catch(() => undefined);
+        throw new Error("Managed gateway provisioning returned an unsafe credential expiry.");
+      }
       return { alias: input.alias, credential: generated.key, expiresAt };
     },
     async revokeGatewayAccess(credential: string) {

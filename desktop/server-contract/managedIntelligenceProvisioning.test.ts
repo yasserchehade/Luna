@@ -52,6 +52,8 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
         householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
         deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
         alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+        budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+        maxBudgetUsd: 1,
       });
     },
     async recordReady(input) {
@@ -246,4 +248,39 @@ test("managed gateway credentials cannot exceed the 24-hour safety bound", () =>
     tpmLimit: 8_000,
     fetch,
   }), /credential duration is invalid/);
+});
+
+test("an overlong generated expiry is rejected and its key is revoked", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const client = createLiteLlmManagedAccessClient({
+    adminEndpoint: "https://gateway-admin.luna.test",
+    endpoint: "https://gateway.luna.test/v1/chat/completions",
+    masterKey: "sk-litellm-master-secret",
+    durationHours: 24,
+    rpmLimit: 6,
+    tpmLimit: 8_000,
+    now: () => new Date("2026-07-28T14:00:00.000Z"),
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), init });
+      const payload = String(url).endsWith("/key/generate")
+        ? { key: "sk-overlong-device-key", expires: "2026-07-30T14:00:00.000Z" }
+        : {};
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await assert.rejects(() => client.createGatewayAccess({
+    householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
+    deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+    alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+    budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+    maxBudgetUsd: 1,
+  }), /unsafe credential expiry/);
+  assert.equal(requests.at(-1)?.url, "https://gateway-admin.luna.test/key/delete");
+  assert.deepEqual(JSON.parse(String(requests.at(-1)?.init?.body)), {
+    keys: ["sk-overlong-device-key"],
+  });
 });

@@ -27,6 +27,8 @@ type ProvisioningDependencies = {
     householdId: string;
     deviceId: string;
     alias: string;
+    budgetScopeId: string;
+    maxBudgetUsd: number;
   }): Promise<void>;
   recordReady(input: {
     householdId: string;
@@ -65,6 +67,8 @@ export async function handleManagedIntelligenceProvisioning(
     householdId: authorization.householdId,
     deviceId: authorization.deviceId,
     alias: reservedAlias,
+    budgetScopeId: authorization.budgetScopeId,
+    maxBudgetUsd: authorization.maxBudgetUsd,
   });
   const access = await dependencies.createGatewayAccess({
     householdId: authorization.householdId,

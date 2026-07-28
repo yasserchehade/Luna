@@ -186,6 +186,7 @@ test("an entitled Trusted Device proves possession before managed access is prov
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
   assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
   assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+  assert.ok(databaseUrl, "SUPABASE_DB_URL is required");
 
   const email = `provisioning.${crypto.randomUUID()}@example.com`;
   const password = "correct-horse-battery-staple-7";
@@ -260,6 +261,8 @@ test("an entitled Trusted Device proves possession before managed access is prov
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_budget_scope_id: authorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(authorizedRow.max_budget_usd),
   })).error, null);
   assert.equal((await operatorClient.rpc("record_managed_intelligence_device_access", {
     requested_household_id: household.householdId,
@@ -315,20 +318,69 @@ test("an entitled Trusted Device proves possession before managed access is prov
     "luna:managed-intelligence-device:v1:",
     [household.householdId, device.publicKey, replacementChallenge.nonce],
   ));
-  assert.equal((await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+  const replacementAuthorized = await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
     requested_device_public_key: device.publicKey,
     requested_challenge_id: replacementChallenge.id,
     requested_nonce: replacementChallenge.nonce,
     requested_authorization_signature: replacementAuthorization,
+  });
+  assert.equal(replacementAuthorized.error, null);
+  const replacementAuthorizedRow = Array.isArray(replacementAuthorized.data)
+    ? replacementAuthorized.data[0]
+    : replacementAuthorized.data;
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.25,
+    requested_valid_until: replacementValidUntil,
   })).error, null);
+  assert.ok((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_budget_scope_id: replacementAuthorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(replacementAuthorizedRow.max_budget_usd),
+  })).error, "a stale budget authorization cannot restore an earlier Household cap");
+
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.25,
+    requested_valid_until: replacementValidUntil,
+  })).error, null);
+  const raceChallenge = await accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey);
+  const raceAuthorization = deviceAuthority.authorize(canonicalAuthorization(
+    "luna:managed-intelligence-device:v1:",
+    [household.householdId, device.publicKey, raceChallenge.nonce],
+  ));
+  const raceAuthorized = await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: raceChallenge.id,
+    requested_nonce: raceChallenge.nonce,
+    requested_authorization_signature: raceAuthorization,
+  });
+  assert.equal(raceAuthorized.error, null);
+  const raceAuthorizedRow = Array.isArray(raceAuthorized.data) ? raceAuthorized.data[0] : raceAuthorized.data;
   assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_budget_scope_id: raceAuthorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(raceAuthorizedRow.max_budget_usd),
   })).error, null);
   assert.equal((await operatorClient.rpc("revoke_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
   })).error, null);
+  const leasedRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
+  assert.equal(leasedRevocations.error, null);
+  assert.deepEqual(leasedRevocations.data.filter(
+    (row: { household_id: string }) => row.household_id === household.householdId,
+  ), [], "reconciliation cannot finish before an in-flight mint has left its alias usable");
+  const database = postgres(databaseUrl, { max: 1 });
+  await database`
+    update public.managed_intelligence_device_access
+    set provisioning_lease_expires_at = now() - interval '1 second'
+    where household_id = ${household.householdId} and device_id = ${device.id}
+  `;
+  await database.end();
   const raceRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
   assert.equal(raceRevocations.error, null);
   assert.deepEqual(raceRevocations.data.filter(
