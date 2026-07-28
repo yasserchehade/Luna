@@ -369,8 +369,6 @@ export interface ConversationService {
   listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
-  setLunaGatewayCredential(householdId: string, credential: string): Promise<void>;
-  clearLunaGatewayCredential(householdId: string): Promise<void>;
   evaluateDocumentWithCloudAssistance(
     householdId: string,
     arrivalId: number,
@@ -508,12 +506,6 @@ export const tauriConversationService: ConversationService = {
   },
   revokeCloudConsentScope(householdId, scopeId) {
     return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
-  },
-  setLunaGatewayCredential(householdId, credential) {
-    return invoke("set_luna_gateway_credential", { householdId, credential });
-  },
-  clearLunaGatewayCredential(householdId) {
-    return invoke("clear_luna_gateway_credential", { householdId });
   },
   evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, existingConsentGrantId) {
     return invoke<CloudAssistanceResolution>("evaluate_document_with_cloud_assistance", {

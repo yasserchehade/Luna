@@ -22,16 +22,18 @@ The Trusted Device owns protected Document Handling state and consent policy. Th
 | Excessive disclosure | The Rust application layer builds the request from protected state and caps extracted text at 4,000 characters. The frontend cannot provide request content. |
 | Provider-owned authority | Results contain Evidence and candidate Direction Interpretations only. Owning-domain validation rejects attempts to replace resolved Member Direction and validates monetary and ISO-date constraints before presentation; no tools are exposed. |
 | Prompt or structured-output injection | Strict structured output, correlation/identity checks, allowed-field filtering, value limits and owning-domain validation. Provider text never reaches command dispatch. Completion and later candidate disposition are separate immutable History events. |
-| Credential disclosure | Upstream credentials are server-side. The narrow desktop gateway credential is stored only in the OS vault. Errors expose bounded Luna failure categories. |
+| Credential disclosure | Managed upstream credentials are server-side. Luna automatically provisions the narrow desktop gateway credential into the OS vault; members cannot paste it through the interface. Errors expose bounded Luna failure categories. |
 | Content in infrastructure logs | Ordinary ingress logs must omit bodies and headers. LiteLLM message/raw logging is disabled, callbacks are absent, prompts are excluded from spend logs and upgrade verification is mandatory. |
 | Replay of one-time consent | One-time Consent Grants are durably recorded and marked consumed before transmission. |
 | Failure mistaken for completion | Document Handling moves to a recoverable waiting state; the Original and Local Inspection Evidence remain unchanged. |
 
 ## Credential ownership
 
-The operating-system-vault acceptance criterion applies to the desktop's Luna gateway access credential and any future Bring-your-own Intelligence credential. For Luna-managed Intelligence, the upstream OpenAI credential is owned by the separately operated gateway environment and never delivered to the desktop application or its storage.
+The operating-system-vault acceptance criterion applies to the desktop's automatically provisioned Luna gateway access credential and any future Bring-your-own Intelligence credential. For Luna-managed Intelligence, the upstream OpenAI credential is owned by the separately operated gateway environment and never delivered to the desktop application or its storage.
 
-The gateway credential must be narrow, revocable and attributable for abuse controls. It must not be written to environment files in the repository, frontend storage, SQLite, Cabinet content, History or diagnostics.
+The gateway credential must be narrow, revocable and attributable for abuse controls. It must not be customer-entered or written to environment files in the repository, frontend storage, SQLite, Cabinet content, History or diagnostics.
+
+A future Bring-your-own provider credential may be entered only through Luna and retained only in the OS vault. If it transits the managed gateway, a BYOK-only virtual key and route must require that separate provider credential and must never fall back to a Luna-funded deployment. Header, application, error and spend logs must prove that the credential is neither retained nor emitted before the feature is enabled.
 
 ## Deployment verification
 

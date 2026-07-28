@@ -16,6 +16,8 @@ The first evaluated Luna-managed route is OpenAI `gpt-4.1-mini` through an isola
 
 The desktop authenticates with a narrow, revocable Luna gateway credential held in the operating-system credential vault. The separately operated gateway holds the upstream OpenAI credential. Neither credential enters SQLite, Cabinet files, History, request content or diagnostics. Production gateway keys are attributable to a Trusted Device or Household for abuse controls and may be independently revoked.
 
+That gateway credential is managed infrastructure rather than customer configuration. Eligible paid Households receive managed gateway access through automatic device provisioning; no member pastes a Luna gateway or upstream provider credential. ADR 0016 separately defines the Household-level paid managed, Bring-your-own and Local-only product modes.
+
 LiteLLM output is untrusted. Luna verifies correlation, provider, model, allowed fields, value constraints and the structured response before converting it to Evidence or a candidate Direction Interpretation. The owning Document Handling domain validates that candidate again, including that the field still awaits Member Direction and that monetary and ISO-date values satisfy domain constraints. No result type contains action authority, tools, Member Direction, Filing Decisions, Filing Rules or duplicate decisions.
 
 ## Prototype evaluation boundary

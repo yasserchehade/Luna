@@ -253,7 +253,7 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 - [ ] OpenAI `gpt-4.1-mini` passes the document evaluation contract through the provisional isolated LiteLLM adapter. For prototype acceptance the real-provider canary may use an ephemeral operator-run loopback deployment; the deterministic test gateway passes the same contract without a paid call.
 - [ ] Luna selects and names the exact provider/model and explains the bounded disclosure before offering Allow once, scoped future consent or Keep local.
 - [ ] One-time and reusable Consent Grants bind provider, model, capability, member and disclosed scope; they are inspectable and revocable.
-- [ ] Luna-managed upstream provider credentials remain server-side. The desktop's narrow gateway credential remains in the operating-system vault and never enters SQLite, frontend storage, Cabinet content or History.
+- [ ] Luna-managed upstream provider credentials remain server-side. Luna automatically provisions the desktop's narrow gateway credential into the operating-system vault; members cannot paste it, and it never enters SQLite, frontend storage, Cabinet content or History.
 - [ ] Provider, model, schema and owning-domain validation treat every external result as untrusted and prevent direct durable-state mutation.
 - [ ] Safe retry uses only the unchanged provider/model; failure leaves Document Handling waiting and never silently switches providers.
 - [ ] Existing Filing Rules, duplicate handling and Document Version preservation continue without gateway availability.

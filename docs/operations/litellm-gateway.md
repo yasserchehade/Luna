@@ -10,7 +10,7 @@ The desktop does not run LiteLLM or Python. A separately operated Luna-managed s
 - `LITELLM_MASTER_KEY` — administrative bootstrap credential;
 - `DATABASE_URL` — gateway identity, virtual-key and privacy-safe usage metadata.
 
-Provision a separate narrow LiteLLM virtual key for each attributable Trusted Device or Household. The desktop stores that key through **Options → Cloud assistance** in the operating-system credential vault. Do not distribute the master key to a desktop.
+Provision a separate narrow LiteLLM virtual key for each attributable Trusted Device or Household. The desktop stores that automatically provisioned key in the operating-system credential vault. Do not expose virtual-key entry as customer setup, and never distribute the master key to a desktop.
 
 The allowlisted LiteLLM model name is exactly `openai/gpt-4.1-mini`. Do not add an alias shared by multiple deployments, fallbacks, context-window fallbacks or load-balancing deployments under that name.
 

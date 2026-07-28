@@ -32,6 +32,8 @@ The production catalogue contains one evaluated route:
 | --- | --- | --- | --- |
 | OpenAI | `gpt-4.1-mini` | Luna-managed Intelligence | isolated LiteLLM; remote before external testing |
 
+Luna-managed Intelligence is an entitlement of an eligible paid Household plan and uses provider credentials billed to Luna. A free Household may instead configure a supported Bring-your-own provider connection entirely through Luna's interface, with provider usage billed to the connection owner, or remain Local-only. Paid Households retain those choices. Managed gateway credentials are automatically provisioned to Trusted Devices and are never customer-entered settings.
+
 `DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
 
 For prototype acceptance, an operator may run the pinned gateway deployment ephemerally on loopback and send only the fixed synthetic canary. This validates the real provider contract without adding LiteLLM or Python to the desktop. Before external testing, the same boundary moves behind authenticated remote HTTPS ingress with managed secrets and attributable gateway credentials.

@@ -340,6 +340,10 @@ describe("Luna Conversation desk", () => {
 
     await $("button[aria-label='Options']").click();
     await $("button[aria-label='Cloud assistance options']").click();
+    const cloudOptions = $("section[aria-label='Cloud assistance']");
+    await expect(cloudOptions).toHaveText(expect.stringContaining("Managed access ready"));
+    await expect(cloudOptions).toHaveText(expect.stringContaining("never entered by a Household Member"));
+    expect(await cloudOptions.$$("input[type='password']").length).toBe(0);
     const reusableGrant = $(".consent-scope-list li");
     await expect(reusableGrant).toHaveText(expect.stringContaining("Active"));
     await reusableGrant.$("button=Revoke").click();

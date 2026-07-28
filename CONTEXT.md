@@ -206,10 +206,14 @@ An explicit, revocable permission for a named intelligence provider to receive d
 _Avoid_: Do not ask again, global consent
 
 **Luna-managed Intelligence**:
-Cloud assistance supplied and supported as part of Luna using a tested intelligence provider.
+Cloud assistance supplied and supported under a Household's eligible paid plan using a tested intelligence provider, with provider usage billed to Luna.
+
+**Household Plan**:
+The service entitlement shared by a Household. A paid plan includes Luna-managed Intelligence; a free plan may use Bring-your-own Intelligence or Local-only Intelligence.
+_Avoid_: Paid user, free user, subscriber
 
 **Bring-your-own Intelligence**:
-Cloud assistance billed to and configured by the member through a supported provider API.
+Cloud assistance configured entirely through Luna's interface using a supported provider connection and billed to that connection's owner. It is available to free and paid Households.
 _Avoid_: Connect ChatGPT, connect Claude
 
 **Local-only Intelligence**:

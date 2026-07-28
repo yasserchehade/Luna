@@ -505,45 +505,6 @@ fn revoke_cloud_consent_scope(
 }
 
 #[tauri::command]
-fn set_luna_gateway_credential(
-    store: State<'_, IntelligenceState>,
-    device: State<'_, DeviceManager>,
-    household_id: String,
-    credential: String,
-) -> Result<(), String> {
-    if !device
-        .is_current_device_unlocked(&household_id)
-        .map_err(|error| error.to_string())?
-    {
-        return Err(
-            "Unlock this Trusted Device before changing the Luna gateway credential.".to_owned(),
-        );
-    }
-    store
-        .set_gateway_access_credential(&household_id, credential.as_bytes())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn clear_luna_gateway_credential(
-    store: State<'_, IntelligenceState>,
-    device: State<'_, DeviceManager>,
-    household_id: String,
-) -> Result<(), String> {
-    if !device
-        .is_current_device_unlocked(&household_id)
-        .map_err(|error| error.to_string())?
-    {
-        return Err(
-            "Unlock this Trusted Device before changing the Luna gateway credential.".to_owned(),
-        );
-    }
-    store
-        .clear_gateway_access_credential(&household_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn list_cloud_assistance_audit_events(
     store: State<'_, IntelligenceState>,
     household_id: String,
@@ -1234,8 +1195,6 @@ pub fn run() {
         evaluate_document_with_cloud_assistance,
         list_cloud_consent_scopes,
         revoke_cloud_consent_scope,
-        set_luna_gateway_credential,
-        clear_luna_gateway_credential,
         list_cloud_assistance_audit_events,
         record_cloud_candidate_disposition,
         resolve_duplicate,

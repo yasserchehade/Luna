@@ -80,6 +80,8 @@ The prototype's evaluated-real-provider criterion may be demonstrated by the pin
 
 Before Luna-managed Intelligence is available to external testers, the gateway must be remotely operated behind authenticated TLS ingress with managed secrets, attributable client credentials, abuse controls and verified body-free logs. Issue #53 owns this pre-production gate; it does not block completion of issue #13's prototype contract after the local real-provider canary passes.
 
+Managed gateway credentials are provisioned automatically and are not customer configuration. Bring-your-own Intelligence remains unavailable until a separate canary proves BYOK-only route isolation, provider-key non-persistence, credential-free logs and failure without fallback to a Luna-funded route.
+
 ## Severity and release policy
 
 | Severity | Meaning | Policy |
