@@ -400,9 +400,10 @@ export default function App({ accountService, cabinetService, conversationServic
           {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && cloudAssistanceAuditEvents.length === 0 && filingRuleAuditEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
             : <>{cloudAssistanceAuditEvents.map((event) => <article className="history-event cloud-history-event" key={`cloud-${event.id}`}>
-              <strong>Cloud assistance {event.outcome === "completed" ? "completed" : event.outcome === "denied" ? "kept local" : "waiting"}</strong>
+              <strong>Cloud Assistance {event.outcome === "completed" ? "completed" : event.outcome === "denied" ? "kept local" : event.outcome === "cancelled" ? "cancelled" : "waiting to retry"}</strong>
               <p>{event.providerId} · {event.purpose} · {event.consent}</p>
-              <small>{event.reason}</small>
+              <small>Provider model: {event.modelId} · Consent Grant {event.consentGrantId ?? "not created"} · granted by {event.grantedBy} · candidate {event.candidateDisposition}</small>
+              <small>{event.reason}{event.usage.inputTokens != null || event.usage.outputTokens != null ? ` · ${event.usage.inputTokens ?? 0} input / ${event.usage.outputTokens ?? 0} output tokens` : ""}</small>
             </article>)}{duplicateAuditEvents.map((event) => <article className="history-event duplicate-history-event" key={`duplicate-${event.id}`}>
               <strong>{event.kind === "duplicatePreferenceApplied" ? "Duplicate preference applied" : "Duplicate decision recorded"}</strong>
               <p>{event.subject}</p>

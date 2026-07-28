@@ -29,11 +29,13 @@ type ConversationWorkspaceProps = {
 };
 
 const stateLabel = (arrival: DocumentArrival) => ({
+  needsCloudConsent: "Needs Cloud Assistance choice",
+  inspectingWithAssistance: "Inspecting with Cloud Assistance",
+  waitingForCloudAssistance: "Waiting to retry Cloud Assistance",
   needsMemberDirection: "Needs your direction",
   possibleDuplicate: "Needs duplicate decision",
   readyToFile: "Ready to file",
   filing: "Filing",
-  waitingForConnectivity: "Waiting for provider",
   cabinetUnavailable: "Waiting for Cabinet",
   filed: "Filed",
   dismissed: "Dismissed",
@@ -70,33 +72,6 @@ type DocumentReviewEditorProps = {
   onRefresh(): Promise<void>;
 };
 
-const cloudContextFields = [
-  "documentType",
-  "serviceProvider",
-  "serviceProviderRelevance",
-  "addressee",
-  "property",
-  "propertyRelevance",
-  "account",
-  "amount",
-  "relevantDates",
-] as const;
-
-const cloudEvidence = (arrival: DocumentArrival): Array<{ field: string; value: string }> => [
-  { field: "documentName", value: arrival.originalName },
-  { field: "mediaType", value: arrival.mediaType },
-  ...(arrival.extractedText ? [{ field: "extractedText", value: arrival.extractedText }] : []),
-  ...cloudContextFields.flatMap((field): Array<{ field: string; value: string }> => {
-    const context = arrival.reviewCard.context;
-    if (field === "relevantDates") {
-      const value = context.relevantDates.flatMap(({ value }) => value ? [value] : []).join(", ");
-      return value ? [{ field, value }] : [];
-    }
-    const value = context[field].value;
-    return value ? [{ field, value }] : [];
-  }),
-];
-
 const applyCloudFields = (
   current: DocumentContextDirection,
   fields: Record<string, string>,
@@ -114,18 +89,6 @@ const applyCloudFields = (
   assign("property", fields.property);
   assign("account", fields.account);
   assign("amount", fields.amount);
-  if (fields.serviceProviderRelevance?.trim()) {
-    next.serviceProviderRelevance = {
-      subject: next.serviceProvider ?? "",
-      explanation: fields.serviceProviderRelevance.trim(),
-    };
-  }
-  if (fields.propertyRelevance?.trim()) {
-    next.propertyRelevance = {
-      subject: next.property ?? "",
-      explanation: fields.propertyRelevance.trim(),
-    };
-  }
   if (fields.relevantDates?.trim()) {
     next.relevantDates = fields.relevantDates.split(",").map((date) => date.trim()).filter(Boolean);
     next.relevantDatesResolved = next.relevantDates.length > 0;
@@ -192,23 +155,29 @@ function DocumentReviewEditor({
   const [cloudProviders, setCloudProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [cloudScopes, setCloudScopes] = useState<CloudConsentScope[]>([]);
   const [cloudProviderId, setCloudProviderId] = useState("");
+  const [cloudModelId, setCloudModelId] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudMessage, setCloudMessage] = useState("");
   const [cloudError, setCloudError] = useState("");
-  const clarificationQuestions = arrival.processingState === "needsMemberDirection"
+  const [cloudReadyForMemberDirection, setCloudReadyForMemberDirection] = useState(false);
+  const [cloudSuggestion, setCloudSuggestion] = useState<{
+    requestId: string;
+    fields: Record<string, string>;
+  } | null>(null);
+  const clarificationQuestions = (
+    arrival.processingState === "needsMemberDirection"
+    || cloudReadyForMemberDirection
+  )
     ? arrival.reviewCard.questions.filter(({ field }) => field !== "amount")
     : arrival.reviewCard.questions;
-  const unresolvedFields = arrival.reviewCard.questions.map(({ field }) => field);
-  const cloudScopeFields = Array.from(new Set([
-    ...unresolvedFields,
-    ...cloudEvidence(arrival).map(({ field }) => field),
-  ]));
   const selectedCloudProvider = cloudProviders.find(({ descriptor }) => descriptor.id === cloudProviderId);
+  const selectedCloudModel = selectedCloudProvider?.descriptor.models.find(({ id }) => id === cloudModelId);
   const existingCloudScope = cloudScopes.find((scope) => (
     !scope.revoked
     && scope.providerId === cloudProviderId
-    && scope.purpose === "document-evaluation"
-    && cloudScopeFields.every((field) => scope.fields.includes(field))
+    && scope.modelId === cloudModelId
+    && scope.kind === "reusable"
+    && scope.capability === "directionInterpretation"
   ));
 
   useEffect(() => {
@@ -227,8 +196,11 @@ function DocumentReviewEditor({
     setCloudProviders([]);
     setCloudScopes([]);
     setCloudProviderId("");
+    setCloudModelId("");
     setCloudMessage("");
     setCloudError("");
+    setCloudReadyForMemberDirection(false);
+    setCloudSuggestion(null);
   }, [arrival.id]);
 
   const openCloudAssistance = async () => {
@@ -242,7 +214,9 @@ function DocumentReviewEditor({
       ]);
       setCloudProviders(providers);
       setCloudScopes(scopes);
-      setCloudProviderId((current) => current || providers.find(({ configured }) => configured)?.descriptor.id || providers[0]?.descriptor.id || "");
+      const selected = providers.find(({ configured }) => configured) ?? providers[0];
+      setCloudProviderId((current) => current || selected?.descriptor.id || "");
+      setCloudModelId((current) => current || selected?.descriptor.models[0]?.id || "");
     } catch (reason) {
       setCloudError(String(reason));
     } finally {
@@ -250,56 +224,52 @@ function DocumentReviewEditor({
     }
   };
 
+  useEffect(() => {
+    if (
+      (arrival.processingState === "needsCloudConsent"
+        || arrival.processingState === "waitingForCloudAssistance")
+      && !cloudOpen
+    ) {
+      void openCloudAssistance();
+    }
+  }, [arrival.processingState]);
+
   const askCloudProvider = async (consent: CloudConsentDecision) => {
-    if (!cloudProviderId) return;
+    if (!cloudProviderId || !cloudModelId) return;
     setCloudBusy(true);
     setCloudError("");
     setCloudMessage("");
     try {
-      const result = await conversationService.evaluateCloudRequest(
+      const outcome = await conversationService.evaluateDocumentWithCloudAssistance(
         householdId,
-        {
-          purpose: "document-evaluation",
-          documentName: arrival.originalName,
-          mediaType: arrival.mediaType,
-          evidence: cloudEvidence(arrival),
-          unresolvedFields,
-        },
-        cloudProviderId,
+        arrival.id,
+        { providerId: cloudProviderId, modelId: cloudModelId },
         consent,
+        consent === "useExistingScope" ? existingCloudScope?.id ?? null : null,
       );
-      if (arrival.processingState === "waitingForConnectivity") {
-        await conversationService.resumeWaitingDocument(householdId, arrival.id);
-        await onRefresh();
+      await onRefresh();
+      if (!outcome.result) {
+        setCloudReadyForMemberDirection(true);
+        setCloudMessage("Kept local. No document information was sent to an Intelligence Provider.");
+        return;
       }
+      const result = outcome.result;
       const suggestedFields = Object.keys(result.fields);
       if (suggestedFields.length === 0) {
-        setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The provider"} returned no usable suggestions. Luna kept this review local.`);
+        setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The Intelligence Provider"} returned no usable suggestions. Luna kept this review ready for your direction.`);
       } else {
         setDirection((current) => applyCloudFields(current, result.fields));
-        setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The provider"} suggested ${suggestedFields.join(", ")}. Review the fields, then save Household Context.`);
+        setCloudSuggestion({ requestId: result.requestId, fields: result.fields });
+        setCloudMessage(`${selectedCloudProvider?.descriptor.name ?? "The Intelligence Provider"} ${selectedCloudModel?.name ?? cloudModelId} suggested ${suggestedFields.join(", ")}. This is untrusted Evidence; review it before saving Household Context.`);
       }
+      setCloudReadyForMemberDirection(true);
       if (consent === "allowForScope") {
         const scopes = await conversationService.listCloudConsentScopes(householdId);
         setCloudScopes(scopes);
       }
     } catch (reason) {
-      if (consent === "keepLocal") {
-        if (arrival.processingState === "waitingForConnectivity") {
-          await conversationService.resumeWaitingDocument(householdId, arrival.id);
-          await onRefresh();
-        }
-        setCloudMessage("Kept local. No document data was sent to a provider.");
-      } else {
-        const reasonText = String(reason);
-        if (reasonText.includes("provider is unavailable")) {
-          await conversationService.markDocumentWaitingForConnectivity(householdId, arrival.id);
-          await onRefresh();
-          setCloudMessage("The provider is unavailable. Luna kept this review waiting and will retry when connectivity returns.");
-        } else {
-          setCloudError(reasonText);
-        }
-      }
+      setCloudError(String(reason));
+      await onRefresh();
     } finally {
       setCloudBusy(false);
     }
@@ -318,6 +288,47 @@ function DocumentReviewEditor({
     }
     return next;
   });
+
+  const saveDirection = async () => {
+    const submitted: DocumentContextDirection = {
+      ...direction,
+      relevantDates: datesDraft.split(",").map((date) => date.trim()).filter(Boolean),
+      documentTypeResolved: true,
+      serviceProviderResolved: true,
+      addresseeResolved: true,
+      propertyResolved: true,
+      accountResolved: true,
+      amountResolved: true,
+      relevantDatesResolved: true,
+    };
+    try {
+      await onRecord(submitted);
+    } catch (reason) {
+      setCloudError(String(reason));
+      return;
+    }
+    if (cloudSuggestion) {
+      const submittedValues: Record<string, string> = {
+        documentType: submitted.documentType ?? "",
+        serviceProvider: submitted.serviceProvider ?? "",
+        addressee: submitted.addressee ?? "",
+        property: submitted.property ?? "",
+        account: submitted.account ?? "",
+        amount: submitted.amount ?? "",
+        relevantDates: submitted.relevantDates.join(", "),
+      };
+      const accepted = Object.entries(cloudSuggestion.fields).every(
+        ([field, value]) => submittedValues[field]?.trim() === value.trim(),
+      );
+      await conversationService.recordCloudCandidateDisposition(
+        householdId,
+        arrival.id,
+        cloudSuggestion.requestId,
+        accepted ? "accepted" : "corrected",
+      );
+      setCloudSuggestion(null);
+    }
+  };
 
   return <section className="review-card" aria-label={`Review card for ${arrival.originalName}`}>
     <strong>{confidenceLabel(arrival)}</strong>
@@ -347,19 +358,14 @@ function DocumentReviewEditor({
       <p>{duplicateResolutionLabels[arrival.duplicateResolution.decision]}</p>
       <small>Related Original: {arrival.duplicateResolution.relatedOriginalName}</small>
     </aside>}
-    {arrival.processingState === "needsMemberDirection" && <form className="context-review-form" onSubmit={(event) => {
+    {(
+      arrival.processingState === "needsMemberDirection"
+      || arrival.processingState === "needsCloudConsent"
+      || arrival.processingState === "waitingForCloudAssistance"
+      || cloudReadyForMemberDirection
+    ) && <form className="context-review-form" onSubmit={(event) => {
       event.preventDefault();
-      void onRecord({
-        ...direction,
-        relevantDates: datesDraft.split(",").map((date) => date.trim()).filter(Boolean),
-        documentTypeResolved: true,
-        serviceProviderResolved: true,
-        addresseeResolved: true,
-        propertyResolved: true,
-        accountResolved: true,
-        amountResolved: true,
-        relevantDatesResolved: true,
-      });
+      void saveDirection();
     }}>
       <label>Document type<input aria-label="Document type" value={direction.documentType ?? ""} onChange={(event) => setField("documentType", event.target.value)} /></label>
       <label>Service Provider<input aria-label="Service Provider" value={direction.serviceProvider ?? ""} onChange={(event) => setField("serviceProvider", event.target.value)} /></label>
@@ -384,23 +390,37 @@ function DocumentReviewEditor({
       <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
       <button type="submit">Save Household Context</button>
     </form>}
-    {(arrival.processingState === "needsMemberDirection" || arrival.processingState === "waitingForConnectivity") && unresolvedFields.length > 0 && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
+    {(
+      arrival.processingState === "needsCloudConsent"
+      || arrival.processingState === "waitingForCloudAssistance"
+      || (arrival.processingState === "needsMemberDirection" && arrival.reviewCard.questions.length > 0)
+    ) && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
       <div className="cloud-assistance-inline-heading">
-        <div><strong>Need help with these fields?</strong><small>Luna can ask a connected provider for suggestions. You review them before saving or filing.</small></div>
-        {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>{arrival.processingState === "waitingForConnectivity" ? "Retry provider assistance" : "Ask a provider"}</button>}
+        <div><strong>Local Evidence is not enough to interpret this Document safely.</strong><small>Cloud Assistance can suggest unresolved fields. It cannot create Member Direction, file the Original, or change a Filing Rule.</small></div>
+        {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>Review Cloud Assistance</button>}
       </div>
       {cloudOpen && <div className="cloud-assistance-inline-panel">
         {cloudBusy && <p className="muted">Preparing provider consent…</p>}
         {!cloudBusy && <>
-          <label>Provider<select value={cloudProviderId} onChange={(event) => setCloudProviderId(event.target.value)}>
+          <label>Intelligence Provider<select value={cloudProviderId} onChange={(event) => {
+            const providerId = event.target.value;
+            const provider = cloudProviders.find(({ descriptor }) => descriptor.id === providerId);
+            setCloudProviderId(providerId);
+            setCloudModelId(provider?.descriptor.models[0]?.id ?? "");
+          }}>
             {cloudProviders.map(({ descriptor, configured }) => <option key={descriptor.id} value={descriptor.id}>{descriptor.name}{configured ? " · connected" : " · not connected"}</option>)}
           </select></label>
-          {!selectedCloudProvider?.configured && <p className="muted">Connect this provider in Options before allowing it to evaluate a document.</p>}
+          <label>Model<select value={cloudModelId} onChange={(event) => setCloudModelId(event.target.value)}>
+            {selectedCloudProvider?.descriptor.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+          </select></label>
+          <p><strong>{selectedCloudProvider?.descriptor.name ?? "The selected Intelligence Provider"} {selectedCloudModel?.name ?? ""}</strong> would receive the media type, the names and currently displayed values of unresolved local fields, and at most 4,000 characters of locally extracted text. Cabinet paths, Household state, credentials, Filing Rules, and the Original file are not sent.</p>
+          <p><strong>Reusable scope:</strong> future difficult {arrival.mediaType} Documents with the same currently displayed local context values and disclosed fields. Reuse remains limited to Direction Interpretation by the selected provider and model.</p>
+          {!selectedCloudProvider?.configured && <p className="muted">Connect this Trusted Device to Luna&apos;s managed gateway in Options before allowing Cloud Assistance.</p>}
           <div className="cloud-assistance-inline-actions">
-            {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing consent</button>}
+            {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing Consent Grant</button>}
             <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowOnce")}>Allow once</button>
-            <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowForScope")}>Allow future evaluations</button>
-            <button type="button" disabled={cloudBusy} onClick={() => cloudProviderId ? void askCloudProvider("keepLocal") : setCloudMessage("Kept local. No document data was sent to a provider.")}>Keep local</button>
+            <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowForScope")}>Allow this scoped future use</button>
+            <button type="button" disabled={cloudBusy || !cloudProviderId || !cloudModelId} onClick={() => void askCloudProvider("keepLocal")}>Keep local</button>
             <button type="button" onClick={() => setCloudOpen(false)}>Close</button>
           </div>
         </>}
@@ -677,6 +697,7 @@ export function ConversationWorkspace({
       await loadHouseholdWork();
     } catch (directionError) {
       setError(String(directionError));
+      throw directionError;
     }
   };
 
@@ -741,7 +762,7 @@ export function ConversationWorkspace({
       <section className="todo-list" aria-label="To-do Items">
         {todos.length === 0 && <p className="empty-state">Nothing needs your attention.</p>}
         {todos.map((todo) => <article key={todo.arrivalId} data-arrival-id={todo.arrivalId}>
-          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : todo.processingState === "waitingForConnectivity" ? "Waiting for provider" : "Needs your direction"}</p></div>
+          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : "Needs your direction"}</p></div>
           <div>
             <button type="button" onClick={() => void openTodo(todo)}>Open Conversation item</button>
             {todo.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>}
@@ -838,7 +859,11 @@ export function ConversationWorkspace({
             onRefresh={async () => { await loadHouseholdWork(); }}
           />
         </div>
-        {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
+        {(
+          arrival.processingState === "needsMemberDirection"
+          || arrival.processingState === "needsCloudConsent"
+          || arrival.processingState === "waitingForCloudAssistance"
+        ) && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
       </article>)}
     </section>
     <div className="attachment-zone">

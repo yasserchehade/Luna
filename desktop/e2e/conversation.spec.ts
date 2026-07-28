@@ -38,18 +38,18 @@ describe("Luna Conversation desk", () => {
 
     await $("button[aria-label='Attach document']").click();
     await expect($(".document-arrival h2")).toHaveText(expect.stringContaining("luna-e2e-document"));
-    await expect($(".document-arrival p")).toHaveText("Needs your direction");
+    await expect($(".document-arrival p")).toHaveText("Needs Cloud Assistance choice");
     await expect($(".document-arrival[data-focused='true']")).toBeDisplayed();
-    await expect($("label=Service provider relevance")).toBeDisplayed();
-    await expect($("label=Property relevance")).toBeDisplayed();
     const reviewCard = $(".document-arrival .review-card");
-    await expect(reviewCard.$$("input[aria-label='Amount']")).toBeElementsArrayOfSize(1);
     const cloudAssistance = $("section[aria-label='Cloud assistance for this document']");
-    await expect(cloudAssistance.$("button=Ask a provider")).toBeDisplayed();
-    await cloudAssistance.$("button=Ask a provider").click();
+    await expect(cloudAssistance).toHaveText(expect.stringContaining("OpenAI"));
+    await expect(cloudAssistance).toHaveText(expect.stringContaining("4,000 characters"));
     await expect(cloudAssistance.$("button=Keep local")).toBeDisplayed();
     await cloudAssistance.$("button=Keep local").click();
     await expect(cloudAssistance).toHaveText(expect.stringContaining("Kept local"));
+    await expect($("label=Service provider relevance")).toBeDisplayed();
+    await expect($("label=Property relevance")).toBeDisplayed();
+    await expect(reviewCard.$$("input[aria-label='Amount']")).toBeElementsArrayOfSize(1);
     const clarificationPromptElements = await reviewCard.$$(".clarification-questions p");
     const clarificationPrompts: string[] = [];
     for (const prompt of clarificationPromptElements) clarificationPrompts.push(await prompt.getText());
@@ -93,8 +93,9 @@ describe("Luna Conversation desk", () => {
       "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
     );
     await $("button[aria-label='History']").click();
-    await expect($(".history-event strong")).toHaveText("Document filed");
-    await expect($(".history-event small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
+    const filingHistoryEvent = $(".history-event:not(.cloud-history-event):not(.duplicate-history-event):not(.rule-history-event)");
+    await expect(filingHistoryEvent.$("strong")).toHaveText("Document filed");
+    await expect(filingHistoryEvent.$("small")).toHaveText(expect.stringContaining("AGL bill July 2026.pdf"));
 
     await $("button[aria-label='Options']").click();
     await expect($("h1=Options")).toBeDisplayed();
@@ -210,7 +211,7 @@ describe("Luna Conversation desk", () => {
     }), matchingDocument);
     await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Filed");
     await $("button[aria-label='History']").click();
-    await expect($(".history-event:not(.duplicate-history-event):not(.rule-history-event) strong")).toHaveText("Automatically filed by learned rule");
+    await expect($(".history-event:not(.cloud-history-event):not(.duplicate-history-event):not(.rule-history-event) strong")).toHaveText("Automatically filed by learned rule");
     await $("button[aria-label='Luna']").click();
     await expect($(".document-arrival > div > p")).toHaveText("Filed");
     await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
@@ -227,7 +228,7 @@ describe("Luna Conversation desk", () => {
       event: "tauri://drag-drop",
       payload: { paths: [documentPath], position: { x: 40, y: 40 } },
     }), changedDocument);
-    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs Cloud Assistance choice");
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $(".todo-list article").$("button=Dismiss").click();
@@ -252,11 +253,14 @@ describe("Luna Conversation desk", () => {
         payload: { paths: [path], position: { x: 40, y: 40 } },
       }), documentPath);
     };
+    const getLatestArrivalState = () => $(".messages > .document-arrival:last-child > div > p");
 
     await attachMatchingDocument();
-    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    let latestArrivalState = getLatestArrivalState();
+    await expect(latestArrivalState).toHaveText("Needs Cloud Assistance choice");
     await attachMatchingDocument();
-    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs duplicate decision");
+    latestArrivalState = getLatestArrivalState();
+    await expect(latestArrivalState).toHaveText("Needs duplicate decision");
     await expect($("section[aria-label^='Duplicate review for']")).toBeDisplayed();
     await expect($("section[aria-label^='Duplicate review for']")).toHaveText(expect.stringContaining("Exact byte duplicate"));
     await expect($("button=Keep both")).toBeDisplayed();
@@ -265,9 +269,105 @@ describe("Luna Conversation desk", () => {
     await expect($("button=Updated version")).toBeDisplayed();
     await $("button=Keep both").click();
     await expect($("[aria-label='Duplicate resolution']")).toHaveText(expect.stringContaining("Kept both Originals"));
-    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Needs your direction");
+    latestArrivalState = getLatestArrivalState();
+    await expect(latestArrivalState).toHaveText("Needs your direction");
     await $("button[aria-label='History']").click();
     await expect($(".duplicate-history-event strong")).toHaveText("Duplicate decision recorded");
     await expect($(".duplicate-history-event small")).toHaveText(expect.stringContaining("kept both Originals"));
+  });
+
+  it("completes one-time, reusable, revoked, and local-only consent choices", async () => {
+    await onboardTestHousehold();
+    await $("button[aria-label='Luna']").click();
+    await $("button[aria-label='New conversation']").click();
+
+    const attach = async (kind: string) => {
+      const arrivalSelector = ".messages > .document-arrival";
+      const initialArrivalCount = await $$(arrivalSelector).length;
+      const documentPath = await browser.tauri.execute(({ core }, selectedKind) => (
+        core.invoke("select_e2e_context_document_file", { kind: selectedKind })
+      ), kind) as string;
+      await browser.execute((path) => (
+        window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke(command: string, args: object): Promise<void>;
+          };
+        }
+      ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+        event: "tauri://drag-drop",
+        payload: { paths: [path], position: { x: 40, y: 40 } },
+      }), documentPath);
+      await browser.waitUntil(async () => {
+        const currentArrivalCount = await $$(arrivalSelector).length;
+        return currentArrivalCount > initialArrivalCount
+          || await $("[role='alert']").isExisting();
+      }, {
+        timeout: 60_000,
+        timeoutMsg: `The ${kind} test document was neither attached nor rejected.`,
+      });
+      const attachmentError = $("[role='alert']");
+      if (await attachmentError.isExisting()) {
+        throw new Error(`The ${kind} test document was rejected: ${await attachmentError.getText()}`);
+      }
+      const arrivals = await $$(arrivalSelector);
+      const arrivalCount = await arrivals.length;
+      const arrival = arrivals[arrivalCount - 1];
+      await expect(arrival).toBeDisplayed();
+      const keepBoth = arrival.$("button=Keep both");
+      if (await keepBoth.isExisting()) {
+        await keepBoth.click();
+      }
+      const reviewCloudAssistance = arrival.$("button=Review Cloud Assistance");
+      if (await reviewCloudAssistance.isExisting()) {
+        await reviewCloudAssistance.click();
+      }
+      return arrival;
+    };
+
+    let arrival = await attach("cloud-scope");
+    let assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await expect(assistance).toHaveText(expect.stringContaining(
+      "Reusable scope: future difficult application/pdf Documents with the same currently displayed local context values and disclosed fields.",
+    ));
+    await assistance.$("button=Allow this scoped future use").click();
+    await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
+
+    arrival = await attach("cloud-reuse");
+    assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await expect(assistance.$("button=Use existing Consent Grant")).toBeDisplayed();
+    await assistance.$("button=Use existing Consent Grant").click();
+    await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
+
+    await $("button[aria-label='Options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    const cloudOptions = $("section[aria-label='Cloud assistance']");
+    await expect(cloudOptions).toHaveText(expect.stringContaining("Managed access ready"));
+    await expect(cloudOptions).toHaveText(expect.stringContaining("You never need to enter a Luna access key"));
+    const byokConnection = cloudOptions.$("section[aria-label='OpenAI bring-your-own-key connection']");
+    await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
+    const providerKey = byokConnection.$("input[type='password']");
+    await providerKey.setValue("sk-e2e-customer-provider-key");
+    await byokConnection.$("button=Test and connect").click();
+    await expect(byokConnection).toHaveText(expect.stringContaining("Connected"));
+    await providerKey.setValue("sk-e2e-replacement-provider-key");
+    await byokConnection.$("button=Test and replace").click();
+    await expect(byokConnection).toHaveText(expect.stringContaining("Connected"));
+    await byokConnection.$("button=Remove key").click();
+    await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
+    const reusableGrant = $(".consent-scope-list li");
+    await expect(reusableGrant).toHaveText(expect.stringContaining("Active"));
+    await reusableGrant.$("button=Revoke").click();
+    await expect(reusableGrant).toHaveText(expect.stringContaining("Revoked"));
+
+    await $("button[aria-label='Luna']").click();
+    arrival = await attach("cloud-once");
+    assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await assistance.$("button=Allow once").click();
+    await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
+
+    arrival = await attach("cloud-local");
+    assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await assistance.$("button=Keep local").click();
+    await expect(assistance).toHaveText(expect.stringContaining("Kept local"));
   });
 });

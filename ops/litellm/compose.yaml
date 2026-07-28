@@ -1,0 +1,111 @@
+name: luna-litellm
+
+services:
+  gateway:
+    image: ghcr.io/berriai/litellm-database:v1.93.0@sha256:72360d8bd5602faa49be5098a8ac3dd069d9fb74503d6bd014242d96dc753e43
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LUNA_LITELLM_PORT:-4000}:4000"
+    environment:
+      OPENAI_API_KEY: "${OPENAI_API_KEY:?Inject OPENAI_API_KEY from the staging secret manager}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?Inject LITELLM_MASTER_KEY from the staging secret manager}"
+      DATABASE_URL: "${DATABASE_URL:?Inject DATABASE_URL from the staging secret manager}"
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /app/config.yaml
+        read_only: true
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - ingress
+      - private
+
+  byok-gateway:
+    image: ghcr.io/berriai/litellm-database:v1.93.0@sha256:72360d8bd5602faa49be5098a8ac3dd069d9fb74503d6bd014242d96dc753e43
+    command: ["--config", "/app/byok-config.yaml", "--port", "4000"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LUNA_LITELLM_BYOK_PORT:-4001}:4000"
+    environment:
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?Inject LITELLM_MASTER_KEY from the staging secret manager}"
+      DATABASE_URL: "${DATABASE_URL:?Inject DATABASE_URL from the staging secret manager}"
+    volumes:
+      - type: bind
+        source: ./byok-config.yaml
+        target: /app/byok-config.yaml
+        read_only: true
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - ingress
+      - private
+
+  database:
+    image: postgres:16@sha256:fe03a7605299a34ddf5e4f285dff78c3d7190a576b3c6b46f2fcff69f4bffd54
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: "${LITELLM_DATABASE_PASSWORD:?Inject LITELLM_DATABASE_PASSWORD from the staging secret manager}"
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+
+networks:
+  ingress:
+  private:
+    internal: true
+
+volumes:
+  database-data:

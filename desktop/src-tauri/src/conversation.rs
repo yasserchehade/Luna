@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cabinet::ensure_incoming_folder;
+use crate::intelligence::CandidateDirectionInterpretation;
 use crate::trusted_device::{
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -32,11 +33,13 @@ pub struct Conversation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DocumentProcessingState {
+    NeedsCloudConsent,
+    InspectingWithAssistance,
+    WaitingForCloudAssistance,
     NeedsMemberDirection,
     PossibleDuplicate,
     ReadyToFile,
     Filing,
-    WaitingForConnectivity,
     CabinetUnavailable,
     Filed,
     Dismissed,
@@ -591,6 +594,8 @@ pub enum ConversationError {
     DuplicateDecisionUnavailable,
     #[error("Household Context must be resolved before confirming a Filing Decision.")]
     UnresolvedContext,
+    #[error("The candidate Direction Interpretation violates Document Handling constraints.")]
+    InvalidDirectionInterpretation,
     #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
     InvalidCabinetDestination,
     #[error("The selected document is unavailable.")]
@@ -865,6 +870,14 @@ impl<V: CredentialVault> ConversationStore<V> {
             &*self.local_ocr,
         );
         let context_direction = local_context_direction(extracted_text.as_deref());
+        let processing_state = if local_evidence_needs_direction_interpretation(
+            extracted_text.as_deref(),
+            &context_direction,
+        ) {
+            DocumentProcessingState::NeedsCloudConsent
+        } else {
+            DocumentProcessingState::NeedsMemberDirection
+        };
         let mut payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
             original_path,
@@ -872,7 +885,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             checksum,
             media_type: media_type.to_owned(),
             extracted_text,
-            processing_state: DocumentProcessingState::NeedsMemberDirection,
+            processing_state,
             context_direction,
             filing_decision: None,
             learned_rule: None,
@@ -891,11 +904,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             )?;
             connection.last_insert_rowid()
         };
-        if let Some(duplicate_review) = self.find_duplicate_review(
-            household_id,
-            arrival_id,
-            &payload,
-        )? {
+        if let Some(duplicate_review) =
+            self.find_duplicate_review(household_id, arrival_id, &payload)?
+        {
             payload.processing_state = DocumentProcessingState::PossibleDuplicate;
             payload.duplicate_review = Some(duplicate_review);
             self.save_document_arrival_payload(
@@ -904,10 +915,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                 conversation_id,
                 payload.clone(),
             )?;
-            if let Some(preference) = self.matching_duplicate_preference(
-                household_id,
-                &payload,
-            )? {
+            if let Some(preference) = self.matching_duplicate_preference(household_id, &payload)? {
                 return self.resolve_duplicate_internal(
                     household_id,
                     arrival_id,
@@ -1030,6 +1038,124 @@ impl<V: CredentialVault> ConversationStore<V> {
             .collect()
     }
 
+    pub fn begin_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[
+                DocumentProcessingState::NeedsCloudConsent,
+                DocumentProcessingState::WaitingForCloudAssistance,
+                DocumentProcessingState::NeedsMemberDirection,
+            ],
+            DocumentProcessingState::InspectingWithAssistance,
+        )
+    }
+
+    pub fn keep_document_local(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[
+                DocumentProcessingState::NeedsCloudConsent,
+                DocumentProcessingState::WaitingForCloudAssistance,
+                DocumentProcessingState::InspectingWithAssistance,
+            ],
+            DocumentProcessingState::NeedsMemberDirection,
+        )
+    }
+
+    pub fn complete_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[DocumentProcessingState::InspectingWithAssistance],
+            DocumentProcessingState::NeedsMemberDirection,
+        )
+    }
+
+    pub fn wait_for_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<DocumentArrival, ConversationError> {
+        self.transition_cloud_assistance(
+            household_id,
+            arrival_id,
+            &[DocumentProcessingState::InspectingWithAssistance],
+            DocumentProcessingState::WaitingForCloudAssistance,
+        )
+    }
+
+    pub fn validate_candidate_direction(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        candidate: CandidateDirectionInterpretation,
+    ) -> Result<CandidateDirectionInterpretation, ConversationError> {
+        let (_, payload) = self.load_document_arrival_payload(household_id, arrival_id)?;
+        if payload.processing_state != DocumentProcessingState::InspectingWithAssistance {
+            return Err(ConversationError::InvalidDirectionInterpretation);
+        }
+        let unresolved_fields = clarification_questions(&payload.context_direction)
+            .into_iter()
+            .map(|question| question.field)
+            .collect::<Vec<_>>();
+        let candidate_fields = [
+            (
+                ContextField::DocumentType,
+                candidate.document_type.is_some(),
+            ),
+            (
+                ContextField::ServiceProvider,
+                candidate.service_provider.is_some(),
+            ),
+            (ContextField::Addressee, candidate.addressee.is_some()),
+            (ContextField::Property, candidate.property.is_some()),
+            (ContextField::Account, candidate.account.is_some()),
+            (ContextField::Amount, candidate.amount.is_some()),
+            (
+                ContextField::RelevantDates,
+                !candidate.relevant_dates.is_empty(),
+            ),
+        ];
+        if candidate_fields.iter().any(|(field, supplied)| {
+            *supplied
+                && !unresolved_fields
+                    .iter()
+                    .any(|unresolved| unresolved == field)
+        }) {
+            return Err(ConversationError::InvalidDirectionInterpretation);
+        }
+        Ok(CandidateDirectionInterpretation {
+            document_type: valid_candidate_value(candidate.document_type)?,
+            service_provider: valid_candidate_value(candidate.service_provider)?,
+            addressee: valid_candidate_value(candidate.addressee)?,
+            property: valid_candidate_value(candidate.property)?,
+            account: valid_candidate_value(candidate.account)?,
+            amount: valid_candidate_amount(candidate.amount)?,
+            relevant_dates: candidate
+                .relevant_dates
+                .into_iter()
+                .map(valid_candidate_date)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
+        })
+    }
+
     pub fn list_todo_items(&self, household_id: &str) -> Result<Vec<TodoItem>, ConversationError> {
         let arrivals = self.list_document_arrivals(household_id)?;
         arrivals
@@ -1037,9 +1163,11 @@ impl<V: CredentialVault> ConversationStore<V> {
             .filter(|arrival| {
                 matches!(
                     arrival.processing_state,
-                    DocumentProcessingState::NeedsMemberDirection
+                    DocumentProcessingState::NeedsCloudConsent
+                        | DocumentProcessingState::InspectingWithAssistance
+                        | DocumentProcessingState::WaitingForCloudAssistance
+                        | DocumentProcessingState::NeedsMemberDirection
                         | DocumentProcessingState::PossibleDuplicate
-                        | DocumentProcessingState::WaitingForConnectivity
                         | DocumentProcessingState::CabinetUnavailable
                 )
             })
@@ -1433,7 +1561,12 @@ impl<V: CredentialVault> ConversationStore<V> {
         let mut payload: DocumentArrivalPayload =
             self.open_protected(household_id, &protected.ok_or(ConversationError::NotFound)?)?;
         payload.restore_legacy_original_path();
-        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+        if !matches!(
+            payload.processing_state,
+            DocumentProcessingState::NeedsCloudConsent
+                | DocumentProcessingState::WaitingForCloudAssistance
+                | DocumentProcessingState::NeedsMemberDirection
+        ) {
             return Err(ConversationError::NotFound);
         }
         payload.processing_state = DocumentProcessingState::Dismissed;
@@ -1445,34 +1578,6 @@ impl<V: CredentialVault> ConversationStore<V> {
         )
     }
 
-    pub fn mark_waiting_for_connectivity(
-        &self,
-        household_id: &str,
-        arrival_id: i64,
-    ) -> Result<DocumentArrival, ConversationError> {
-        let (conversation_id, mut payload) =
-            self.load_document_arrival_payload(household_id, arrival_id)?;
-        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
-            return Err(ConversationError::NotFound);
-        }
-        payload.processing_state = DocumentProcessingState::WaitingForConnectivity;
-        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
-    }
-
-    pub fn resume_waiting_for_connectivity(
-        &self,
-        household_id: &str,
-        arrival_id: i64,
-    ) -> Result<DocumentArrival, ConversationError> {
-        let (conversation_id, mut payload) =
-            self.load_document_arrival_payload(household_id, arrival_id)?;
-        if payload.processing_state != DocumentProcessingState::WaitingForConnectivity {
-            return Err(ConversationError::NotFound);
-        }
-        payload.processing_state = DocumentProcessingState::NeedsMemberDirection;
-        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
-    }
-
     pub fn record_member_direction(
         &self,
         household_id: &str,
@@ -1482,9 +1587,15 @@ impl<V: CredentialVault> ConversationStore<V> {
     ) -> Result<DocumentArrival, ConversationError> {
         let (conversation_id, mut payload) =
             self.load_document_arrival_payload(household_id, arrival_id)?;
-        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
+        if !matches!(
+            payload.processing_state,
+            DocumentProcessingState::NeedsCloudConsent
+                | DocumentProcessingState::WaitingForCloudAssistance
+                | DocumentProcessingState::NeedsMemberDirection
+        ) {
             return Err(ConversationError::NotFound);
         }
+        payload.processing_state = DocumentProcessingState::NeedsMemberDirection;
         payload.context_direction = direction.normalized();
         payload.filing_decision = clarification_questions(&payload.context_direction)
             .is_empty()
@@ -1850,7 +1961,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             .collect::<Result<Vec<_>, _>>()?;
         protected_rows
             .into_iter()
-            .map(|protected| self.open_protected::<DuplicatePreferencePayload>(household_id, &protected))
+            .map(|protected| {
+                self.open_protected::<DuplicatePreferencePayload>(household_id, &protected)
+            })
             .find_map(|result| match result {
                 Ok(preference)
                     if preference.checksum == payload.checksum
@@ -1955,7 +2068,9 @@ impl<V: CredentialVault> ConversationStore<V> {
             DuplicateDecision::KeepBoth => "kept both Originals",
             DuplicateDecision::LinkCopies => "linked both Originals without filing the new copy",
             DuplicateDecision::DiscardNew => "discarded the new duplicate Original",
-            DuplicateDecision::UpdatedVersion => "kept both Originals and marked the new copy as an updated version",
+            DuplicateDecision::UpdatedVersion => {
+                "kept both Originals and marked the new copy as an updated version"
+            }
         };
         let protected = self.protect(
             household_id,
@@ -2244,6 +2359,22 @@ impl<V: CredentialVault> ConversationStore<V> {
             return Err(ConversationError::NotFound);
         }
         Ok(())
+    }
+
+    fn transition_cloud_assistance(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+        allowed_from: &[DocumentProcessingState],
+        next: DocumentProcessingState,
+    ) -> Result<DocumentArrival, ConversationError> {
+        let (conversation_id, mut payload) =
+            self.load_document_arrival_payload(household_id, arrival_id)?;
+        if !allowed_from.contains(&payload.processing_state) {
+            return Err(ConversationError::NotFound);
+        }
+        payload.processing_state = next;
+        self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
     }
 
     fn connect(&self) -> rusqlite::Result<Connection> {
@@ -2637,13 +2768,19 @@ fn possible_duplicate(
     if existing.media_type != incoming.media_type || existing.checksum == incoming.checksum {
         return false;
     }
-    if !existing.original_name.eq_ignore_ascii_case(&incoming.original_name) {
+    if !existing
+        .original_name
+        .eq_ignore_ascii_case(&incoming.original_name)
+    {
         return false;
     }
     let existing_context = &existing.context_direction;
     let incoming_context = &incoming.context_direction;
     let core_context_matches = [
-        (&existing_context.document_type, &incoming_context.document_type),
+        (
+            &existing_context.document_type,
+            &incoming_context.document_type,
+        ),
         (
             &existing_context.service_provider,
             &incoming_context.service_provider,
@@ -2652,11 +2789,13 @@ fn possible_duplicate(
     ]
     .into_iter()
     .all(|(left, right)| left.is_some() && left == right);
-    let subject_matches = existing_context.property.as_ref().is_some_and(|property| {
-        incoming_context.property.as_deref() == Some(property.as_str())
-    }) || existing_context.account.as_ref().is_some_and(|account| {
-        incoming_context.account.as_deref() == Some(account.as_str())
-    });
+    let subject_matches =
+        existing_context.property.as_ref().is_some_and(|property| {
+            incoming_context.property.as_deref() == Some(property.as_str())
+        }) || existing_context
+            .account
+            .as_ref()
+            .is_some_and(|account| incoming_context.account.as_deref() == Some(account.as_str()));
     core_context_matches && subject_matches
 }
 
@@ -2800,6 +2939,106 @@ fn clarification_questions(context: &DocumentContextDirection) -> Vec<Clarificat
         });
     }
     questions
+}
+
+fn local_evidence_needs_direction_interpretation(
+    extracted_text: Option<&str>,
+    context: &DocumentContextDirection,
+) -> bool {
+    let has_content_to_minimise = extracted_text.is_some_and(|text| !text.trim().is_empty());
+    has_content_to_minimise
+        && clarification_questions(context).iter().any(|question| {
+            matches!(
+                question.field,
+                ContextField::DocumentType
+                    | ContextField::ServiceProvider
+                    | ContextField::Addressee
+                    | ContextField::Property
+                    | ContextField::Account
+            )
+        })
+}
+
+fn valid_candidate_value(value: Option<String>) -> Result<Option<String>, ConversationError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 512
+        || value
+            .chars()
+            .any(|character| character.is_control() && !character.is_whitespace())
+    {
+        return Err(ConversationError::InvalidDirectionInterpretation);
+    }
+    Ok(Some(value))
+}
+
+fn valid_candidate_amount(value: Option<String>) -> Result<Option<String>, ConversationError> {
+    let Some(value) = valid_candidate_value(value)? else {
+        return Ok(None);
+    };
+    let currency_code = value
+        .chars()
+        .filter(|character| character.is_ascii_alphabetic())
+        .collect::<String>();
+    let characters_are_monetary = value.chars().all(|character| {
+        character.is_ascii_digit()
+            || character.is_ascii_whitespace()
+            || matches!(
+                character,
+                '.' | ',' | '+' | '-' | '(' | ')' | '$' | '£' | '€' | '¥' | '₹'
+            )
+            || character.is_ascii_uppercase()
+    });
+    if !value.chars().any(|character| character.is_ascii_digit())
+        || !characters_are_monetary
+        || (!currency_code.is_empty() && currency_code.len() != 3)
+    {
+        return Err(ConversationError::InvalidDirectionInterpretation);
+    }
+    Ok(Some(value))
+}
+
+fn valid_candidate_date(value: String) -> Result<Option<String>, ConversationError> {
+    let Some(value) = valid_candidate_value(Some(value))? else {
+        return Ok(None);
+    };
+    if !valid_iso_calendar_date(&value) {
+        return Err(ConversationError::InvalidDirectionInterpretation);
+    }
+    Ok(Some(value))
+}
+
+fn valid_iso_calendar_date(value: &str) -> bool {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return false;
+    }
+    let Ok(year) = value[0..4].parse::<u32>() else {
+        return false;
+    };
+    let Ok(month) = value[5..7].parse::<u32>() else {
+        return false;
+    };
+    let Ok(day) = value[8..10].parse::<u32>() else {
+        return false;
+    };
+    let leap_year =
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days_in_month).contains(&day)
 }
 
 fn propose_filing_decision(

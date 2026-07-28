@@ -1,0 +1,57 @@
+name: Full desktop validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "ops/litellm/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/full-desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "ops/litellm/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/full-desktop.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-full-application:
+    name: Verify full application on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: full-desktop
+          workspaces: "desktop/src-tauri -> target"
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - run: node --test ops/litellm/canary.test.mjs ops/litellm/byok-canary.test.mjs
+      - run: pnpm --filter luna-desktop test
+      - run: pnpm --filter luna-desktop typecheck
+      - run: pnpm --filter luna-desktop test:e2e
+      - run: pnpm --filter luna-desktop tauri build --no-bundle
