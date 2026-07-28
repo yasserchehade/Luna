@@ -1,8 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -110,6 +110,20 @@ pub enum PortableFilingRuleState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PortableFilingRuleDefinition {
+    pub document_type: String,
+    pub service_provider: String,
+    pub addressee: String,
+    pub property: Option<String>,
+    pub account: Option<String>,
+    pub file_name: String,
+    pub cabinet_destination: String,
+    pub taught_by: PortableReference,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PortableDocumentRelationshipKind {
     ExactDuplicate,
     LinkedCopy,
@@ -143,6 +157,25 @@ pub enum PortableConsentProvider {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum PortableIntelligenceCapability {
+    DirectionInterpretation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortableConsentGrantKind {
+    OneTime,
+    Reusable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortableConsentPurpose {
+    DocumentEvaluation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PortableConsentState {
     AllowedOnce,
     Granted,
@@ -154,7 +187,7 @@ pub enum PortableConsentState {
 #[serde(rename_all = "camelCase")]
 pub enum PortableExecutionOutcomeKind {
     FiledAndVerified,
-    WaitingForConnectivity,
+    WaitingForCloudAssistance,
     CabinetUnavailable,
     ProviderUnavailable,
     Failed,
@@ -178,11 +211,25 @@ pub struct PortableConsentScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableConsentDetails {
+    pub model_id: String,
+    pub capability: PortableIntelligenceCapability,
+    pub purpose: PortableConsentPurpose,
+    pub kind: PortableConsentGrantKind,
+    pub granted_by: PortableReference,
+    pub created_at: String,
+    pub consumed_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PortableFact {
     FilingRule {
         rule_reference: PortableReference,
         state: PortableFilingRuleState,
+        definition: PortableFilingRuleDefinition,
     },
     DocumentRelationship {
         document_reference: PortableReference,
@@ -203,6 +250,7 @@ pub enum PortableFact {
         provider: PortableConsentProvider,
         scope: PortableConsentScope,
         state: PortableConsentState,
+        details: PortableConsentDetails,
     },
     ExecutionOutcome {
         subject_reference: PortableReference,
@@ -272,7 +320,8 @@ pub struct PortableAuthorizationCutoff {
     pub event_digest: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PortableConflict {
     pub id: i64,
     pub subject_reference: String,
@@ -284,6 +333,19 @@ pub struct PortableConflict {
 pub struct PortableImportReport {
     pub imported: usize,
     pub duplicates: usize,
+    pub conflicts: Vec<PortableConflict>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableHouseholdProjection {
+    pub filing_rules: Vec<PortableEvent>,
+    pub document_relationships: Vec<PortableEvent>,
+    pub member_directions: Vec<PortableEvent>,
+    pub authority_grants: Vec<PortableEvent>,
+    pub consent_grants: Vec<PortableEvent>,
+    pub execution_outcomes: Vec<PortableEvent>,
+    pub audit_events: Vec<PortableEvent>,
     pub conflicts: Vec<PortableConflict>,
 }
 
@@ -443,14 +505,13 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
         draft: PortableEventDraft,
     ) -> Result<PortableEvent, PortableMemoryError> {
         validate_draft(&draft)?;
-        let event_area = event_area(cabinet_root.as_ref())?;
         let signer_device_id = self
             .trusted_device
             .current_device_public_key(household_id)?;
-        let path = event_area.join(format!(
+        let record_name = format!(
             "{}.{PORTABLE_EVENT_EXTENSION}",
             sha256_hex(draft.event_id.as_bytes())
-        ));
+        );
         let mut connection = self.connect()?;
         let existing: Option<(u32, String, Option<Vec<u8>>)> = connection
             .query_row(
@@ -471,6 +532,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             if event.signer_device_id != signer_device_id || !event_matches_draft(&event, &draft) {
                 return Err(PortableMemoryError::RecordConflict);
             }
+            let path = event_area(cabinet_root.as_ref())?.join(record_name);
             append_create_only(&path, &record)?;
             return Ok(event);
         }
@@ -537,6 +599,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
         )?;
         advance_subject_head(&transaction, &event, false)?;
         transaction.commit()?;
+        let path = event_area(cabinet_root.as_ref())?.join(record_name);
         append_create_only(&path, &record)?;
         Ok(event)
     }
@@ -547,14 +610,12 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
         cabinet_root: impl AsRef<Path>,
         trusted_devices: &[TrustedDeviceAuthorization],
     ) -> Result<PortableImportReport, PortableMemoryError> {
-        let event_area = cabinet_root
-            .as_ref()
-            .join(PORTABLE_MEMORY_DIRECTORY)
-            .join(format!("v{PORTABLE_MEMORY_VERSION}"))
-            .join("events");
-        if !event_area.is_dir() {
-            return Ok(PortableImportReport::default());
+        let cabinet_root = cabinet_root.as_ref();
+        if !cabinet_root.is_dir() {
+            return Err(PortableMemoryError::CabinetUnavailable);
         }
+        let event_area = event_area(cabinet_root)?;
+        self.deliver_local_records(household_id, &event_area)?;
         let trusted_devices = trusted_devices
             .iter()
             .map(|device| (device.device_id.as_str(), device))
@@ -765,6 +826,51 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             .transpose()
     }
 
+    pub fn household_projection(
+        &self,
+        household_id: &str,
+    ) -> Result<PortableHouseholdProjection, PortableMemoryError> {
+        let events = self.list_events(household_id)?;
+        let conflicts = self.list_conflicts(household_id)?;
+        let conflicted_subjects = self.conflicted_projection_subjects(household_id, &conflicts)?;
+        let heads = self.subject_head_event_ids(household_id)?;
+        let is_current = |event: &PortableEvent| {
+            portable_subject_reference(&event.fact).is_some_and(|subject| {
+                !conflicted_subjects.contains(&subject)
+                    && heads.get(&subject) == Some(&event.event_id)
+            })
+        };
+        let mut projection = PortableHouseholdProjection {
+            conflicts,
+            ..PortableHouseholdProjection::default()
+        };
+        for event in events {
+            match &event.fact {
+                PortableFact::FilingRule { .. } if is_current(&event) => {
+                    projection.filing_rules.push(event)
+                }
+                PortableFact::DocumentRelationship { .. } if is_current(&event) => {
+                    projection.document_relationships.push(event)
+                }
+                PortableFact::AuthorityGrant { .. } if is_current(&event) => {
+                    projection.authority_grants.push(event)
+                }
+                PortableFact::ConsentGrant { .. } if is_current(&event) => {
+                    projection.consent_grants.push(event)
+                }
+                PortableFact::MemberDirection { .. } => projection.member_directions.push(event),
+                PortableFact::ExecutionOutcome { .. } => projection.execution_outcomes.push(event),
+                PortableFact::AuditEvent { .. } => projection.audit_events.push(event),
+                PortableFact::FilingRule { .. }
+                | PortableFact::DocumentRelationship { .. }
+                | PortableFact::AuthorityGrant { .. }
+                | PortableFact::ConsentGrant { .. }
+                | PortableFact::ConflictResolution { .. } => {}
+            }
+        }
+        Ok(projection)
+    }
+
     fn import_event(
         &self,
         event: &PortableEvent,
@@ -797,6 +903,78 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
 
     fn connect(&self) -> Result<Connection, PortableMemoryError> {
         Ok(Connection::open(&self.database)?)
+    }
+
+    fn subject_head_event_ids(
+        &self,
+        household_id: &str,
+    ) -> Result<HashMap<String, String>, PortableMemoryError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT subject_reference, event_id FROM portable_subject_heads
+              WHERE household_id = ?1",
+        )?;
+        let heads = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(heads)
+    }
+
+    fn deliver_local_records(
+        &self,
+        household_id: &str,
+        event_area: &Path,
+    ) -> Result<(), PortableMemoryError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT event_id, portable_record FROM portable_events
+              WHERE household_id = ?1 AND portable_record IS NOT NULL
+              ORDER BY signer_device_id, sequence",
+        )?;
+        let records = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (event_id, record) in records {
+            let path = event_area.join(format!(
+                "{}.{PORTABLE_EVENT_EXTENSION}",
+                sha256_hex(event_id.as_bytes())
+            ));
+            append_create_only(&path, &record)?;
+        }
+        Ok(())
+    }
+
+    fn conflicted_projection_subjects(
+        &self,
+        household_id: &str,
+        conflicts: &[PortableConflict],
+    ) -> Result<HashSet<String>, PortableMemoryError> {
+        let connection = self.connect()?;
+        let mut subjects = HashSet::new();
+        for conflict in conflicts {
+            subjects.insert(conflict.subject_reference.clone());
+            for resolution_event_id in [
+                conflict.existing_event_id.as_str(),
+                conflict.conflicting_event_id.as_str(),
+            ] {
+                let resolved_subject: Option<String> = connection
+                    .query_row(
+                        "SELECT subject_reference FROM portable_resolution_choices
+                          WHERE household_id = ?1 AND resolution_event_id = ?2",
+                        params![household_id, resolution_event_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(resolved_subject) = resolved_subject {
+                    subjects.insert(resolved_subject);
+                }
+            }
+        }
+        Ok(subjects)
     }
 }
 
@@ -1168,7 +1346,15 @@ fn valid_conversation_reference(reference: &Option<PortableConversationReference
 
 fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
     match fact {
-        PortableFact::FilingRule { rule_reference, .. } => rule_reference.kind() == "filing-rule",
+        PortableFact::FilingRule {
+            rule_reference,
+            definition,
+            ..
+        } => {
+            rule_reference.kind() == "filing-rule"
+                && definition.taught_by.kind() == "subject"
+                && valid_filing_rule_definition(definition)
+        }
         PortableFact::DocumentRelationship {
             document_reference,
             related_document_reference,
@@ -1192,9 +1378,21 @@ fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
         PortableFact::ConsentGrant {
             grant_reference,
             scope,
+            details,
             ..
         } => {
             grant_reference.kind() == "grant"
+                && details.granted_by.kind() == "subject"
+                && valid_portable_identifier(&details.model_id)
+                && valid_portable_timestamp(&details.created_at)
+                && details
+                    .consumed_at
+                    .as_deref()
+                    .is_none_or(valid_portable_timestamp)
+                && details
+                    .revoked_at
+                    .as_deref()
+                    .is_none_or(valid_portable_timestamp)
                 && scope
                     .document_type
                     .as_ref()
@@ -1230,6 +1428,66 @@ fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
                 && chosen_event_id.kind() == "event"
         }
     }
+}
+
+fn valid_filing_rule_definition(definition: &PortableFilingRuleDefinition) -> bool {
+    let destination = Path::new(&definition.cabinet_destination);
+    portable_text(&definition.document_type, 128)
+        && portable_text(&definition.service_provider, 128)
+        && portable_text(&definition.addressee, 128)
+        && definition
+            .property
+            .as_deref()
+            .is_none_or(|value| portable_text(value, 256))
+        && definition
+            .account
+            .as_deref()
+            .is_none_or(|value| portable_text(value, 128))
+        && portable_text(&definition.file_name, 255)
+        && !definition.file_name.contains(['/', '\\'])
+        && portable_text(&definition.cabinet_destination, 1024)
+        && destination.is_relative()
+        && destination
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+        && destination
+            .file_name()
+            .is_some_and(|value| value == definition.file_name.as_str())
+        && valid_portable_timestamp(&definition.created_at)
+}
+
+fn portable_text(value: &str, maximum_length: usize) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= maximum_length
+        && !value.contains(['\0', '\r', '\n'])
+        && !looks_like_sensitive_material(value)
+}
+
+fn valid_portable_identifier(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
+        && !looks_like_sensitive_material(value)
+}
+
+fn looks_like_sensitive_material(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    [
+        "bearer ",
+        "api_key",
+        "api-key",
+        "private key",
+        "begin private",
+        "token=",
+        "secret=",
+        "sk-",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker))
 }
 
 fn event_matches_draft(event: &PortableEvent, draft: &PortableEventDraft) -> bool {
@@ -1580,6 +1838,21 @@ mod tests {
         }
     }
 
+    fn filing_rule_definition() -> PortableFilingRuleDefinition {
+        PortableFilingRuleDefinition {
+            document_type: "Electricity bill".to_owned(),
+            service_provider: "AGL".to_owned(),
+            addressee: "Sam Rivera".to_owned(),
+            property: Some("12 Seabreeze Avenue".to_owned()),
+            account: Some("12345678".to_owned()),
+            file_name: "2026-07-15 - AGL bill.pdf".to_owned(),
+            cabinet_destination:
+                "Bills & Services/12 Seabreeze Avenue/AGL/2026/2026-07-15 - AGL bill.pdf".to_owned(),
+            taught_by: reference("subject", 8),
+            created_at: "2026-07-24T17:31:00+10:00".to_owned(),
+        }
+    }
+
     #[test]
     fn revocation_cutoff_and_device_chain_reject_key_epoch_rollback() {
         let authorization = TrustedDeviceAuthorization {
@@ -1626,6 +1899,7 @@ mod tests {
         assert!(!valid_fact_reference_kinds(&PortableFact::FilingRule {
             rule_reference: reference("message", 1),
             state: PortableFilingRuleState::Active,
+            definition: filing_rule_definition(),
         }));
         assert!(!valid_conversation_reference(&Some(
             PortableConversationReference {

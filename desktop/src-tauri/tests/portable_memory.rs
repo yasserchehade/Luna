@@ -7,10 +7,13 @@ use std::{
 
 use luna_core::{
     CredentialVault, PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
-    PortableConflictResolutionDraft, PortableConversationReference, PortableEventDraft,
-    PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleState, PortableMemoryError,
-    PortableMemoryStore, PortableReference, TrustedDeviceAuthorization, TrustedDeviceManager,
-    VaultError,
+    PortableConflictResolutionDraft, PortableConsentDetails, PortableConsentGrantKind,
+    PortableConsentProvider, PortableConsentPurpose, PortableConsentScope, PortableConsentState,
+    PortableConversationReference, PortableDocumentRelationshipKind, PortableEvent,
+    PortableEventDraft, PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
+    PortableFilingRuleState, PortableIntelligenceCapability, PortableMemberDirectionKind,
+    PortableMemoryError, PortableMemoryStore, PortableReference, TrustedDeviceAuthorization,
+    TrustedDeviceManager, VaultError,
 };
 use sha2::{Digest, Sha256};
 
@@ -89,6 +92,57 @@ fn uuid_for(value: &str) -> String {
 
 fn filing_rule_subject(value: &str) -> String {
     format!("filingRule:{}", reference(value))
+}
+
+fn typed_reference(kind: &str, value: &str) -> PortableReference {
+    PortableReference::new(format!("{kind}:{}", uuid_for(value)))
+        .expect("test references should satisfy the portable schema")
+}
+
+fn filing_rule_definition() -> PortableFilingRuleDefinition {
+    PortableFilingRuleDefinition {
+        document_type: "Electricity bill".to_owned(),
+        service_provider: "AGL".to_owned(),
+        addressee: "Sam Rivera".to_owned(),
+        property: Some("12 Seabreeze Avenue".to_owned()),
+        account: Some("12345678".to_owned()),
+        file_name: "2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf".to_owned(),
+        cabinet_destination:
+            "Bills & Services/12 Seabreeze Avenue/AGL/2026/2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf"
+                .to_owned(),
+        taught_by: PortableReference::new(format!("subject:{}", uuid_for("member-sam")))
+            .expect("construct the teaching Member reference"),
+        created_at: "2026-07-24T17:31:00+10:00".to_owned(),
+    }
+}
+
+fn append_fact(
+    store: &PortableMemoryStore<MemoryCredentialVault>,
+    household_id: &str,
+    cabinet: &Path,
+    name: &str,
+    sequence: u64,
+    previous: Option<&PortableEvent>,
+    fact: PortableFact,
+) -> PortableEvent {
+    store
+        .append(
+            household_id,
+            cabinet,
+            PortableEventDraft {
+                event_id: event_id(name),
+                sequence,
+                previous_event_digest: previous.map(|event| event.digest.clone()),
+                supersedes_event_digest: None,
+                occurred_at: format!("2026-07-24T18:{sequence:02}:00+10:00"),
+                conversation_reference: Some(PortableConversationReference {
+                    conversation_id: reference("conversation-portable-rebuild"),
+                    message_id: typed_reference("message", name),
+                }),
+                fact,
+            },
+        )
+        .expect("append a typed portable fact")
 }
 
 fn enrol_two_devices(
@@ -256,6 +310,216 @@ fn a_recovered_trusted_device_imports_a_signed_encrypted_audit_event() {
 }
 
 #[test]
+fn a_recovered_trusted_device_rebuilds_the_current_filing_rule_projection() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
+    let first_local = tempfile::tempdir().expect("create the first local database directory");
+    let second_local = tempfile::tempdir().expect("create the second local database directory");
+    let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
+    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
+        .expect("open portable memory on the first device");
+    let second_store =
+        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
+            .expect("open portable memory on the recovered device");
+    let rule_reference = reference("filing-rule-electricity");
+
+    let appended = first_store
+        .append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("portable-filing-rule"),
+                sequence: 1,
+                previous_event_digest: None,
+                supersedes_event_digest: None,
+                occurred_at: "2026-07-24T17:32:00+10:00".to_owned(),
+                conversation_reference: Some(PortableConversationReference {
+                    conversation_id: reference("conversation-filing-rule"),
+                    message_id: reference("message-filing-rule"),
+                }),
+                fact: PortableFact::FilingRule {
+                    rule_reference: rule_reference.clone(),
+                    state: PortableFilingRuleState::Active,
+                    definition: PortableFilingRuleDefinition {
+                        document_type: "Electricity bill".to_owned(),
+                        service_provider: "AGL".to_owned(),
+                        addressee: "Sam Rivera".to_owned(),
+                        property: Some("12 Seabreeze Avenue".to_owned()),
+                        account: Some("12345678".to_owned()),
+                        file_name: "2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf"
+                            .to_owned(),
+                        cabinet_destination:
+                            "Bills & Services/12 Seabreeze Avenue/AGL/2026/2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf"
+                                .to_owned(),
+                        taught_by: PortableReference::new(format!(
+                            "subject:{}",
+                            uuid_for("member-sam")
+                        ))
+                        .expect("construct the teaching Member reference"),
+                        created_at: "2026-07-24T17:31:00+10:00".to_owned(),
+                    },
+                },
+            },
+        )
+        .expect("append the portable Filing Rule");
+
+    second_store
+        .import(
+            household_id,
+            cabinet.path(),
+            std::slice::from_ref(&first_authorization),
+        )
+        .expect("import the portable Filing Rule");
+    let projection = second_store
+        .household_projection(household_id)
+        .expect("read the rebuilt Household projection");
+
+    assert_eq!(projection.filing_rules, vec![appended]);
+    assert!(projection.conflicts.is_empty());
+}
+
+#[test]
+fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projections() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
+    let first_local = tempfile::tempdir().expect("create the first local database directory");
+    let second_local = tempfile::tempdir().expect("create the second local database directory");
+    let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
+    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
+        .expect("open portable memory on the first device");
+    let second_store =
+        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
+            .expect("open portable memory on the recovered device");
+    let document = reference("document-primary");
+    let related_document = reference("document-updated");
+    let grant = typed_reference("grant", "consent-denied");
+    let subject = typed_reference("subject", "document-handling");
+
+    let relationship = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-relationship",
+        1,
+        None,
+        PortableFact::DocumentRelationship {
+            document_reference: document.clone(),
+            related_document_reference: related_document,
+            relationship: PortableDocumentRelationshipKind::UpdatedVersion,
+        },
+    );
+    let direction = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-direction",
+        2,
+        Some(&relationship),
+        PortableFact::MemberDirection {
+            direction: PortableMemberDirectionKind::KeepBoth,
+            subject_reference: subject.clone(),
+        },
+    );
+    let authority = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-authority",
+        3,
+        Some(&direction),
+        PortableFact::AuthorityGrant {
+            grant_reference: typed_reference("grant", "authority-file"),
+            subject_reference: subject.clone(),
+            scope: vec![typed_reference("field", "filing-destination")],
+        },
+    );
+    let consent = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-consent",
+        4,
+        Some(&authority),
+        PortableFact::ConsentGrant {
+            grant_reference: grant.clone(),
+            provider: PortableConsentProvider::OpenAi,
+            scope: PortableConsentScope {
+                document_type: Some(typed_reference("document-type", "electricity-bill")),
+                fields: vec![typed_reference("field", "amount")],
+            },
+            state: PortableConsentState::Denied,
+            details: PortableConsentDetails {
+                model_id: "gpt-4.1-mini".to_owned(),
+                capability: PortableIntelligenceCapability::DirectionInterpretation,
+                purpose: PortableConsentPurpose::DocumentEvaluation,
+                kind: PortableConsentGrantKind::OneTime,
+                granted_by: typed_reference("subject", "member-sam"),
+                created_at: "2026-07-24T18:03:30+10:00".to_owned(),
+                consumed_at: None,
+                revoked_at: None,
+            },
+        },
+    );
+    let outcome = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-provider-outcome",
+        5,
+        Some(&consent),
+        PortableFact::ExecutionOutcome {
+            subject_reference: subject,
+            outcome: PortableExecutionOutcomeKind::ProviderUnavailable,
+        },
+    );
+    let offline = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-offline-outcome",
+        6,
+        Some(&outcome),
+        PortableFact::ExecutionOutcome {
+            subject_reference: typed_reference("subject", "offline-document-handling"),
+            outcome: PortableExecutionOutcomeKind::WaitingForCloudAssistance,
+        },
+    );
+    let audit = append_fact(
+        &first_store,
+        household_id,
+        cabinet.path(),
+        "portable-audit",
+        7,
+        Some(&offline),
+        PortableFact::AuditEvent {
+            event_kind: PortableAuditEventKind::ConsentChanged,
+            authority: PortableAuthority::MemberDirection,
+            subject_reference: grant,
+            outcome: PortableExecutionOutcomeKind::Failed,
+        },
+    );
+
+    second_store
+        .import(
+            household_id,
+            cabinet.path(),
+            std::slice::from_ref(&first_authorization),
+        )
+        .expect("import all owning-domain facts");
+    let projection = second_store
+        .household_projection(household_id)
+        .expect("read the rebuilt owning-domain projections");
+
+    assert_eq!(projection.document_relationships, vec![relationship]);
+    assert_eq!(projection.member_directions, vec![direction]);
+    assert_eq!(projection.authority_grants, vec![authority]);
+    assert_eq!(projection.consent_grants, vec![consent]);
+    assert_eq!(projection.execution_outcomes, vec![outcome, offline]);
+    assert_eq!(projection.audit_events, vec![audit]);
+    assert!(projection.conflicts.is_empty());
+}
+
+#[test]
 fn retry_repairs_a_missing_cabinet_record_without_duplicating_local_projection() {
     let household_id = "rivera-household";
     let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
@@ -302,6 +566,140 @@ fn retry_repairs_a_missing_cabinet_record_without_duplicating_local_projection()
 }
 
 #[test]
+fn an_unavailable_cabinet_keeps_the_portable_fact_local_for_exact_retry() {
+    let household_id = "rivera-household";
+    let cabinet_parent = tempfile::tempdir().expect("create a temporary Cabinet parent");
+    let unavailable_cabinet = cabinet_parent.path().join("remembered-cabinet");
+    let local = tempfile::tempdir().expect("create a local database directory");
+    let (first_device, _, _, _) = enrol_two_devices(household_id);
+    let store = PortableMemoryStore::open(local.path().join("luna.db"), first_device)
+        .expect("open portable memory");
+    let draft = PortableEventDraft {
+        event_id: event_id("cabinet-unavailable-event"),
+        sequence: 1,
+        previous_event_digest: None,
+        supersedes_event_digest: None,
+        occurred_at: "2026-07-24T17:40:00+10:00".to_owned(),
+        conversation_reference: None,
+        fact: PortableFact::ExecutionOutcome {
+            subject_reference: PortableReference::new(format!(
+                "subject:{}",
+                uuid_for("cabinet-unavailable-subject")
+            ))
+            .expect("construct the portable subject reference"),
+            outcome: PortableExecutionOutcomeKind::CabinetUnavailable,
+        },
+    };
+
+    assert!(matches!(
+        store.append(household_id, &unavailable_cabinet, draft.clone()),
+        Err(PortableMemoryError::CabinetUnavailable)
+    ));
+    let local_events = store
+        .list_events(household_id)
+        .expect("the unavailable Cabinet must not lose the local fact");
+    assert_eq!(local_events.len(), 1);
+    assert_eq!(local_events[0].event_id, draft.event_id);
+
+    fs::create_dir(&unavailable_cabinet).expect("restore the remembered Cabinet");
+    let delivered = store
+        .append(household_id, &unavailable_cabinet, draft)
+        .expect("retry the exact locally committed record");
+    assert_eq!(delivered, local_events[0]);
+    assert!(only_portable_record(&unavailable_cabinet).len() > 32);
+}
+
+#[test]
+fn import_distinguishes_an_unavailable_cabinet_from_an_empty_memory_area() {
+    let household_id = "rivera-household";
+    let cabinet_parent = tempfile::tempdir().expect("create a temporary Cabinet parent");
+    let unavailable_cabinet = cabinet_parent.path().join("remembered-cabinet");
+    let local = tempfile::tempdir().expect("create a local database directory");
+    let (first_device, _, first_authorization, _) = enrol_two_devices(household_id);
+    let store = PortableMemoryStore::open(local.path().join("luna.db"), first_device)
+        .expect("open portable memory");
+
+    assert!(matches!(
+        store.import(
+            household_id,
+            &unavailable_cabinet,
+            std::slice::from_ref(&first_authorization),
+        ),
+        Err(PortableMemoryError::CabinetUnavailable)
+    ));
+
+    fs::create_dir(&unavailable_cabinet).expect("restore an empty remembered Cabinet");
+    assert_eq!(
+        store
+            .import(
+                household_id,
+                &unavailable_cabinet,
+                std::slice::from_ref(&first_authorization),
+            )
+            .expect("an available Cabinet with no portable records is valid"),
+        Default::default()
+    );
+}
+
+#[test]
+fn synchronization_delivers_a_locally_committed_fact_when_the_cabinet_returns() {
+    let household_id = "rivera-household";
+    let cabinet_parent = tempfile::tempdir().expect("create a temporary Cabinet parent");
+    let remembered_cabinet = cabinet_parent.path().join("remembered-cabinet");
+    let first_local = tempfile::tempdir().expect("create the first local database directory");
+    let second_local = tempfile::tempdir().expect("create the second local database directory");
+    let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
+    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
+        .expect("open portable memory on the first device");
+    let second_store =
+        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
+            .expect("open portable memory on the recovered device");
+    let draft = PortableEventDraft {
+        event_id: event_id("pending-cabinet-delivery"),
+        sequence: 1,
+        previous_event_digest: None,
+        supersedes_event_digest: None,
+        occurred_at: "2026-07-24T17:42:00+10:00".to_owned(),
+        conversation_reference: None,
+        fact: PortableFact::ExecutionOutcome {
+            subject_reference: typed_reference("subject", "pending-cabinet-delivery"),
+            outcome: PortableExecutionOutcomeKind::CabinetUnavailable,
+        },
+    };
+
+    assert!(matches!(
+        first_store.append(household_id, &remembered_cabinet, draft),
+        Err(PortableMemoryError::CabinetUnavailable)
+    ));
+    fs::create_dir(&remembered_cabinet).expect("restore the remembered Cabinet");
+    first_store
+        .import(
+            household_id,
+            &remembered_cabinet,
+            std::slice::from_ref(&first_authorization),
+        )
+        .expect("synchronize pending local records after Cabinet recovery");
+
+    assert!(only_portable_record(&remembered_cabinet).len() > 32);
+    let recovered = second_store
+        .import(
+            household_id,
+            &remembered_cabinet,
+            std::slice::from_ref(&first_authorization),
+        )
+        .expect("import the record delivered after recovery");
+    assert_eq!(recovered.imported, 1);
+    assert_eq!(
+        second_store
+            .household_projection(household_id)
+            .expect("read recovered History")
+            .execution_outcomes
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn secret_shaped_content_is_rejected_before_portable_memory_is_written() {
     let household_id = "rivera-household";
     let cabinet = tempfile::tempdir().expect("create a temporary Cabinet");
@@ -328,6 +726,28 @@ fn secret_shaped_content_is_rejected_before_portable_memory_is_written() {
             "{excluded} must not satisfy the owning-domain reference grammar"
         );
     }
+    let mut unsafe_rule = filing_rule_definition();
+    unsafe_rule.service_provider = "Bearer portable-provider-token".to_owned();
+    assert!(matches!(
+        store.append(
+            household_id,
+            cabinet.path(),
+            PortableEventDraft {
+                event_id: event_id("unsafe-portable-rule"),
+                sequence: 1,
+                previous_event_digest: None,
+                supersedes_event_digest: None,
+                occurred_at: "2026-07-24T17:45:00+10:00".to_owned(),
+                conversation_reference: None,
+                fact: PortableFact::FilingRule {
+                    rule_reference: reference("filing-rule-unsafe"),
+                    state: PortableFilingRuleState::Active,
+                    definition: unsafe_rule,
+                },
+            },
+        ),
+        Err(PortableMemoryError::InvalidEvent)
+    ));
     assert!(!cabinet.path().join(".luna-memory").exists());
     assert!(store
         .list_events(household_id)
@@ -363,6 +783,7 @@ fn concurrent_filing_rule_events_create_a_resolvable_conflict() {
                 fact: PortableFact::FilingRule {
                     rule_reference: reference("filing-rule-7"),
                     state: PortableFilingRuleState::Paused,
+                    definition: filing_rule_definition(),
                 },
             },
         )
@@ -381,6 +802,7 @@ fn concurrent_filing_rule_events_create_a_resolvable_conflict() {
                 fact: PortableFact::FilingRule {
                     rule_reference: reference("filing-rule-7"),
                     state: PortableFilingRuleState::Deleted,
+                    definition: filing_rule_definition(),
                 },
             },
         )
@@ -467,6 +889,14 @@ fn concurrent_filing_rule_events_create_a_resolvable_conflict() {
     assert!(resolution_conflict
         .subject_reference
         .starts_with("conflictResolution:"));
+    assert!(
+        second_store
+            .household_projection(household_id)
+            .expect("read the projection while resolutions conflict")
+            .filing_rules
+            .is_empty(),
+        "an opposing resolution must not leave one Filing Rule silently active"
+    );
 
     second_store
         .resolve_conflict(
@@ -569,6 +999,7 @@ fn import_rebuilds_causal_subject_updates_even_when_the_update_file_sorts_first(
                 fact: PortableFact::FilingRule {
                     rule_reference: reference("filing-rule-causal"),
                     state: PortableFilingRuleState::Active,
+                    definition: filing_rule_definition(),
                 },
             },
         )
@@ -594,6 +1025,7 @@ fn import_rebuilds_causal_subject_updates_even_when_the_update_file_sorts_first(
                 fact: PortableFact::FilingRule {
                     rule_reference: reference("filing-rule-causal"),
                     state: PortableFilingRuleState::Paused,
+                    definition: filing_rule_definition(),
                 },
             },
         )

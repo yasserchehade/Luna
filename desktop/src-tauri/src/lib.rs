@@ -40,11 +40,13 @@ pub use intelligence::{
 };
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff, PortableConflict,
-    PortableConflictResolutionDraft, PortableConsentProvider, PortableConsentScope,
-    PortableConsentState, PortableConversationReference, PortableDocumentRelationshipKind,
-    PortableEvent, PortableEventDraft, PortableExecutionOutcomeKind, PortableFact,
-    PortableFilingRuleState, PortableImportReport, PortableMemberDirectionKind,
-    PortableMemoryError, PortableMemoryStore, PortableReference, TrustedDeviceAuthorization,
+    PortableConflictResolutionDraft, PortableConsentDetails, PortableConsentGrantKind,
+    PortableConsentProvider, PortableConsentPurpose, PortableConsentScope, PortableConsentState,
+    PortableConversationReference, PortableDocumentRelationshipKind, PortableEvent,
+    PortableEventDraft, PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
+    PortableFilingRuleState, PortableHouseholdProjection, PortableImportReport,
+    PortableIntelligenceCapability, PortableMemberDirectionKind, PortableMemoryError,
+    PortableMemoryStore, PortableReference, TrustedDeviceAuthorization,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
