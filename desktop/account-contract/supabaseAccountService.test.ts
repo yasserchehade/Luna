@@ -15,6 +15,16 @@ const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? localConfig.SERV
 const jwtSecret = process.env.SUPABASE_JWT_SECRET ?? localConfig.JWT_SECRET;
 const databaseUrl = process.env.SUPABASE_DB_URL ?? localConfig.DB_URL;
 
+function futureIso(days: number): string {
+  const value = new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
+  value.setUTCSeconds(0, 0);
+  return value.toISOString();
+}
+
+function postgresIso(value: string): string {
+  return value.replace(".000Z", "+00:00");
+}
+
 test("complimentary Managed Intelligence is granted by an operator at the Household boundary", async () => {
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
   assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
@@ -22,6 +32,7 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
 
   const email = `entitlement.${crypto.randomUUID()}@example.com`;
   const password = "correct-horse-battery-staple-7";
+  const validUntil = futureIso(35);
   const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
   await accountService.register({ organiserName: "Alex Morgan", email, password });
   await accountService.verifyEmail(email, await readLatestEmailCode(email));
@@ -45,7 +56,7 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
   const forbiddenGrant = await memberClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
     requested_max_budget_usd: 1,
-    requested_valid_until: "2026-09-01T00:00:00.000Z",
+    requested_valid_until: validUntil,
   });
   assert.ok(forbiddenGrant.error, "a Household Member must not grant its own entitlement");
 
@@ -55,7 +66,7 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
   const grant = await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
     requested_max_budget_usd: 1,
-    requested_valid_until: "2026-09-01T00:00:00.000Z",
+    requested_valid_until: validUntil,
   });
   assert.equal(grant.error, null);
 
@@ -66,7 +77,7 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
     deviceState: "pending",
     entitlementSource: "complimentary",
     maxBudgetUsd: 1,
-    validUntil: "2026-09-01T00:00:00+00:00",
+    validUntil: postgresIso(validUntil),
     credentialExpiresAt: null,
   });
 });
@@ -78,6 +89,11 @@ test("verified Paddle events are idempotent and older subscription state cannot 
 
   const email = `billing.${crypto.randomUUID()}@example.com`;
   const password = "correct-horse-battery-staple-7";
+  const occurredAt = futureIso(0);
+  const staleOccurredAt = new Date(Date.parse(occurredAt) - 3 * 60 * 1_000).toISOString();
+  const paymentProblemOccurredAt = new Date(Date.parse(occurredAt) + 3 * 60 * 1_000).toISOString();
+  const billingValidUntil = futureIso(31);
+  const complimentaryValidUntil = futureIso(35);
   const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
   await accountService.register({ organiserName: "Taylor Morgan", email, password });
   await accountService.verifyEmail(email, await readLatestEmailCode(email));
@@ -107,12 +123,12 @@ test("verified Paddle events are idempotent and older subscription state cannot 
   const activeEvent = {
     requested_event_id: `evt_active_${billingRunId}`,
     requested_event_type: "subscription.updated",
-    requested_occurred_at: "2026-07-28T14:00:00.000Z",
+    requested_occurred_at: occurredAt,
     requested_household_id: household.householdId,
     requested_customer_id: `ctm_${billingRunId}`,
     requested_subscription_id: `sub_${billingRunId}`,
     requested_status: "active",
-    requested_valid_until: "2026-08-28T14:00:00.000Z",
+    requested_valid_until: billingValidUntil,
     requested_max_budget_usd: 2,
   };
 
@@ -127,14 +143,14 @@ test("verified Paddle events are idempotent and older subscription state cannot 
     deviceState: "pending",
     entitlementSource: "billing",
     maxBudgetUsd: 2,
-    validUntil: "2026-08-28T14:00:00+00:00",
+    validUntil: postgresIso(billingValidUntil),
     credentialExpiresAt: null,
   });
 
   const paymentProblem = await operatorClient.rpc("apply_paddle_subscription_event", {
     ...activeEvent,
     requested_event_id: `evt_past_due_${billingRunId}`,
-    requested_occurred_at: "2026-07-28T14:05:00.000Z",
+    requested_occurred_at: paymentProblemOccurredAt,
     requested_status: "past_due",
   });
   assert.equal(paymentProblem.error, null);
@@ -143,7 +159,7 @@ test("verified Paddle events are idempotent and older subscription state cannot 
   const staleActive = await operatorClient.rpc("apply_paddle_subscription_event", {
     ...activeEvent,
     requested_event_id: `evt_stale_active_${billingRunId}`,
-    requested_occurred_at: "2026-07-28T14:02:00.000Z",
+    requested_occurred_at: staleOccurredAt,
   });
   assert.equal(staleActive.error, null);
   assert.equal(staleActive.data, false);
@@ -152,7 +168,7 @@ test("verified Paddle events are idempotent and older subscription state cannot 
   assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
     requested_max_budget_usd: 1,
-    requested_valid_until: "2026-09-01T00:00:00.000Z",
+    requested_valid_until: complimentaryValidUntil,
   })).error, null);
   assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
     householdId: household.householdId,
@@ -161,7 +177,7 @@ test("verified Paddle events are idempotent and older subscription state cannot 
     deviceState: "pending",
     entitlementSource: "complimentary",
     maxBudgetUsd: 1,
-    validUntil: "2026-09-01T00:00:00+00:00",
+    validUntil: postgresIso(complimentaryValidUntil),
     credentialExpiresAt: null,
   });
 });
@@ -173,6 +189,9 @@ test("an entitled Trusted Device proves possession before managed access is prov
 
   const email = `provisioning.${crypto.randomUUID()}@example.com`;
   const password = "correct-horse-battery-staple-7";
+  const validUntil = futureIso(35);
+  const credentialExpiresAt = futureIso(1);
+  const replacementValidUntil = futureIso(65);
   const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
   await accountService.register({ organiserName: "Jordan Lee", email, password });
   await accountService.verifyEmail(email, await readLatestEmailCode(email));
@@ -203,7 +222,7 @@ test("an entitled Trusted Device proves possession before managed access is prov
   assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
     requested_max_budget_usd: 1,
-    requested_valid_until: "2026-09-01T00:00:00.000Z",
+    requested_valid_until: validUntil,
   })).error, null);
 
   const challenge = await accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey);
@@ -237,17 +256,22 @@ test("an entitled Trusted Device proves possession before managed access is prov
   assert.equal(authorizedRow.device_id, device.id);
   assert.equal(authorizedRow.existing_gateway_key_alias, null);
   assert.equal(Number(authorizedRow.max_budget_usd), 1);
+  assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+  })).error, null);
   assert.equal((await operatorClient.rpc("record_managed_intelligence_device_access", {
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_status: "ready",
     requested_gateway_key_alias: `luna-managed-${device.id}`,
-    requested_credential_expires_at: "2026-07-29T14:00:00.000Z",
+    requested_credential_expires_at: credentialExpiresAt,
   })).error, null);
   const ready = await accountService.getHouseholdIntelligenceAccess(device.publicKey);
   assert.equal(ready.entitlementState, "entitled");
   assert.equal(ready.deviceState, "ready");
-  assert.equal(ready.credentialExpiresAt, "2026-07-29T14:00:00+00:00");
+  assert.equal(ready.credentialExpiresAt, postgresIso(credentialExpiresAt));
   assert.ok((await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
     requested_device_public_key: device.publicKey,
     requested_challenge_id: challenge.id,
@@ -261,7 +285,7 @@ test("an entitled Trusted Device proves possession before managed access is prov
   assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
     requested_max_budget_usd: 0.5,
-    requested_valid_until: "2026-10-01T00:00:00.000Z",
+    requested_valid_until: replacementValidUntil,
   })).error, null);
   await assert.rejects(
     () => accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey),
@@ -287,7 +311,33 @@ test("an entitled Trusted Device proves possession before managed access is prov
   const replacementChallenge = await accountService.beginManagedIntelligenceDeviceProvisioning(
     device.publicKey,
   );
-  assert.ok(replacementChallenge.id, "a re-granted Household must be able to provision again");
+  const replacementAuthorization = deviceAuthority.authorize(canonicalAuthorization(
+    "luna:managed-intelligence-device:v1:",
+    [household.householdId, device.publicKey, replacementChallenge.nonce],
+  ));
+  assert.equal((await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: replacementChallenge.id,
+    requested_nonce: replacementChallenge.nonce,
+    requested_authorization_signature: replacementAuthorization,
+  })).error, null);
+  assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+  })).error, null);
+  assert.equal((await operatorClient.rpc("revoke_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+  })).error, null);
+  const raceRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
+  assert.equal(raceRevocations.error, null);
+  assert.deepEqual(raceRevocations.data.filter(
+    (row: { household_id: string }) => row.household_id === household.householdId,
+  ), [{
+    household_id: household.householdId,
+    device_id: device.id,
+    gateway_key_alias: `luna-managed-${device.id}`,
+  }], "a reserved alias remains durable if entitlement is revoked before readiness is recorded");
 });
 
 test("a verified Luna Account returns to the same Household after signing in again", async () => {

@@ -19,9 +19,15 @@ type ProvisioningDependencies = {
   createGatewayAccess(input: {
     householdId: string;
     deviceId: string;
+    alias: string;
     budgetScopeId: string;
     maxBudgetUsd: number;
   }): Promise<{ alias: string; credential: string; expiresAt: string }>;
+  reserveGatewayAlias(input: {
+    householdId: string;
+    deviceId: string;
+    alias: string;
+  }): Promise<void>;
   recordReady(input: {
     householdId: string;
     deviceId: string;
@@ -54,13 +60,20 @@ export async function handleManagedIntelligenceProvisioning(
   if (authorization.existingAlias) {
     await dependencies.revokeGatewayAccessByAlias?.(authorization.existingAlias);
   }
+  const reservedAlias = `luna-managed-${authorization.deviceId}`;
+  await dependencies.reserveGatewayAlias({
+    householdId: authorization.householdId,
+    deviceId: authorization.deviceId,
+    alias: reservedAlias,
+  });
   const access = await dependencies.createGatewayAccess({
     householdId: authorization.householdId,
     deviceId: authorization.deviceId,
+    alias: reservedAlias,
     budgetScopeId: authorization.budgetScopeId,
     maxBudgetUsd: authorization.maxBudgetUsd,
   });
-  if (!access.alias || !access.credential || Number.isNaN(Date.parse(access.expiresAt))) {
+  if (access.alias !== reservedAlias || !access.credential || Number.isNaN(Date.parse(access.expiresAt))) {
     return json({ error: "Managed access could not be provisioned" }, 502);
   }
   try {

@@ -20,7 +20,11 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
   if (!chatEndpoint.pathname.endsWith("/v1/chat/completions")) {
     throw new Error("The managed gateway endpoint is invalid.");
   }
-  if (!Number.isInteger(configuration.durationHours) || configuration.durationHours < 2) {
+  if (
+    !Number.isInteger(configuration.durationHours)
+    || configuration.durationHours < 2
+    || configuration.durationHours > 24
+  ) {
     throw new Error("The managed gateway credential duration is invalid.");
   }
   if (!Number.isInteger(configuration.rpmLimit) || configuration.rpmLimit <= 0) {
@@ -80,13 +84,13 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
     async createGatewayAccess(input: {
       householdId: string;
       deviceId: string;
+      alias: string;
       budgetScopeId: string;
       maxBudgetUsd: number;
     }) {
       const teamId = await ensureHouseholdBudget(input);
-      const alias = `luna-managed-${input.deviceId}`;
       const generated = await requireJson("/key/generate", "POST", {
-        key_alias: alias,
+        key_alias: input.alias,
         duration: `${configuration.durationHours}h`,
         team_id: teamId,
         models: ["openai/gpt-4.1-mini"],
@@ -109,7 +113,7 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
       const expiresAt = typeof generated.expires === "string" && !Number.isNaN(Date.parse(generated.expires))
         ? generated.expires
         : calculatedExpiry;
-      return { alias, credential: generated.key, expiresAt };
+      return { alias: input.alias, credential: generated.key, expiresAt };
     },
     async revokeGatewayAccess(credential: string) {
       await requireJson("/key/delete", "POST", { keys: [credential] });

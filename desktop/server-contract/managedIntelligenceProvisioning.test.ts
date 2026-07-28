@@ -37,14 +37,22 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
       assert.deepEqual(input, {
         householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
         deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
         budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
         maxBudgetUsd: 1,
       });
       return {
-        alias: "luna-device-acdf892b",
+        alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
         credential: "sk-narrow-device-key",
         expiresAt: "2026-07-29T14:00:00.000Z",
       };
+    },
+    async reserveGatewayAlias(input) {
+      assert.deepEqual(input, {
+        householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
+        deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+      });
     },
     async recordReady(input) {
       recorded.push(input);
@@ -60,7 +68,7 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
   assert.deepEqual(recorded, [{
     householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
     deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
-    alias: "luna-device-acdf892b",
+    alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
     expiresAt: "2026-07-29T14:00:00.000Z",
   }]);
 });
@@ -88,6 +96,9 @@ test("renewal revokes the previous device alias before minting its replacement",
     async revokeGatewayAccessByAlias(alias) {
       actions.push(`revoke:${alias}`);
     },
+    async reserveGatewayAlias({ alias }) {
+      actions.push(`reserve:${alias}`);
+    },
     async createGatewayAccess() {
       actions.push("generate");
       return {
@@ -104,9 +115,42 @@ test("renewal revokes the previous device alias before minting its replacement",
   assert.equal(response.status, 200);
   assert.deepEqual(actions, [
     "revoke:luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+    "reserve:luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
     "generate",
     "ready",
   ]);
+});
+
+test("an entitlement revoked before alias reservation cannot mint a gateway key", async () => {
+  let generated = false;
+  await assert.rejects(() => handleManagedIntelligenceProvisioning(new Request(
+    "https://luna.test/managed-intelligence-provisioning",
+    { method: "POST", body: JSON.stringify({
+      devicePublicKey: "age1trusteddevice",
+      challengeId: "f462a4ac-9688-4c23-90e7-8a9f449b975d",
+      nonce: "d916a996-710d-4a43-84ac-b28427151a7f",
+      authorizationSignature: "base64-device-signature",
+    }) },
+  ), {
+    async authorizeDevice() {
+      return {
+        householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
+        deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        existingAlias: null,
+        budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+        maxBudgetUsd: 1,
+      };
+    },
+    async reserveGatewayAlias() {
+      throw new Error("entitlement revoked");
+    },
+    async createGatewayAccess() {
+      generated = true;
+      throw new Error("must not run");
+    },
+    async recordReady() {},
+  }), /entitlement revoked/);
+  assert.equal(generated, false);
 });
 
 test("revoked Household access removes each attributable gateway key", async () => {
@@ -160,6 +204,7 @@ test("generated LiteLLM access is device-attributed, route-limited, rate-limited
   const access = await client.createGatewayAccess({
     householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
     deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+    alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
     budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
     maxBudgetUsd: 1,
   });
@@ -189,4 +234,16 @@ test("generated LiteLLM access is device-attributed, route-limited, rate-limited
     budget_scope_id: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
   });
   assert.doesNotMatch(String(requests[1].init?.body), /master-secret|provider|document|email/i);
+});
+
+test("managed gateway credentials cannot exceed the 24-hour safety bound", () => {
+  assert.throws(() => createLiteLlmManagedAccessClient({
+    adminEndpoint: "https://gateway-admin.luna.test",
+    endpoint: "https://gateway.luna.test/v1/chat/completions",
+    masterKey: "sk-litellm-master-secret",
+    durationHours: 240,
+    rpmLimit: 6,
+    tpmLimit: 8_000,
+    fetch,
+  }), /credential duration is invalid/);
 });

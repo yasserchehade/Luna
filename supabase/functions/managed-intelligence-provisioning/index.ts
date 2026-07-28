@@ -49,6 +49,14 @@ Deno.serve(async (request) => {
     createGatewayAccess: gateway.createGatewayAccess,
     revokeGatewayAccess: gateway.revokeGatewayAccess,
     revokeGatewayAccessByAlias: gateway.revokeGatewayAccessByAlias,
+    async reserveGatewayAlias(input) {
+      const { error } = await admin.rpc("reserve_managed_intelligence_device_gateway_alias", {
+        requested_household_id: input.householdId,
+        requested_device_id: input.deviceId,
+        requested_gateway_key_alias: input.alias,
+      });
+      if (error) throw new Error("Managed Trusted Device access is no longer eligible.");
+    },
     async recordReady(input) {
       const { error } = await admin.rpc("record_managed_intelligence_device_access", {
         requested_household_id: input.householdId,
