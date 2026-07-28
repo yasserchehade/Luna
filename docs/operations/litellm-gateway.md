@@ -45,20 +45,39 @@ Standard tests use `DeterministicIntelligenceGateway` or a mock HTTP transport. 
 
 For the opt-in prototype canary:
 
-1. deploy the pinned LiteLLM proxy with `ops/litellm/compose.yaml`;
-2. set `LUNA_MANAGED_INTELLIGENCE_URL` to `http://127.0.0.1:4000/v1/chat/completions`;
-3. expose `LITELLM_MASTER_KEY` to the operator shell from the approved local secret store;
-4. run `node ops/litellm/canary.mjs`;
-5. inspect LiteLLM, error and spend logs for the fixed marker `LUNA_SYNTHETIC_CANARY_53` and prove it is absent;
-6. attach the runner's privacy-safe JSON result plus redacted log and deployment evidence to issue #13 and PR #33;
-7. remove the test request, revoke all test credentials and tear down the temporary deployment.
+1. place the OpenAI key in the user-local DPAPI handoff described below;
+2. run `ops/litellm/run-local-canary.ps1` from the repository root;
+3. let the wrapper generate disposable gateway/database secrets, deploy the pinned proxy on loopback and run `node ops/litellm/canary.mjs`;
+4. inspect LiteLLM, error and spend logs for the fixed marker `LUNA_SYNTHETIC_CANARY_53` and prove it is absent;
+5. attach the runner's privacy-safe JSON result plus redacted log and deployment evidence to issue #13 and PR #33;
+6. confirm the wrapper removed the encrypted handoff, test credentials, containers, networks and volume.
 
-The runner creates a 15-minute, USD 0.10 maximum disposable virtual key restricted to `openai/gpt-4.1-mini` and the `/v1/models` plus `/v1/chat/completions` routes, sends the same strict structured-output contract as the desktop adapter, checks the upstream-reported model identity and token usage metadata, revokes the key and proves the revoked key is rejected. It emits neither the master key, virtual key nor synthetic document text. On a failed completion it still attempts to revoke the disposable key.
+Create the encrypted handoff without placing the key in shell history:
+
+```powershell
+$lunaSecretDir = Join-Path $env:LOCALAPPDATA 'Luna'
+New-Item -ItemType Directory -Force -Path $lunaSecretDir | Out-Null
+Read-Host 'OpenAI API key' -AsSecureString |
+  Export-Clixml -LiteralPath (Join-Path $lunaSecretDir 'openai-canary-key.clixml')
+```
+
+Then run:
+
+```powershell
+& .\ops\litellm\run-local-canary.ps1
+```
+
+On Windows, the handoff is encrypted for the current user. The wrapper refuses pre-existing `luna-litellm` Docker resources, binds the gateway to loopback, redacts failures, scans logs for the synthetic marker and all generated credentials, tears down the Compose project and deletes the encrypted handoff. It writes only privacy-safe evidence to `%LOCALAPPDATA%\Luna\litellm-canary-result.json`.
+
+The runner creates a 15-minute, USD 0.10 maximum disposable virtual key restricted to `openai/gpt-4.1-mini` and the `/v1/models` plus `/v1/chat/completions` routes, sends the same strict structured-output contract as the desktop adapter, checks the gateway-reported approved route identity and token usage metadata, revokes the key and proves the revoked key is rejected. It emits neither the master key, virtual key nor synthetic document text. On a failed completion it still attempts to revoke the disposable key.
+
+Pinned LiteLLM v1.93.0 deliberately reports the requested proxy route in `response.model`, replacing OpenAI's downstream model string. The canary therefore accepts the exact `openai/gpt-4.1-mini` route as well as OpenAI's base or dated `gpt-4.1-mini` identities. Route proof is joint: the pinned configuration maps only that route, the disposable key exposes only that model, the request names it exactly, and retries/fallbacks remain disabled.
 
 The runner accepts HTTP only for loopback. Every remote endpoint must use HTTPS. Its deterministic boundary tests run with:
 
 ```powershell
 node --test ops/litellm/canary.test.mjs
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ops/litellm/run-local-canary.test.ps1
 ```
 
 Live paid calls are manual evaluation evidence and are not part of the standard suite.

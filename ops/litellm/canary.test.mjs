@@ -29,7 +29,7 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-async function startGateway() {
+async function startGateway({ responseModel = "gpt-4.1-mini" } = {}) {
   const observations = [];
   let revoked = false;
   const server = createServer(async (request, response) => {
@@ -60,7 +60,7 @@ async function startGateway() {
       const prompt = JSON.parse(body.messages[1].content);
       sendJson(response, 200, {
         id: "synthetic-completion",
-        model: "gpt-4.1-mini",
+        model: responseModel,
         choices: [
           {
             message: {
@@ -185,4 +185,16 @@ test("canary refuses cleartext non-loopback gateways", async () => {
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /HTTPS unless it is a loopback preflight/);
   assert.doesNotMatch(result.stderr, new RegExp(MASTER_KEY));
+});
+
+test("canary accepts the exact LiteLLM route identity after proving its virtual-key scope", async () => {
+  const gateway = await startGateway({ responseModel: "openai/gpt-4.1-mini" });
+  try {
+    const result = await runCanary(gateway.endpoint);
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).upstreamModel, "openai/gpt-4.1-mini");
+  } finally {
+    await gateway.close();
+  }
 });

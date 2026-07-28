@@ -237,7 +237,9 @@ async function main() {
     const upstreamModel = completion?.model;
     if (
       typeof upstreamModel !== "string" ||
-      (upstreamModel !== MODEL && !upstreamModel.startsWith(`${MODEL}-`))
+      (upstreamModel !== ROUTE &&
+        upstreamModel !== MODEL &&
+        !upstreamModel.startsWith(`${MODEL}-`))
     ) {
       throw new Error("Completion did not report the approved OpenAI model route.");
     }

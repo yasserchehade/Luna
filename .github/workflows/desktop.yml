@@ -81,4 +81,8 @@ jobs:
           workspaces: "desktop/src-tauri -> target"
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
+      - name: Verify local canary Windows PowerShell boundary
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\ops\litellm\run-local-canary.test.ps1
       - run: pnpm --filter luna-desktop tauri build --debug --no-bundle
