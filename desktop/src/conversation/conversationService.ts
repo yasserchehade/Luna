@@ -415,6 +415,8 @@ export interface ConversationService {
     credential: string,
   ): Promise<void>;
   clearIntelligenceProviderCredential(householdId: string, providerId: string): Promise<void>;
+  setManagedIntelligenceGatewayCredential(householdId: string, credential: string): Promise<void>;
+  clearManagedIntelligenceGatewayCredential(householdId: string): Promise<void>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
   evaluateDocumentWithCloudAssistance(
@@ -564,6 +566,12 @@ export const tauriConversationService: ConversationService = {
   },
   clearIntelligenceProviderCredential(householdId, providerId) {
     return invoke("clear_intelligence_provider_credential", { householdId, providerId });
+  },
+  setManagedIntelligenceGatewayCredential(householdId, credential) {
+    return invoke("set_managed_intelligence_gateway_credential", { householdId, credential });
+  },
+  clearManagedIntelligenceGatewayCredential(householdId) {
+    return invoke("clear_managed_intelligence_gateway_credential", { householdId });
   },
   listCloudConsentScopes(householdId) {
     return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });

@@ -44,6 +44,7 @@ export interface TrustedDeviceService {
   isCurrentDeviceTrusted(householdId: HouseholdId): Promise<boolean>;
   isCurrentDeviceUnlocked(householdId: HouseholdId): Promise<boolean>;
   currentDevicePublicKey(householdId: HouseholdId): Promise<string>;
+  signManagedIntelligenceDeviceProvisioning(householdId: HouseholdId, nonce: string): Promise<string>;
   currentKeyEpoch(householdId: HouseholdId): Promise<number>;
   portableAuthorizationCutoff(
     householdId: HouseholdId,
@@ -99,6 +100,9 @@ export const unavailableTrustedDeviceService: TrustedDeviceService = {
   },
   async currentDevicePublicKey() {
     throw new Error("Trusted Device identity is not configured.");
+  },
+  async signManagedIntelligenceDeviceProvisioning() {
+    throw new Error("Trusted Device managed-access authorization is not configured.");
   },
   async currentKeyEpoch() {
     throw new Error("Trusted Device key coordination is not configured.");

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import type { AccountService, HouseholdSession } from "./account/accountService";
+import { synchronizeManagedIntelligenceAccess } from "./account/managedIntelligenceCoordinator";
 import { AccountFlow } from "./account/AccountFlow";
 import { TrustedDeviceFlow, TrustedDeviceUnlock } from "./trusted-device/TrustedDeviceFlow";
 import type { TrustedDeviceService } from "./trusted-device/trustedDeviceService";
@@ -136,6 +137,12 @@ export default function App({ accountService, cabinetService, conversationServic
           trustedDevices,
         );
       }
+      await synchronizeManagedIntelligenceAccess(
+        accountService,
+        conversationService,
+        trustedDeviceService,
+        unlockedSession,
+      );
       setCoordinationNotice("");
     } catch {
       setCoordinationNotice(
@@ -204,6 +211,20 @@ export default function App({ accountService, cabinetService, conversationServic
       window.removeEventListener("online", retryCoordination);
     };
   }, [coordinationNotice, session, synchronizeAfterUnlock]);
+
+  useEffect(() => {
+    if (!session) return;
+    const renewManagedAccess = () => void synchronizeManagedIntelligenceAccess(
+      accountService,
+      conversationService,
+      trustedDeviceService,
+      session,
+    ).catch(() => setCoordinationNotice(
+      "Luna is working offline. Trusted Device changes will be checked when the connection returns.",
+    ));
+    const renewalTimer = window.setInterval(renewManagedAccess, 30 * 60 * 1_000);
+    return () => window.clearInterval(renewalTimer);
+  }, [accountService, conversationService, session, trustedDeviceService]);
 
   useEffect(() => {
     if (!session) {

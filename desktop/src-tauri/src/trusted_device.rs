@@ -239,6 +239,25 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
             .to_bytes())
     }
 
+    pub fn sign_managed_intelligence_device_provisioning(
+        &self,
+        household_id: &str,
+        nonce: &str,
+    ) -> Result<[u8; 64], TrustedDeviceError> {
+        self.require_unlocked(household_id)?;
+        let device_public_key = self.current_device_public_key(household_id)?;
+        Ok(self
+            .device_authorization_signing_key(household_id)?
+            .sign(
+                canonical_authorization(
+                    "luna:managed-intelligence-device:v1:",
+                    [household_id.to_owned(), device_public_key, nonce.to_owned()],
+                )
+                .as_bytes(),
+            )
+            .to_bytes())
+    }
+
     pub fn current_key_epoch(&self, household_id: &str) -> Result<u32, TrustedDeviceError> {
         let value = self
             .vault

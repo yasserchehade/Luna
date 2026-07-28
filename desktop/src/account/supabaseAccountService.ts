@@ -2,9 +2,12 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type {
   AccountSessionStorage,
   AccountService,
+  AuthorizeManagedIntelligenceDeviceProvisioningRequest,
   HouseholdId,
+  HouseholdIntelligenceAccess,
   HouseholdSession,
   LunaAccountId,
+  ManagedIntelligenceProvisioningChallenge,
   RegisterAccountRequest,
   RegisterRecoveredTrustedDeviceRequest,
   RegisterTrustedDeviceRequest,
@@ -34,6 +37,17 @@ type TrustedDeviceRow = {
   revoked_after_event_digest?: string | null;
   key_epoch: number;
   device_status: "active" | "revoked";
+};
+
+type HouseholdIntelligenceAccessRow = {
+  household_id: string;
+  plan_code: "free" | "managed";
+  entitlement_state: "free" | "checkout_pending" | "entitled" | "payment_problem" | "ended";
+  device_state: "not_applicable" | "pending" | "ready" | "revoked";
+  entitlement_source: "complimentary" | "billing" | null;
+  max_budget_usd: number | null;
+  valid_until: string | null;
+  credential_expires_at: string | null;
 };
 
 const accountExistsCodes = new Set(["email_exists", "user_already_exists"]);
@@ -256,6 +270,57 @@ export class SupabaseAccountService implements AccountService {
     return data.map((row) => mapTrustedDevice(singleTrustedDeviceRow(row)));
   }
 
+  async getHouseholdIntelligenceAccess(devicePublicKey?: string): Promise<HouseholdIntelligenceAccess> {
+    const { data, error } = await this.client.rpc("current_household_intelligence_access", {
+      requested_device_public_key: devicePublicKey ?? null,
+    });
+    if (error) throw error;
+    return mapHouseholdIntelligenceAccess(singleHouseholdIntelligenceAccessRow(data));
+  }
+
+  async createManagedIntelligenceCheckoutSession(): Promise<{ url: string }> {
+    return this.createBillingSession("checkout");
+  }
+
+  async createManagedIntelligenceCustomerPortalSession(): Promise<{ url: string }> {
+    return this.createBillingSession("portal");
+  }
+
+  async beginManagedIntelligenceDeviceProvisioning(
+    devicePublicKey: string,
+  ): Promise<ManagedIntelligenceProvisioningChallenge> {
+    const { data, error } = await this.client.rpc("begin_managed_intelligence_device_provisioning", {
+      requested_device_public_key: devicePublicKey,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (
+      !row
+      || typeof row.challenge_id !== "string"
+      || typeof row.challenge_nonce !== "string"
+      || typeof row.expires_at !== "string"
+    ) throw new Error("The Luna account service returned an invalid provisioning challenge.");
+    return { id: row.challenge_id, nonce: row.challenge_nonce, expiresAt: row.expires_at };
+  }
+
+  async provisionManagedIntelligenceDeviceAccess(
+    request: AuthorizeManagedIntelligenceDeviceProvisioningRequest,
+  ): Promise<{ state: "ready"; credential: string }> {
+    const { data, error } = await this.client.functions.invoke("managed-intelligence-provisioning", {
+      body: {
+        devicePublicKey: request.devicePublicKey,
+        challengeId: request.challengeId,
+        nonce: request.nonce,
+        authorizationSignature: request.authorizationSignature,
+      },
+    });
+    if (error) throw error;
+    if (!data || data.state !== "ready" || typeof data.credential !== "string" || !data.credential) {
+      throw new Error("The Luna account service returned invalid managed device access.");
+    }
+    return { state: "ready", credential: data.credential };
+  }
+
   async signIn(email: string, password: string): Promise<HouseholdSession> {
     const { error } = await this.client.auth.signInWithPassword({ email, password });
     if (error) throw error;
@@ -297,6 +362,65 @@ export class SupabaseAccountService implements AccountService {
       return null;
     }
   }
+
+  private async createBillingSession(action: "checkout" | "portal"): Promise<{ url: string }> {
+    const { data, error } = await this.client.functions.invoke("household-billing-session", {
+      body: { action },
+    });
+    if (error) throw error;
+    if (!data || typeof data !== "object" || typeof data.url !== "string") {
+      throw new Error("The Luna account service returned an invalid billing session.");
+    }
+    const url = new URL(data.url);
+    if (url.protocol !== "https:") {
+      throw new Error("The Luna account service returned an invalid billing session.");
+    }
+    return { url: url.toString() };
+  }
+}
+
+function singleHouseholdIntelligenceAccessRow(data: unknown): HouseholdIntelligenceAccessRow {
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row || typeof row !== "object") {
+    throw new Error("The Luna account service returned invalid Household Intelligence access.");
+  }
+  const candidate = row as Record<string, unknown>;
+  const validEntitlementStates = new Set(["free", "checkout_pending", "entitled", "payment_problem", "ended"]);
+  const validDeviceStates = new Set(["not_applicable", "pending", "ready", "revoked"]);
+  if (
+    typeof candidate.household_id !== "string"
+    || (candidate.plan_code !== "free" && candidate.plan_code !== "managed")
+    || typeof candidate.entitlement_state !== "string"
+    || !validEntitlementStates.has(candidate.entitlement_state)
+    || typeof candidate.device_state !== "string"
+    || !validDeviceStates.has(candidate.device_state)
+    || (candidate.entitlement_source !== null
+      && candidate.entitlement_source !== "complimentary"
+      && candidate.entitlement_source !== "billing")
+    || (candidate.max_budget_usd !== null && typeof candidate.max_budget_usd !== "number")
+    || (candidate.valid_until !== null && typeof candidate.valid_until !== "string")
+    || (candidate.credential_expires_at !== null && typeof candidate.credential_expires_at !== "string")
+  ) {
+    throw new Error("The Luna account service returned invalid Household Intelligence access.");
+  }
+  return candidate as HouseholdIntelligenceAccessRow;
+}
+
+function mapHouseholdIntelligenceAccess(row: HouseholdIntelligenceAccessRow): HouseholdIntelligenceAccess {
+  return {
+    householdId: row.household_id as HouseholdId,
+    plan: row.plan_code,
+    entitlementState: row.entitlement_state === "checkout_pending"
+      ? "checkoutPending"
+      : row.entitlement_state === "payment_problem"
+      ? "paymentProblem"
+      : row.entitlement_state,
+    deviceState: row.device_state === "not_applicable" ? "notApplicable" : row.device_state,
+    entitlementSource: row.entitlement_source,
+    maxBudgetUsd: row.max_budget_usd,
+    validUntil: row.valid_until,
+    credentialExpiresAt: row.credential_expires_at,
+  };
 }
 
 function singleRow(data: unknown): HouseholdRow {

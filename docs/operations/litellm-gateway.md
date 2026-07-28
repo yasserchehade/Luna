@@ -87,6 +87,8 @@ Live paid calls are manual evaluation evidence and are not part of the standard 
 
 Issue #53 owns the remote pre-production deployment and its authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and ingress-log verification. That deployment is required before external testing, not before the prototype contract can be accepted.
 
+Household Plan provisioning and revocation are operated through the account service described in `docs/operations/household-plans.md`. The LiteLLM master key is consumed only by the server-side provisioning and revocation functions; it must never be configured in a desktop build.
+
 ## Upgrade policy
 
 LiteLLM remains provisional. Pin a reviewed stable image digest rather than `main-latest`. Re-run the logging canary, exact-route, structured-output, authentication, timeout and rate-limit checks on every upgrade. Evaluate Portkey and direct Rust adapters before expanding the gateway's role or provider catalogue.

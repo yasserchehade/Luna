@@ -11,8 +11,407 @@ import { SupabaseAccountService } from "../src/account/supabaseAccountService";
 const localConfig = readLocalSupabaseConfig();
 const supabaseUrl = process.env.SUPABASE_URL ?? localConfig.API_URL;
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? localConfig.PUBLISHABLE_KEY;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? localConfig.SERVICE_ROLE_KEY;
 const jwtSecret = process.env.SUPABASE_JWT_SECRET ?? localConfig.JWT_SECRET;
 const databaseUrl = process.env.SUPABASE_DB_URL ?? localConfig.DB_URL;
+
+function futureIso(days: number): string {
+  const value = new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
+  value.setUTCSeconds(0, 0);
+  return value.toISOString();
+}
+
+function postgresIso(value: string): string {
+  return value.replace(".000Z", "+00:00");
+}
+
+test("complimentary Managed Intelligence is granted by an operator at the Household boundary", async () => {
+  assert.ok(supabaseUrl, "SUPABASE_URL is required");
+  assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
+  assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+
+  const email = `entitlement.${crypto.randomUUID()}@example.com`;
+  const password = "correct-horse-battery-staple-7";
+  const validUntil = futureIso(35);
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  await accountService.register({ organiserName: "Alex Morgan", email, password });
+  await accountService.verifyEmail(email, await readLatestEmailCode(email));
+  const household = await accountService.createHousehold("Morgan Household");
+
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "free",
+    entitlementState: "free",
+    deviceState: "notApplicable",
+    entitlementSource: null,
+    maxBudgetUsd: null,
+    validUntil: null,
+    credentialExpiresAt: null,
+  });
+
+  const memberClient = createClient(supabaseUrl, publishableKey, {
+    auth: { persistSession: false },
+  });
+  assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
+  const forbiddenGrant = await memberClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 1,
+    requested_valid_until: validUntil,
+  });
+  assert.ok(forbiddenGrant.error, "a Household Member must not grant its own entitlement");
+
+  const operatorClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  const grant = await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 1,
+    requested_valid_until: validUntil,
+  });
+  assert.equal(grant.error, null);
+
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "managed",
+    entitlementState: "entitled",
+    deviceState: "pending",
+    entitlementSource: "complimentary",
+    maxBudgetUsd: 1,
+    validUntil: postgresIso(validUntil),
+    credentialExpiresAt: null,
+  });
+});
+
+test("verified Paddle events are idempotent and older subscription state cannot win", async () => {
+  assert.ok(supabaseUrl, "SUPABASE_URL is required");
+  assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
+  assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+
+  const email = `billing.${crypto.randomUUID()}@example.com`;
+  const password = "correct-horse-battery-staple-7";
+  const occurredAt = futureIso(0);
+  const staleOccurredAt = new Date(Date.parse(occurredAt) - 3 * 60 * 1_000).toISOString();
+  const paymentProblemOccurredAt = new Date(Date.parse(occurredAt) + 3 * 60 * 1_000).toISOString();
+  const billingValidUntil = futureIso(31);
+  const complimentaryValidUntil = futureIso(35);
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  await accountService.register({ organiserName: "Taylor Morgan", email, password });
+  await accountService.verifyEmail(email, await readLatestEmailCode(email));
+  const household = await accountService.createHousehold("Taylor Household");
+  const operatorClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  const memberClient = createClient(supabaseUrl, publishableKey, {
+    auth: { persistSession: false },
+  });
+  assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
+  const billingContext = await memberClient.rpc("current_household_billing_context");
+  assert.equal(billingContext.error, null);
+  assert.deepEqual(Array.isArray(billingContext.data) ? billingContext.data[0] : billingContext.data, {
+    household_id: household.householdId,
+    organiser_email: email,
+    external_customer_id: null,
+    external_subscription_id: null,
+  });
+  const billingRunId = crypto.randomUUID();
+  const checkout = await operatorClient.rpc("record_paddle_checkout_pending", {
+    requested_household_id: household.householdId,
+    requested_transaction_id: `txn_${billingRunId}`,
+  });
+  assert.equal(checkout.error, null);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).entitlementState, "checkoutPending");
+  const activeEvent = {
+    requested_event_id: `evt_active_${billingRunId}`,
+    requested_event_type: "subscription.updated",
+    requested_occurred_at: occurredAt,
+    requested_household_id: household.householdId,
+    requested_customer_id: `ctm_${billingRunId}`,
+    requested_subscription_id: `sub_${billingRunId}`,
+    requested_status: "active",
+    requested_valid_until: billingValidUntil,
+    requested_max_budget_usd: 2,
+  };
+
+  const first = await operatorClient.rpc("apply_paddle_subscription_event", activeEvent);
+  assert.equal(first.error, null);
+  assert.equal(first.data, true);
+  assert.equal((await operatorClient.rpc("apply_paddle_subscription_event", activeEvent)).data, false);
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "managed",
+    entitlementState: "entitled",
+    deviceState: "pending",
+    entitlementSource: "billing",
+    maxBudgetUsd: 2,
+    validUntil: postgresIso(billingValidUntil),
+    credentialExpiresAt: null,
+  });
+
+  const paymentProblem = await operatorClient.rpc("apply_paddle_subscription_event", {
+    ...activeEvent,
+    requested_event_id: `evt_past_due_${billingRunId}`,
+    requested_occurred_at: paymentProblemOccurredAt,
+    requested_status: "past_due",
+  });
+  assert.equal(paymentProblem.error, null);
+  assert.equal(paymentProblem.data, true);
+
+  const staleActive = await operatorClient.rpc("apply_paddle_subscription_event", {
+    ...activeEvent,
+    requested_event_id: `evt_stale_active_${billingRunId}`,
+    requested_occurred_at: staleOccurredAt,
+  });
+  assert.equal(staleActive.error, null);
+  assert.equal(staleActive.data, false);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).entitlementState, "paymentProblem");
+
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 1,
+    requested_valid_until: complimentaryValidUntil,
+  })).error, null);
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "managed",
+    entitlementState: "entitled",
+    deviceState: "pending",
+    entitlementSource: "complimentary",
+    maxBudgetUsd: 1,
+    validUntil: postgresIso(complimentaryValidUntil),
+    credentialExpiresAt: null,
+  });
+});
+
+test("an entitled Trusted Device proves possession before managed access is provisioned", async () => {
+  assert.ok(supabaseUrl, "SUPABASE_URL is required");
+  assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
+  assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+  assert.ok(databaseUrl, "SUPABASE_DB_URL is required");
+
+  const email = `provisioning.${crypto.randomUUID()}@example.com`;
+  const password = "correct-horse-battery-staple-7";
+  const validUntil = futureIso(35);
+  const credentialExpiresAt = futureIso(1);
+  const replacementValidUntil = futureIso(65);
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  await accountService.register({ organiserName: "Jordan Lee", email, password });
+  await accountService.verifyEmail(email, await readLatestEmailCode(email));
+  const household = await accountService.createHousehold("Lee Household");
+  const authenticator = await accountService.beginAuthenticatorEnrollment();
+  const totp = new OTPAuth.TOTP({
+    issuer: "Luna",
+    label: email,
+    algorithm: "SHA1",
+    digits: 6,
+    period: 30,
+    secret: OTPAuth.Secret.fromBase32(authenticator.secret),
+  });
+  await accountService.verifyAuthenticatorEnrollment(authenticator.factorId, totp.generate());
+  const deviceAuthority = createSigningAuthority();
+  const recoveryAuthority = createSigningAuthority();
+  const device = await accountService.registerFirstTrustedDevice({
+    label: "Jordan's PC",
+    publicKey: `age1${crypto.randomUUID()}`,
+    authorizationPublicKey: deviceAuthority.verificationKey,
+    keyEnvelope: "encrypted-device-envelope",
+    recoveryEnvelope: "encrypted-recovery-envelope",
+    recoveryVerificationKey: recoveryAuthority.verificationKey,
+  });
+  const operatorClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 1,
+    requested_valid_until: validUntil,
+  })).error, null);
+
+  const challenge = await accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey);
+  const authorization = deviceAuthority.authorize(canonicalAuthorization(
+    "luna:managed-intelligence-device:v1:",
+    [household.householdId, device.publicKey, challenge.nonce],
+  ));
+  const memberClient = createClient(supabaseUrl, publishableKey, { auth: { persistSession: false } });
+  assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
+  const factors = await memberClient.auth.mfa.listFactors();
+  assert.equal(factors.error, null);
+  const memberFactor = factors.data?.totp.find(({ status }) => status === "verified");
+  assert.ok(memberFactor);
+  const memberChallenge = await memberClient.auth.mfa.challenge({ factorId: memberFactor.id });
+  assert.equal(memberChallenge.error, null);
+  const memberVerification = await memberClient.auth.mfa.verify({
+    factorId: memberFactor.id,
+    challengeId: memberChallenge.data.id,
+    code: totp.generate(),
+  });
+  assert.equal(memberVerification.error, null);
+  const authorized = await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: challenge.id,
+    requested_nonce: challenge.nonce,
+    requested_authorization_signature: authorization,
+  });
+  assert.equal(authorized.error, null);
+  const authorizedRow = Array.isArray(authorized.data) ? authorized.data[0] : authorized.data;
+  assert.equal(authorizedRow.household_id, household.householdId);
+  assert.equal(authorizedRow.device_id, device.id);
+  assert.equal(authorizedRow.existing_gateway_key_alias, null);
+  assert.equal(Number(authorizedRow.max_budget_usd), 1);
+  const initialReservationId = crypto.randomUUID();
+  assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_budget_scope_id: authorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(authorizedRow.max_budget_usd),
+    requested_reservation_id: initialReservationId,
+  })).error, null);
+  assert.equal((await operatorClient.rpc("record_managed_intelligence_device_access", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_status: "ready",
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_credential_expires_at: credentialExpiresAt,
+    requested_budget_scope_id: authorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(authorizedRow.max_budget_usd),
+    requested_reservation_id: initialReservationId,
+  })).error, null);
+  const ready = await accountService.getHouseholdIntelligenceAccess(device.publicKey);
+  assert.equal(ready.entitlementState, "entitled");
+  assert.equal(ready.deviceState, "ready");
+  assert.equal(ready.credentialExpiresAt, postgresIso(credentialExpiresAt));
+  assert.ok((await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: challenge.id,
+    requested_nonce: challenge.nonce,
+    requested_authorization_signature: authorization,
+  })).error, "a provisioning challenge cannot be replayed");
+  assert.equal((await operatorClient.rpc("revoke_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+  })).error, null);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess(device.publicKey)).entitlementState, "ended");
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.5,
+    requested_valid_until: replacementValidUntil,
+  })).error, null);
+  await assert.rejects(
+    () => accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey),
+  );
+  const pendingRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
+  assert.equal(pendingRevocations.error, null);
+  assert.deepEqual(pendingRevocations.data.filter(
+    (row: { household_id: string }) => row.household_id === household.householdId,
+  ), [{
+    household_id: household.householdId,
+    device_id: device.id,
+    gateway_key_alias: `luna-managed-${device.id}`,
+  }]);
+  assert.equal((await operatorClient.rpc("record_managed_intelligence_gateway_revoked", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+  })).error, null);
+  assert.deepEqual(
+    (await operatorClient.rpc("pending_managed_intelligence_revocations")).data
+      .filter((row: { household_id: string }) => row.household_id === household.householdId),
+    [],
+  );
+  const replacementChallenge = await accountService.beginManagedIntelligenceDeviceProvisioning(
+    device.publicKey,
+  );
+  const replacementAuthorization = deviceAuthority.authorize(canonicalAuthorization(
+    "luna:managed-intelligence-device:v1:",
+    [household.householdId, device.publicKey, replacementChallenge.nonce],
+  ));
+  const replacementAuthorized = await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: replacementChallenge.id,
+    requested_nonce: replacementChallenge.nonce,
+    requested_authorization_signature: replacementAuthorization,
+  });
+  assert.equal(replacementAuthorized.error, null);
+  const replacementAuthorizedRow = Array.isArray(replacementAuthorized.data)
+    ? replacementAuthorized.data[0]
+    : replacementAuthorized.data;
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.25,
+    requested_valid_until: replacementValidUntil,
+  })).error, null);
+  const staleReservationId = crypto.randomUUID();
+  assert.ok((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_budget_scope_id: replacementAuthorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(replacementAuthorizedRow.max_budget_usd),
+    requested_reservation_id: staleReservationId,
+  })).error, "a stale budget authorization cannot restore an earlier Household cap");
+
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.25,
+    requested_valid_until: replacementValidUntil,
+  })).error, null);
+  const raceChallenge = await accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey);
+  const raceAuthorization = deviceAuthority.authorize(canonicalAuthorization(
+    "luna:managed-intelligence-device:v1:",
+    [household.householdId, device.publicKey, raceChallenge.nonce],
+  ));
+  const raceAuthorized = await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: raceChallenge.id,
+    requested_nonce: raceChallenge.nonce,
+    requested_authorization_signature: raceAuthorization,
+  });
+  assert.equal(raceAuthorized.error, null);
+  const raceAuthorizedRow = Array.isArray(raceAuthorized.data) ? raceAuthorized.data[0] : raceAuthorized.data;
+  const raceReservationId = crypto.randomUUID();
+  assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_budget_scope_id: raceAuthorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(raceAuthorizedRow.max_budget_usd),
+    requested_reservation_id: raceReservationId,
+  })).error, null);
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.125,
+    requested_valid_until: replacementValidUntil,
+  })).error, null);
+  assert.ok((await operatorClient.rpc("record_managed_intelligence_device_access", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_status: "ready",
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_credential_expires_at: credentialExpiresAt,
+    requested_budget_scope_id: raceAuthorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(raceAuthorizedRow.max_budget_usd),
+    requested_reservation_id: raceReservationId,
+  })).error, "a cap rotation after reservation cannot restore stale managed access");
+  const leasedRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
+  assert.equal(leasedRevocations.error, null);
+  assert.deepEqual(leasedRevocations.data.filter(
+    (row: { household_id: string }) => row.household_id === household.householdId,
+  ), [], "reconciliation cannot finish before an in-flight mint has left its alias usable");
+  const database = postgres(databaseUrl, { max: 1 });
+  await database`
+    update public.managed_intelligence_device_access
+    set provisioning_lease_expires_at = now() - interval '1 second'
+    where household_id = ${household.householdId} and device_id = ${device.id}
+  `;
+  await database.end();
+  const raceRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
+  assert.equal(raceRevocations.error, null);
+  assert.deepEqual(raceRevocations.data.filter(
+    (row: { household_id: string }) => row.household_id === household.householdId,
+  ), [{
+    household_id: household.householdId,
+    device_id: device.id,
+    gateway_key_alias: `luna-managed-${device.id}`,
+  }], "a reserved alias remains durable if entitlement is revoked before readiness is recorded");
+});
 
 test("a verified Luna Account returns to the same Household after signing in again", async () => {
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
@@ -476,6 +875,7 @@ function readLocalSupabaseConfig(): {
   DB_URL?: string;
   JWT_SECRET?: string;
   PUBLISHABLE_KEY?: string;
+  SERVICE_ROLE_KEY?: string;
 } {
   if (process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY) return {};
 
@@ -491,6 +891,7 @@ function readLocalSupabaseConfig(): {
     DB_URL?: string;
     JWT_SECRET?: string;
     PUBLISHABLE_KEY?: string;
+    SERVICE_ROLE_KEY?: string;
   };
 }
 

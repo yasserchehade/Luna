@@ -37,7 +37,30 @@ test("provider controls remain available when protected Consent Grants cannot be
     },
   };
 
-  const result = await loadCloudAssistanceOptionsData(service, "household");
+  const result = await loadCloudAssistanceOptionsData(service, {
+    async getHouseholdIntelligenceAccess() {
+      return {
+        householdId: "household" as never,
+        plan: "free",
+        entitlementState: "free",
+        deviceState: "notApplicable",
+        entitlementSource: null,
+        maxBudgetUsd: null,
+        validUntil: null,
+        credentialExpiresAt: null,
+      };
+    },
+    async createManagedIntelligenceCheckoutSession() {
+      return { url: "https://pay.paddle.io/test" };
+    },
+    async createManagedIntelligenceCustomerPortalSession() {
+      return { url: "https://customer-portal.paddle.com/test" };
+    },
+  }, {
+    async currentDevicePublicKey() {
+      return "age1trusteddevice";
+    },
+  }, "household" as never);
 
   assert.deepEqual(result.providers, providers);
   assert.deepEqual(result.scopes, []);

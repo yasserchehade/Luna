@@ -11,6 +11,9 @@ export const tauriTrustedDeviceService: TrustedDeviceService = {
   async currentDevicePublicKey(householdId) {
     return invoke<string>("current_device_public_key", { householdId });
   },
+  async signManagedIntelligenceDeviceProvisioning(householdId, nonce) {
+    return invoke<string>("sign_managed_intelligence_device_provisioning", { householdId, nonce });
+  },
   async currentKeyEpoch(householdId) {
     return invoke<number>("current_key_epoch", { householdId });
   },
