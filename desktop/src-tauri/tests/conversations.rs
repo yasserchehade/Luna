@@ -1780,6 +1780,35 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         .find(|arrival| arrival.id == unrelated.id)
         .expect("unchanged unrelated document");
     assert_eq!(unchanged.processing_state, unrelated.processing_state);
+
+    let queued_source = directory.path().join("queued.jpg");
+    fs::write(&queued_source, image_fixture(image::ImageFormat::Jpeg))
+        .expect("write queued fixture");
+    let queued = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &queued_source,
+        "Queued rates.jpg",
+    );
+    fs::rename(&cabinet, &unavailable).expect("disconnect Cabinet");
+    assert!(store
+        .resume_document_filings("rivera-household", &cabinet)
+        .is_err());
+    let queued_waiting = store
+        .list_document_arrivals("rivera-household")
+        .expect("list queued work after batch retry")
+        .into_iter()
+        .find(|arrival| arrival.id == queued.id)
+        .expect("queued waiting document");
+    assert_eq!(
+        queued_waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
+    fs::rename(&unavailable, &cabinet).expect("restore Cabinet");
+    store
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("resume all filing work after Cabinet returns");
 }
 
 #[test]
@@ -2295,15 +2324,19 @@ fn filing_recovers_after_the_verified_destination_was_written_before_event_recor
     let interrupted_temporary =
         section.join(format!(".luna-filing-{}-{}.tmp", ready.id, ready.checksum));
     fs::create_dir(&interrupted_temporary).expect("block temporary filing write");
-    store
+    let waiting = store
         .file_document("rivera-household", ready.id, &cabinet)
-        .expect_err("simulate interruption after durable Filing state");
+        .expect("keep interrupted filing waiting");
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
     assert_eq!(
         store
             .list_document_arrivals("rivera-household")
             .expect("list interrupted filing")[0]
             .processing_state,
-        DocumentProcessingState::Filing
+        DocumentProcessingState::CabinetUnavailable
     );
     fs::remove_dir(interrupted_temporary).expect("clear interrupted temporary write");
     fs::write(&destination, &original).expect("simulate verified write before durable event");

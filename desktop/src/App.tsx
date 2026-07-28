@@ -199,6 +199,38 @@ export default function App({ accountService, cabinetService, conversationServic
   }, [cabinetCheckAttempt, cabinetService, session?.householdId]);
 
   useEffect(() => {
+    if (!session || !cabinetValidation) return;
+    let active = true;
+    let checking = false;
+    const recheckCabinet = () => {
+      if (checking) return;
+      checking = true;
+      void cabinetService.validate(session.householdId)
+        .then((validation) => {
+          if (!active || !validation) return;
+          if (
+            cabinetValidation.availability === "unavailable"
+            && validation.availability === "ready"
+          ) {
+            setCabinetRecoveryRequest((request) => request + 1);
+          }
+          setCabinetValidation(validation);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          checking = false;
+        });
+    };
+    const retryTimer = window.setInterval(recheckCabinet, 30_000);
+    window.addEventListener("online", recheckCabinet);
+    return () => {
+      active = false;
+      window.clearInterval(retryTimer);
+      window.removeEventListener("online", recheckCabinet);
+    };
+  }, [cabinetService, cabinetValidation, session]);
+
+  useEffect(() => {
     if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
     const request = activeDestination === "Cabinet"
       ? conversationService.listFiledOriginals(session.householdId).then(setFiledOriginals)

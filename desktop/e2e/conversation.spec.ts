@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, expect } from "@wdio/globals";
 import { onboardTestHousehold } from "./onboardTestHousehold";
+import { testHousehold } from "./testHousehold";
 
 describe("Luna Conversation desk", () => {
   it("keeps document work consistent between Conversation and To do", async () => {
@@ -82,7 +83,27 @@ describe("Luna Conversation desk", () => {
     await review.$("input[aria-label='Cabinet Destination']").setValue(
       "Bills & Services/12 Seabreeze Avenue/AGL/2026/AGL bill July 2026.pdf",
     );
-    await review.$("button=Confirm Filing Decision").click();
+    await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("set_e2e_cabinet_availability", { householdId, available: false })
+    ), testHousehold.id);
+    try {
+      await browser.execute(() => window.dispatchEvent(new Event("online")));
+      await expect($("p=The remembered Cabinet is unavailable. Luna will keep local work staged and will not redirect it. Open Cabinet to choose the remembered location again.")).toBeDisplayed();
+      await $(".document-arrival .review-card").$("button=Confirm Filing Decision").click();
+      await expect($(".document-arrival > div > p")).toHaveText("Waiting for Cabinet");
+      await expect($(".document-arrival .review-card").$("dt=Recovery status")).toBeDisplayed();
+      await expect($(".document-arrival .review-card")).toHaveText(expect.stringContaining("only the confirmed Cabinet Destination"));
+      await $("button[aria-label='To do']").click();
+      await expect($(".todo-view header span")).toHaveText("1 requiring attention");
+      await expect($(".todo-list article")).toHaveText(expect.stringContaining("Waiting for Cabinet"));
+      await expect($(".todo-list article").$("button=Dismiss")).not.toExist();
+      await $("button=Open Conversation item").click();
+    } finally {
+      await browser.tauri.execute(({ core }, householdId) => (
+        core.invoke("set_e2e_cabinet_availability", { householdId, available: true })
+      ), testHousehold.id);
+      await browser.execute(() => window.dispatchEvent(new Event("online")));
+    }
     await expect($(".document-arrival > div > p")).toHaveText("Filed");
     await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
     await $("button[aria-label='To do']").click();

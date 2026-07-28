@@ -1674,64 +1674,78 @@ impl<V: CredentialVault> ConversationStore<V> {
             .filter(|decision| decision.confirmed)
             .ok_or(ConversationError::UnresolvedContext)?;
         let cabinet_root = cabinet_root.as_ref();
-        if !cabinet_root.is_dir() {
-            payload.processing_state = DocumentProcessingState::CabinetUnavailable;
-            return self.save_document_arrival_payload(
-                household_id,
-                arrival_id,
-                conversation_id,
-                payload,
-            );
-        }
-        let destination = safe_cabinet_destination(cabinet_root, &decision.cabinet_destination)?;
-        let staged = fs::read(&payload.original_path)?;
-        if sha256(&staged) != payload.checksum {
-            return Err(ConversationError::OriginalVerificationFailed);
-        }
+        let filing_result = (|| -> Result<PathBuf, ConversationError> {
+            if !cabinet_root.is_dir() {
+                return Err(ConversationError::DocumentUnavailable(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Cabinet is unavailable",
+                )));
+            }
+            let destination =
+                safe_cabinet_destination(cabinet_root, &decision.cabinet_destination)?;
+            let staged = fs::read(&payload.original_path)?;
+            if sha256(&staged) != payload.checksum {
+                return Err(ConversationError::OriginalVerificationFailed);
+            }
 
-        if destination.exists() && !resuming {
-            return Err(ConversationError::CabinetDestinationConflict);
-        }
-        if destination.exists() {
+            if destination.exists() && !resuming {
+                return Err(ConversationError::CabinetDestinationConflict);
+            }
+            if destination.exists() {
+                verify_existing_destination(&destination, &payload.checksum)?;
+            } else {
+                if !resuming {
+                    payload.processing_state = DocumentProcessingState::Filing;
+                    self.save_document_arrival_payload(
+                        household_id,
+                        arrival_id,
+                        conversation_id,
+                        payload.clone(),
+                    )?;
+                }
+                let temporary = destination.with_file_name(format!(
+                    ".luna-filing-{arrival_id}-{}.tmp",
+                    payload.checksum
+                ));
+                if temporary.exists() && sha256(&fs::read(&temporary)?) != payload.checksum {
+                    fs::remove_file(&temporary)?;
+                }
+                if !temporary.exists() {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&temporary)?;
+                    file.write_all(&staged)?;
+                    file.sync_all()?;
+                }
+                if sha256(&fs::read(&temporary)?) != payload.checksum {
+                    return Err(ConversationError::OriginalVerificationFailed);
+                }
+                match fs::hard_link(&temporary, &destination) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        return Err(ConversationError::CabinetDestinationConflict);
+                    }
+                    Err(error) => return Err(ConversationError::DocumentUnavailable(error)),
+                }
+                fs::remove_file(&temporary)?;
+            }
             verify_existing_destination(&destination, &payload.checksum)?;
-        } else {
-            if !resuming {
-                payload.processing_state = DocumentProcessingState::Filing;
-                self.save_document_arrival_payload(
+            Ok(destination)
+        })();
+        let destination = match filing_result {
+            Ok(destination) => destination,
+            Err(ConversationError::DocumentUnavailable(_)) => {
+                payload.processing_state = DocumentProcessingState::CabinetUnavailable;
+                return self.save_document_arrival_payload(
                     household_id,
                     arrival_id,
                     conversation_id,
-                    payload.clone(),
-                )?;
+                    payload,
+                );
             }
-            let temporary = destination.with_file_name(format!(
-                ".luna-filing-{arrival_id}-{}.tmp",
-                payload.checksum
-            ));
-            if temporary.exists() && sha256(&fs::read(&temporary)?) != payload.checksum {
-                fs::remove_file(&temporary)?;
-            }
-            if !temporary.exists() {
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&temporary)?;
-                file.write_all(&staged)?;
-                file.sync_all()?;
-            }
-            if sha256(&fs::read(&temporary)?) != payload.checksum {
-                return Err(ConversationError::OriginalVerificationFailed);
-            }
-            match fs::hard_link(&temporary, &destination) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    return Err(ConversationError::CabinetDestinationConflict);
-                }
-                Err(error) => return Err(ConversationError::DocumentUnavailable(error)),
-            }
-            fs::remove_file(&temporary)?;
-        }
-        verify_existing_destination(&destination, &payload.checksum)?;
+            Err(error) => return Err(error),
+        };
 
         let filed_original = FiledOriginal {
             arrival_id,
@@ -1864,8 +1878,17 @@ impl<V: CredentialVault> ConversationStore<V> {
             })
             .map(|arrival| arrival.id)
             .collect::<Vec<_>>();
+        let mut first_error = None;
         for arrival_id in resumable {
-            self.file_document(household_id, arrival_id, cabinet_root.as_ref())?;
+            if let Err(error) = self.file_document(household_id, arrival_id, cabinet_root.as_ref())
+            {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Ok(())
     }

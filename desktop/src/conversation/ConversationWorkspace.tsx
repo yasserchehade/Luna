@@ -8,6 +8,7 @@ import type {
   CloudConsentScope,
   DocumentContextDirection,
   DocumentArrival,
+  DocumentProcessingState,
   DuplicateDecision,
   FilingDecisionDirection,
   IntelligenceProviderStatus,
@@ -40,6 +41,12 @@ const stateLabel = (arrival: DocumentArrival) => ({
   filed: "Filed",
   dismissed: "Dismissed",
 })[arrival.processingState];
+
+const canDismiss = (processingState: DocumentProcessingState) => (
+  processingState === "needsCloudConsent"
+  || processingState === "waitingForCloudAssistance"
+  || processingState === "needsMemberDirection"
+);
 
 const confidenceLabel = (arrival: DocumentArrival) => ({
   confirmed: "Confirmed",
@@ -558,6 +565,9 @@ export function ConversationWorkspace({
     if (initialized.current) return;
     initialized.current = true;
     void conversationService.resumeDocumentFilings(householdId)
+      .catch(() => {
+        setError("Some Cabinet recovery work is still waiting.");
+      })
       .then(() => conversationService.listConversations(householdId, undefined, false))
       .then(async (loaded) => {
         if (loaded.length === 0) await createConversation();
@@ -598,8 +608,11 @@ export function ConversationWorkspace({
   useEffect(() => {
     if (!initialized.current || cabinetRecoveryRequest === 0) return;
     void conversationService.resumeDocumentFilings(householdId)
+      .catch(() => {
+        setError("Some Cabinet recovery work is still waiting.");
+      })
       .then(() => loadHouseholdWork())
-      .catch(() => setError("Luna could not retry staged Cabinet work."));
+      .catch(() => setError("Luna could not refresh staged Cabinet work."));
   }, [cabinetRecoveryRequest, conversationService, householdId, loadHouseholdWork]);
 
   useEffect(() => {
@@ -757,7 +770,7 @@ export function ConversationWorkspace({
 
   if (destination === "To do") {
     return <main className="conversation todo-view">
-      <header><div><small>Attention</small><h1>To do</h1></div><span>{todos.length} requiring direction</span></header>
+      <header><div><small>Attention</small><h1>To do</h1></div><span>{todos.length} requiring attention</span></header>
       {error && <p role="alert" className="session-notice">{error}</p>}
       <section className="todo-list" aria-label="To-do Items">
         {todos.length === 0 && <p className="empty-state">Nothing needs your attention.</p>}
@@ -765,7 +778,7 @@ export function ConversationWorkspace({
           <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : "Needs your direction"}</p></div>
           <div>
             <button type="button" onClick={() => void openTodo(todo)}>Open Conversation item</button>
-            {todo.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>}
+            {canDismiss(todo.processingState) && <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>}
           </div>
         </article>)}
       </section>
@@ -859,11 +872,7 @@ export function ConversationWorkspace({
             onRefresh={async () => { await loadHouseholdWork(); }}
           />
         </div>
-        {(
-          arrival.processingState === "needsMemberDirection"
-          || arrival.processingState === "needsCloudConsent"
-          || arrival.processingState === "waitingForCloudAssistance"
-        ) && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
+        {canDismiss(arrival.processingState) && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
       </article>)}
     </section>
     <div className="attachment-zone">

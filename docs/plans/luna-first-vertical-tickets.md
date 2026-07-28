@@ -271,11 +271,12 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 
 - [ ] Known learned-rule filing completes offline when the cabinet is available.
 - [ ] An unfamiliar document needing deeper intelligence waits explicitly while offline.
-- [ ] An unavailable cabinet leaves the original in encrypted staging.
+- [ ] An unavailable cabinet leaves the untouched Original in the household-owned, checksum-addressed `Incoming` Cabinet folder defined by ADR 0009; protected handling metadata remains encrypted.
 - [ ] Luna never chooses a different cabinet because the configured one is unavailable.
-- [ ] Retry removes staging only after checksum verification.
+- [ ] Retry removes staging only after checksum verification and durable Audit Event recording.
 - [ ] Persistent unavailability or time risk creates one clear To do item.
 - [ ] Interrupted filing resumes without duplicate files or missing history.
+- [ ] The Review Card exposes checksum-bound recovery evidence without adding a second execution path.
 
 ## 14 — Synchronise encrypted portable Luna memory
 
