@@ -17,6 +17,9 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Secret exclusion | `gateway_credentials_remain_in_the_vault_and_out_of_public_history` through the credential-vault boundary |
 | BYOK vault-only retention | `byok_connection_is_tested_before_the_provider_key_is_kept_only_in_the_vault` |
 | Separate gateway/provider authentication | `byok_adapter_separates_gateway_and_provider_credentials_on_the_isolated_route` and `byok-canary.test.mjs` |
+| Provider setup waits for Luna access | `a_byok_only_household_is_not_reported_as_having_managed_access` and `provider key setup waits for automatically provisioned Luna access` |
+| Cleartext endpoint rejection | `cleartext_gateway_endpoints_are_allowed_only_on_loopback` |
+| Gateway/provider auth failure attribution | `byok_gateway_authentication_rejection_is_not_blamed_on_the_provider_key` |
 | Installed BYOK setup | installed Conversation scenario tests connect, replace and remove in Options |
 | Deterministic contract | all `DeterministicIntelligenceGateway` application and boundary tests |
 | Invalid output rejection | `invalid_structured_identity_is_rejected_and_recorded_as_waiting` |
@@ -38,6 +41,6 @@ The OpenAI/LiteLLM canary is an explicit release-environment check, not an autom
 
 A remote host is not required to merge the prototype. Issue #53 owns the separate pre-production gate: authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and remote log verification must exist before external testers use Luna-managed Intelligence.
 
-Bring-your-own Intelligence is a separate follow-on gate. The pinned LiteLLM build can distinguish Luna gateway authentication from a forwarded provider credential, but Luna must prove BYOK-only route isolation, fail-closed missing-key behavior, credential-free logs and non-persistence before exposing provider-key entry in Options.
+Bring-your-own Intelligence is a separate follow-on gate. Provider-key entry in Options is enabled only after Luna has provisioned BYOK gateway access to the Trusted Device. The pinned LiteLLM build and Luna adapter distinguish Luna gateway authentication from a forwarded provider credential, reject cleartext remote endpoints, and prove BYOK-only route isolation, fail-closed missing-key behavior, credential-free logs and non-persistence.
 
 Source-boundary review additionally verifies `conversation.rs` and `document_intelligence.rs` import no LiteLLM type. `litellm.rs` is private to the Rust crate.

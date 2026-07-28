@@ -9,6 +9,7 @@ import {
   cloudAssistanceLoadErrorMessage,
   loadCloudAssistanceOptionsData,
   providerApiKeysLinkLabel,
+  providerSetupAvailability,
 } from "./CloudAssistanceOptions";
 
 test("provider controls remain available when protected Consent Grants cannot be opened", async () => {
@@ -21,6 +22,7 @@ test("provider controls remain available when protected Consent Grants cannot be
       managedByLuna: false,
       authUrl: "https://platform.openai.com/api-keys",
     },
+    gatewayConfigured: true,
     configured: false,
   }];
   const service: Pick<
@@ -61,5 +63,18 @@ test("provider key links do not repeat Open in the OpenAI name", () => {
   assert.equal(
     providerApiKeysLinkLabel("OpenAI — bring your own key"),
     "OpenAI API keys",
+  );
+});
+
+test("provider key setup waits for automatically provisioned Luna access", () => {
+  assert.deepEqual(
+    providerSetupAvailability({
+      gatewayConfigured: false,
+      configured: false,
+    }),
+    {
+      enabled: false,
+      statusLabel: "Luna access unavailable",
+    },
   );
 });

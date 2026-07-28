@@ -53,6 +53,7 @@ pub struct IntelligenceProviderDescriptor {
 #[serde(rename_all = "camelCase")]
 pub struct IntelligenceProviderStatus {
     pub descriptor: IntelligenceProviderDescriptor,
+    pub gateway_configured: bool,
     pub configured: bool,
 }
 
@@ -532,6 +533,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                         .is_some();
                 IntelligenceProviderStatus {
                     descriptor,
+                    gateway_configured,
                     configured: gateway_configured && provider_configured,
                 }
             })
@@ -2010,6 +2012,7 @@ mod tests {
             .into_iter()
             .find(|status| status.descriptor.id == BYOK_OPENAI_PROVIDER_ID)
             .expect("BYOK provider status");
+        assert!(status.gateway_configured);
         assert!(status.configured);
         assert!(vault
             .0
@@ -2243,20 +2246,18 @@ mod tests {
         let statuses = store
             .provider_statuses("household")
             .expect("list mode-aware provider statuses");
-        assert!(
-            !statuses
-                .iter()
-                .find(|status| status.descriptor.id == MANAGED_INTELLIGENCE_PROVIDER_ID)
-                .expect("managed status")
-                .configured
-        );
-        assert!(
-            statuses
-                .iter()
-                .find(|status| status.descriptor.id == BYOK_OPENAI_PROVIDER_ID)
-                .expect("BYOK status")
-                .configured
-        );
+        let managed = statuses
+            .iter()
+            .find(|status| status.descriptor.id == MANAGED_INTELLIGENCE_PROVIDER_ID)
+            .expect("managed status");
+        assert!(!managed.gateway_configured);
+        assert!(!managed.configured);
+        let byok = statuses
+            .iter()
+            .find(|status| status.descriptor.id == BYOK_OPENAI_PROVIDER_ID)
+            .expect("BYOK status");
+        assert!(byok.gateway_configured);
+        assert!(byok.configured);
     }
 
     #[test]

@@ -75,7 +75,7 @@ Pinned LiteLLM v1.93.0 deliberately reports the requested proxy route in `respon
 
 The BYOK canary creates a separate disposable virtual key restricted to `byok/openai/gpt-4.1-mini`, sends gateway and customer-provider authentication in separate headers, proves a missing customer key fails, proves the same key receives HTTP 403 for the managed route, revokes the virtual key, and scans both container logs and a PostgreSQL dump for the customer key and synthetic marker. The rendered BYOK container environment has no managed provider secret.
 
-The runner accepts HTTP only for loopback. Every remote endpoint must use HTTPS. Its deterministic boundary tests run with:
+The runner and desktop adapter accept HTTP only for loopback. Every remote endpoint must use HTTPS and is rejected before credentials or request content are transmitted. The desktop reads at most 8 KiB of a failed response and retains only the structured error type needed to distinguish a rejected virtual key from a rejected upstream provider key. Its deterministic boundary tests run with:
 
 ```powershell
 node --test ops/litellm/canary.test.mjs ops/litellm/byok-canary.test.mjs

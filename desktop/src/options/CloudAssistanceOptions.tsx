@@ -45,6 +45,19 @@ export function providerApiKeysLinkLabel(providerName: string): string {
   return `${providerName.split(" — ")[0]} API keys`;
 }
 
+export function providerSetupAvailability(
+  status: Pick<IntelligenceProviderStatus, "gatewayConfigured" | "configured">,
+): { enabled: boolean; statusLabel: string } {
+  return {
+    enabled: status.gatewayConfigured,
+    statusLabel: status.configured
+      ? "Connected"
+      : status.gatewayConfigured
+      ? "Not connected"
+      : "Luna access unavailable",
+  };
+}
+
 export function CloudAssistanceOptions({ conversationService, householdId }: { conversationService: ConversationService; householdId: string }) {
   const [providers, setProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [scopes, setScopes] = useState<CloudConsentScope[]>([]);
@@ -126,42 +139,48 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
     <h3>Bring your own provider</h3>
     <p className="muted">The provider bills your account. Luna tests the key before saving it in this device&apos;s operating-system credential vault. Your key is used only for the provider connection you selected and never switches to Luna-funded access.</p>
     <div className="cloud-provider-list">
-      {providers.filter(({ descriptor }) => !descriptor.managedByLuna).map(({ descriptor, configured }) => <section
-        className="cloud-provider-card"
-        aria-label={`${descriptor.name.split(" — ")[0]} bring-your-own-key connection`}
-        key={descriptor.id}
-      >
-        <div className="cloud-provider-heading">
-          <div><strong>{descriptor.name}</strong><span>{descriptor.description}</span></div>
-          <small>{configured ? "Connected" : "Not connected"}</small>
-        </div>
-        <p>Approved models: {descriptor.models.map(({ name }) => name).join(", ")}</p>
-        {descriptor.authUrl && <a href={descriptor.authUrl} target="_blank" rel="noreferrer">{providerApiKeysLinkLabel(descriptor.name)}</a>}
-        <label>
-          {configured ? "Replacement provider API key" : "Provider API key"}
-          <input
-            type="password"
-            autoComplete="off"
-            value={credentialDrafts[descriptor.id] ?? ""}
-            onChange={(event) => setCredentialDrafts((current) => ({
-              ...current,
-              [descriptor.id]: event.target.value,
-            }))}
-          />
-        </label>
-        <div className="default-intelligence-actions">
-          <button
-            type="button"
-            disabled={busyProviderId === descriptor.id || !credentialDrafts[descriptor.id]?.trim()}
-            onClick={() => void testAndSaveProvider(descriptor.id)}
-          >{configured ? "Test and replace" : "Test and connect"}</button>
-          {configured && <button
-            type="button"
-            disabled={busyProviderId === descriptor.id}
-            onClick={() => void removeProvider(descriptor.id)}
-          >Remove key</button>}
-        </div>
-      </section>)}
+      {providers.filter(({ descriptor }) => !descriptor.managedByLuna).map((status) => {
+        const { descriptor, gatewayConfigured, configured } = status;
+        const setup = providerSetupAvailability(status);
+        return <section
+          className="cloud-provider-card"
+          aria-label={`${descriptor.name.split(" — ")[0]} bring-your-own-key connection`}
+          key={descriptor.id}
+        >
+          <div className="cloud-provider-heading">
+            <div><strong>{descriptor.name}</strong><span>{descriptor.description}</span></div>
+            <small>{setup.statusLabel}</small>
+          </div>
+          <p>Approved models: {descriptor.models.map(({ name }) => name).join(", ")}</p>
+          {!gatewayConfigured && <p className="muted">Provider setup will be available automatically when Luna enables Cloud Assistance on this Trusted Device. There is no Luna access key to enter.</p>}
+          {descriptor.authUrl && <a href={descriptor.authUrl} target="_blank" rel="noreferrer">{providerApiKeysLinkLabel(descriptor.name)}</a>}
+          <label>
+            {configured ? "Replacement provider API key" : "Provider API key"}
+            <input
+              type="password"
+              autoComplete="off"
+              disabled={!setup.enabled}
+              value={credentialDrafts[descriptor.id] ?? ""}
+              onChange={(event) => setCredentialDrafts((current) => ({
+                ...current,
+                [descriptor.id]: event.target.value,
+              }))}
+            />
+          </label>
+          <div className="default-intelligence-actions">
+            <button
+              type="button"
+              disabled={!setup.enabled || busyProviderId === descriptor.id || !credentialDrafts[descriptor.id]?.trim()}
+              onClick={() => void testAndSaveProvider(descriptor.id)}
+            >{configured ? "Test and replace" : "Test and connect"}</button>
+            {configured && <button
+              type="button"
+              disabled={busyProviderId === descriptor.id}
+              onClick={() => void removeProvider(descriptor.id)}
+            >Remove key</button>}
+          </div>
+        </section>;
+      })}
     </div>
     <h3>Consent Grants</h3>
     {consentError

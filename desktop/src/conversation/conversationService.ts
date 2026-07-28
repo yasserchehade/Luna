@@ -153,6 +153,7 @@ export type IntelligenceProviderDescriptor = {
 
 export type IntelligenceProviderStatus = {
   descriptor: IntelligenceProviderDescriptor;
+  gatewayConfigured: boolean;
   configured: boolean;
 };
 

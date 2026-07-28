@@ -3,7 +3,7 @@
 //! No LiteLLM request, response or error type leaves this module. Luna selects
 //! the exact provider and model before this adapter translates the request.
 
-use std::{sync::Arc, time::Duration};
+use std::{io::Read, net::IpAddr, sync::Arc, time::Duration};
 
 use reqwest::StatusCode;
 
@@ -61,7 +61,9 @@ impl LiteLlmTransport for ReqwestLiteLlmTransport {
             }
         })?;
         if !response.status().is_success() {
-            return Err(LiteLlmTransportFailure::Status(response.status()));
+            let status = response.status();
+            let error_type = read_bounded_error_type(response);
+            return Err(LiteLlmTransportFailure::Status { status, error_type });
         }
         response
             .json()
@@ -70,7 +72,10 @@ impl LiteLlmTransport for ReqwestLiteLlmTransport {
 }
 
 enum LiteLlmTransportFailure {
-    Status(StatusCode),
+    Status {
+        status: StatusCode,
+        error_type: Option<String>,
+    },
     TimedOut,
     GatewayUnavailable,
     InvalidResponse,
@@ -147,6 +152,9 @@ impl IntelligenceGateway for LiteLlmGateway {
                 LiteLlmAuthentication::Managed(credential),
             )
         };
+        if !endpoint_is_secure(endpoint) {
+            return Err(IntelligenceFailure::GatewayUnavailable);
+        }
         let timeout = Duration::from_millis(request.constraints.timeout_ms.max(1));
         let response = self
             .transport
@@ -301,24 +309,79 @@ struct LiteLlmStructuredResult {
     source_references: Vec<String>,
 }
 
+fn read_bounded_error_type(response: reqwest::blocking::Response) -> Option<String> {
+    const MAX_ERROR_BODY_BYTES: u64 = 8 * 1024;
+
+    let mut body = Vec::new();
+    response
+        .take(MAX_ERROR_BODY_BYTES)
+        .read_to_end(&mut body)
+        .ok()?;
+    serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()?
+        .pointer("/error/type")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn endpoint_is_secure(endpoint: &str) -> bool {
+    let Ok(endpoint) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = endpoint.host_str() else {
+        return false;
+    };
+    if endpoint.scheme() == "https" {
+        return true;
+    }
+    let ip_host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    endpoint.scheme() == "http"
+        && (host.eq_ignore_ascii_case("localhost")
+            || ip_host
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback()))
+}
+
+fn is_gateway_auth_error(error_type: Option<&str>) -> bool {
+    matches!(
+        error_type,
+        Some(
+            "auth_error"
+                | "budget_exceeded"
+                | "expired_key"
+                | "key_model_access_denied"
+                | "no_db_connection"
+                | "org_model_access_denied"
+                | "project_model_access_denied"
+                | "team_model_access_denied"
+                | "token_not_found_in_db"
+                | "user_model_access_denied"
+        )
+    )
+}
+
 fn map_transport_failure(failure: LiteLlmTransportFailure, byok: bool) -> IntelligenceFailure {
     match failure {
-        LiteLlmTransportFailure::Status(status)
+        LiteLlmTransportFailure::Status { status, error_type }
             if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN =>
         {
-            if byok {
+            if byok && !is_gateway_auth_error(error_type.as_deref()) {
                 IntelligenceFailure::ProviderAuthenticationUnavailable
             } else {
                 IntelligenceFailure::AuthenticationUnavailable
             }
         }
-        LiteLlmTransportFailure::Status(StatusCode::TOO_MANY_REQUESTS) => {
-            IntelligenceFailure::RateLimited
-        }
-        LiteLlmTransportFailure::Status(status) if status.is_client_error() => {
+        LiteLlmTransportFailure::Status {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            ..
+        } => IntelligenceFailure::RateLimited,
+        LiteLlmTransportFailure::Status { status, .. } if status.is_client_error() => {
             IntelligenceFailure::ProviderRejectedRequest
         }
-        LiteLlmTransportFailure::Status(_) | LiteLlmTransportFailure::GatewayUnavailable => {
+        LiteLlmTransportFailure::Status { .. } | LiteLlmTransportFailure::GatewayUnavailable => {
             IntelligenceFailure::GatewayUnavailable
         }
         LiteLlmTransportFailure::TimedOut => IntelligenceFailure::TimedOut,
@@ -481,5 +544,47 @@ mod tests {
         assert_eq!(body["num_retries"], 0);
         assert_eq!(body["fallbacks"], serde_json::json!([]));
         assert!(body.get("api_key").is_none());
+    }
+
+    #[test]
+    fn cleartext_gateway_endpoints_are_allowed_only_on_loopback() {
+        assert!(endpoint_is_secure(
+            "http://127.0.0.1:4001/v1/chat/completions"
+        ));
+        assert!(endpoint_is_secure("http://[::1]:4001/v1/chat/completions"));
+        assert!(endpoint_is_secure(
+            "http://localhost:4001/v1/chat/completions"
+        ));
+        assert!(endpoint_is_secure(
+            "https://byok-intelligence.luna.example/v1/chat/completions"
+        ));
+        assert!(!endpoint_is_secure(
+            "http://byok-intelligence.luna.example/v1/chat/completions"
+        ));
+        assert!(!endpoint_is_secure("not a URL"));
+    }
+
+    #[test]
+    fn byok_gateway_authentication_rejection_is_not_blamed_on_the_provider_key() {
+        assert_eq!(
+            map_transport_failure(
+                LiteLlmTransportFailure::Status {
+                    status: StatusCode::UNAUTHORIZED,
+                    error_type: Some("token_not_found_in_db".to_owned()),
+                },
+                true,
+            ),
+            IntelligenceFailure::AuthenticationUnavailable
+        );
+        assert_eq!(
+            map_transport_failure(
+                LiteLlmTransportFailure::Status {
+                    status: StatusCode::UNAUTHORIZED,
+                    error_type: Some("invalid_request_error".to_owned()),
+                },
+                true,
+            ),
+            IntelligenceFailure::ProviderAuthenticationUnavailable
+        );
     }
 }

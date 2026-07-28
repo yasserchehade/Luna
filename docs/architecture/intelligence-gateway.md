@@ -35,7 +35,7 @@ The production catalogue contains two deliberately separate OpenAI routes:
 
 Luna-managed Intelligence is an entitlement of an eligible paid Household plan and uses provider credentials billed to Luna. A free Household may instead configure a supported Bring-your-own provider connection entirely through Luna's interface, with provider usage billed to the connection owner, or remain Local-only. Paid Households retain those choices. Managed gateway credentials are automatically provisioned to Trusted Devices and are never customer-entered settings.
 
-The managed adapter authenticates with a bearer gateway credential. The BYOK adapter sends the automatically provisioned gateway credential as `x-litellm-api-key` and the transient customer provider credential separately as `x-api-key`. The provider credential is loaded from the OS vault and never enters the request body. The BYOK LiteLLM process has no `OPENAI_API_KEY`; its configured model is `byok/openai/gpt-4.1-mini`, and its virtual keys cannot address the managed route.
+The managed adapter authenticates with a bearer gateway credential. The BYOK adapter sends the automatically provisioned gateway credential as `x-litellm-api-key` and the transient customer provider credential separately as `x-api-key`. The provider credential is loaded from the OS vault and never enters the request body. Options keeps provider-key entry disabled until that Trusted Device has BYOK gateway access, so missing infrastructure access is never misreported as a bad customer key. The BYOK LiteLLM process has no `OPENAI_API_KEY`; its configured model is `byok/openai/gpt-4.1-mini`, and its virtual keys cannot address the managed route.
 
 ## Household Plan and billing
 
@@ -47,7 +47,7 @@ Live charging remains disabled until issue #53's remote gateway can provision an
 
 `DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
 
-For prototype acceptance, an operator may run the pinned gateway deployment ephemerally on loopback and send only the fixed synthetic canary. This validates the real provider contract without adding LiteLLM or Python to the desktop. Before external testing, the same boundary moves behind authenticated remote HTTPS ingress with managed secrets and attributable gateway credentials.
+For prototype acceptance, an operator may run the pinned gateway deployment ephemerally on loopback and send only the fixed synthetic canary. The desktop and canary accept cleartext HTTP only for loopback hosts and reject every cleartext remote endpoint before transmitting credentials or content. This validates the real provider contract without adding LiteLLM or Python to the desktop. Before external testing, the same boundary moves behind authenticated remote HTTPS ingress with managed secrets and attributable gateway credentials.
 
 ## Minimisation
 
@@ -72,4 +72,4 @@ The provider result cannot create Member Direction or mutate a Document Arrival.
 
 Luna maps infrastructure failures to its own categories. Only `ProviderUnavailable`, `GatewayUnavailable` and `TimedOut` receive one bounded retry, using the byte-equivalent Luna request and the same provider/model. LiteLLM receives `num_retries: 0` and an empty fallback list.
 
-Exhausted, invalid, rejected, gateway-authentication, provider-credential or rate-limit failures leave Document Handling in `WaitingForCloudAssistance`. A missing BYOK provider key is rejected before transmission and before one-time consent is consumed. Keep local returns it to `NeedsMemberDirection` without a gateway call. Existing Filing Rules and duplicate/version handling never call this gateway and remain offline-capable.
+Exhausted, invalid, rejected, gateway-authentication, provider-credential or rate-limit failures leave Document Handling in `WaitingForCloudAssistance`. For BYOK 401/403 responses, the adapter reads only a bounded structured error type: known LiteLLM virtual-key failures remain gateway-authentication failures, while upstream authentication failures are attributed to the selected provider credential. A missing BYOK provider key is rejected before transmission and before one-time consent is consumed. Keep local returns it to `NeedsMemberDirection` without a gateway call. Existing Filing Rules and duplicate/version handling never call this gateway and remain offline-capable.
