@@ -1,14 +1,21 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
+    io::Cursor,
     path::Path,
     sync::{Arc, Mutex},
 };
 
 use luna_core::{
-    CredentialVault, PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
-    PortableConflictResolutionDraft, PortableConsentDetails, PortableConsentGrantKind,
-    PortableConsentProvider, PortableConsentPurpose, PortableConsentScope, PortableConsentState,
+    CloudConsentDecision, CloudIntelligenceStore, ContextRelevanceDirection, ConversationStore,
+    CredentialVault, DeterministicIntelligenceGateway, DocumentContextDirection,
+    DocumentProcessingState, FilingDecisionDirection, IntelligenceCapability,
+    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceModelDescriptor,
+    IntelligenceProviderDescriptor, IntelligenceRequest, IntelligenceResponseSchema,
+    IntelligenceSelection, LocalOcr, PortableAuditEventKind, PortableAuthority,
+    PortableAuthorizationCutoff, PortableConflictResolutionDraft, PortableConsentDetails,
+    PortableConsentField, PortableConsentGrantKind, PortableConsentProvider,
+    PortableConsentPurpose, PortableConsentScope, PortableConsentState,
     PortableConversationReference, PortableDocumentRelationshipKind, PortableEvent,
     PortableEventDraft, PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
     PortableFilingRuleState, PortableIntelligenceCapability, PortableMemberDirectionKind,
@@ -20,6 +27,27 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Default)]
 struct MemoryCredentialVault {
     secrets: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+struct FixedLocalOcr(&'static str);
+
+impl LocalOcr for FixedLocalOcr {
+    fn extract_text(&self, _original: &Path, _media_type: &str) -> Option<String> {
+        Some(self.0.to_owned())
+    }
+}
+
+fn png_fixture() -> Vec<u8> {
+    let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        1,
+        1,
+        image::Rgb([255, 255, 255]),
+    ));
+    let mut bytes = Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .expect("encode PNG fixture");
+    bytes.into_inner()
 }
 
 impl CredentialVault for MemoryCredentialVault {
@@ -316,11 +344,12 @@ fn a_recovered_trusted_device_rebuilds_the_current_filing_rule_projection() {
     let first_local = tempfile::tempdir().expect("create the first local database directory");
     let second_local = tempfile::tempdir().expect("create the second local database directory");
     let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
-    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
-        .expect("open portable memory on the first device");
-    let second_store =
-        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
-            .expect("open portable memory on the recovered device");
+    let first_store =
+        PortableMemoryStore::open(first_local.path().join("luna.db"), first_device.clone())
+            .expect("open portable memory on the first device");
+    let second_database = second_local.path().join("luna.db");
+    let second_store = PortableMemoryStore::open(&second_database, second_device.clone())
+        .expect("open portable memory on the recovered device");
     let rule_reference = reference("filing-rule-electricity");
 
     let appended = first_store
@@ -385,11 +414,12 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
     let first_local = tempfile::tempdir().expect("create the first local database directory");
     let second_local = tempfile::tempdir().expect("create the second local database directory");
     let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
-    let first_store = PortableMemoryStore::open(first_local.path().join("luna.db"), first_device)
-        .expect("open portable memory on the first device");
-    let second_store =
-        PortableMemoryStore::open(second_local.path().join("luna.db"), second_device)
-            .expect("open portable memory on the recovered device");
+    let first_store =
+        PortableMemoryStore::open(first_local.path().join("luna.db"), first_device.clone())
+            .expect("open portable memory on the first device");
+    let second_database = second_local.path().join("luna.db");
+    let second_store = PortableMemoryStore::open(&second_database, second_device.clone())
+        .expect("open portable memory on the recovered device");
     let document = reference("document-primary");
     let related_document = reference("document-updated");
     let grant = typed_reference("grant", "consent-denied");
@@ -445,7 +475,7 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
             provider: PortableConsentProvider::OpenAi,
             scope: PortableConsentScope {
                 document_type: Some(typed_reference("document-type", "electricity-bill")),
-                fields: vec![typed_reference("field", "amount")],
+                fields: vec![PortableConsentField::Amount],
             },
             state: PortableConsentState::Denied,
             details: PortableConsentDetails {
@@ -499,11 +529,17 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
         },
     );
 
+    let rebuilt_conversations = ConversationStore::open(&second_database, second_device.clone())
+        .expect("open the recovered Conversation owner");
+    let rebuilt_intelligence = CloudIntelligenceStore::open(&second_database, second_device)
+        .expect("open the recovered Consent owner");
     second_store
-        .import(
+        .synchronize_owned_state(
             household_id,
             cabinet.path(),
             std::slice::from_ref(&first_authorization),
+            &rebuilt_conversations,
+            &rebuilt_intelligence,
         )
         .expect("import all owning-domain facts");
     let projection = second_store
@@ -517,6 +553,20 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
     assert_eq!(projection.execution_outcomes, vec![outcome, offline]);
     assert_eq!(projection.audit_events, vec![audit]);
     assert!(projection.conflicts.is_empty());
+    assert_eq!(
+        rebuilt_conversations
+            .list_rebuilt_document_relationships(household_id)
+            .expect("list the relationship in its owning local store")
+            .len(),
+        1
+    );
+    assert_eq!(
+        rebuilt_conversations
+            .list_rebuilt_portable_history(household_id)
+            .expect("list History in its owning local store")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -753,6 +803,258 @@ fn secret_shaped_content_is_rejected_before_portable_memory_is_written() {
         .list_events(household_id)
         .expect("list local portable events")
         .is_empty());
+}
+
+#[test]
+fn synchronization_rebuilds_an_owning_filing_rule_that_handles_a_new_document() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create the user-owned Cabinet");
+    fs::create_dir_all(cabinet.path().join("Household records"))
+        .expect("create the filing section");
+    let first_local = tempfile::tempdir().expect("create the first local database");
+    let second_local = tempfile::tempdir().expect("create the recovered local database");
+    let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
+    let document_text = "Document Type: Electricity bill; Service Provider: AGL Energy; \
+        Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; \
+        Relevant Date: 2026-07-15";
+
+    let first_database = first_local.path().join("luna.db");
+    let first_conversations = ConversationStore::open_with_ocr(
+        &first_database,
+        first_device.clone(),
+        FixedLocalOcr(document_text),
+    )
+    .expect("open Conversation behavior on the first device");
+    let first_intelligence = CloudIntelligenceStore::open(&first_database, first_device.clone())
+        .expect("open Cloud Assistance behavior on the first device");
+    first_intelligence
+        .set_provider_credential(
+            household_id,
+            "openai-byok",
+            b"sk-live-must-remain-in-the-device-vault",
+        )
+        .expect("store a provider credential only in the device vault");
+    let conversation = first_conversations
+        .create_conversation(household_id, "Electricity bills")
+        .expect("create a Conversation");
+    let first_source = first_local.path().join("agl-july.png");
+    fs::write(&first_source, png_fixture()).expect("write the first document");
+    let arrival = first_conversations
+        .attach_document(household_id, conversation.id, &first_source, cabinet.path())
+        .expect("attach the first document");
+    first_conversations
+        .record_member_direction(
+            household_id,
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("AGL Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: None,
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL Energy".to_owned(),
+                    explanation: "Supplies electricity to the Household".to_owned(),
+                }),
+                property_relevance: Some(ContextRelevanceDirection {
+                    subject: "12 Seabreeze Avenue".to_owned(),
+                    explanation: "The Household's primary residence".to_owned(),
+                }),
+            },
+            "Household records",
+        )
+        .expect("record the owning Member Direction");
+    first_conversations
+        .confirm_filing_decision(
+            household_id,
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill July 2026.png".to_owned(),
+                cabinet_destination: "Household records/AGL bill July 2026.png".to_owned(),
+            },
+        )
+        .expect("confirm the Filing Decision");
+    first_conversations
+        .file_document(household_id, arrival.id, cabinet.path())
+        .expect("file and learn the rule");
+
+    let first_memory = PortableMemoryStore::open(&first_database, first_device)
+        .expect("open portable memory on the first device");
+    first_memory
+        .capture_owned_state(
+            household_id,
+            cabinet.path(),
+            &first_conversations,
+            &first_intelligence,
+        )
+        .expect("capture facts produced by owning behavior");
+    let portable_plaintext = serde_json::to_string(
+        &first_memory
+            .list_events(household_id)
+            .expect("open locally protected portable events"),
+    )
+    .expect("serialize portable events for the secret-boundary assertion");
+    assert!(!portable_plaintext.contains("sk-live-must-remain"));
+
+    let second_database = second_local.path().join("luna.db");
+    let second_conversations = ConversationStore::open_with_ocr(
+        &second_database,
+        second_device.clone(),
+        FixedLocalOcr(document_text),
+    )
+    .expect("open Conversation behavior on the recovered device");
+    let second_intelligence = CloudIntelligenceStore::open(&second_database, second_device.clone())
+        .expect("open Cloud Assistance behavior on the recovered device");
+    let second_memory = PortableMemoryStore::open(&second_database, second_device)
+        .expect("open portable memory on the recovered device");
+    second_memory
+        .synchronize_owned_state(
+            household_id,
+            cabinet.path(),
+            &[first_authorization],
+            &second_conversations,
+            &second_intelligence,
+        )
+        .expect("rebuild the owning stores from portable memory");
+
+    let rebuilt_rules = second_conversations
+        .list_filing_rules(household_id)
+        .expect("list rebuilt Filing Rules");
+    assert_eq!(rebuilt_rules.len(), 1);
+    assert_eq!(rebuilt_rules[0].service_provider, "AGL Energy");
+    assert!(
+        !second_memory
+            .list_portable_history(household_id)
+            .expect("list rebuilt History")
+            .is_empty(),
+        "the recovered device should expose imported Audit History",
+    );
+
+    let recovered_conversation = second_conversations
+        .create_conversation(household_id, "August electricity bill")
+        .expect("create a Conversation on the recovered device");
+    let second_source = second_local.path().join("agl-august.png");
+    fs::write(&second_source, png_fixture()).expect("write a new matching document");
+    let automatically_filed = second_conversations
+        .attach_document(
+            household_id,
+            recovered_conversation.id,
+            &second_source,
+            cabinet.path(),
+        )
+        .expect("handle the new document with the rebuilt rule");
+    assert_eq!(
+        automatically_filed.processing_state,
+        DocumentProcessingState::Filed,
+        "the imported rule must be active owning behavior, not a display-only projection",
+    );
+}
+
+#[test]
+fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create the user-owned Cabinet");
+    let local = tempfile::tempdir().expect("create the local database");
+    let (device, _, _, _) = enrol_two_devices(household_id);
+    let database = local.path().join("luna.db");
+    let conversations =
+        ConversationStore::open(&database, device.clone()).expect("open Conversation behavior");
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        device.clone(),
+        gateway.clone(),
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Managed Cloud Assistance".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Cloud Assistance behavior");
+    let selection = IntelligenceSelection {
+        provider_id: "openai".to_owned(),
+        model_id: "gpt-4.1-mini".to_owned(),
+    };
+    let request = |request_id: &str| IntelligenceRequest {
+        request_id: request_id.to_owned(),
+        document_arrival_id: format!("arrival-{request_id}"),
+        capability: IntelligenceCapability::DirectionInterpretation,
+        provider_id: "openai".to_owned(),
+        model_id: "gpt-4.1-mini".to_owned(),
+        evidence: Vec::new(),
+        content_excerpts: Vec::new(),
+        expected_response: IntelligenceResponseSchema {
+            allowed_fields: Vec::new(),
+            allow_candidate_direction: false,
+        },
+        consent_grant_id: None,
+        constraints: IntelligenceExecutionConstraints {
+            timeout_ms: 1_000,
+            max_output_tokens: 64,
+        },
+    };
+
+    assert_eq!(
+        intelligence.evaluate_document(
+            household_id,
+            selection.clone(),
+            request("denied"),
+            CloudConsentDecision::KeepLocal,
+            "account-sam",
+            None,
+        ),
+        Err(IntelligenceFailure::LocalOnlyPolicy),
+    );
+    gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
+    gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
+    assert_eq!(
+        intelligence.evaluate_document(
+            household_id,
+            selection,
+            request("provider-failure"),
+            CloudConsentDecision::AllowOnce,
+            "account-sam",
+            None,
+        ),
+        Err(IntelligenceFailure::ProviderUnavailable),
+    );
+
+    let memory = PortableMemoryStore::open(&database, device).expect("open portable memory");
+    memory
+        .capture_owned_state(household_id, cabinet.path(), &conversations, &intelligence)
+        .expect("capture owning Cloud Assistance outcomes");
+    let projection = memory
+        .household_projection(household_id)
+        .expect("project portable resilience history");
+    assert!(projection.consent_grants.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::ConsentGrant {
+            state: PortableConsentState::Denied,
+            ..
+        }
+    )));
+    assert!(projection.execution_outcomes.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::ExecutionOutcome {
+            outcome: PortableExecutionOutcomeKind::ProviderUnavailable,
+            ..
+        }
+    )));
 }
 
 #[test]

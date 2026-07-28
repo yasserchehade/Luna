@@ -17,6 +17,10 @@ use thiserror::Error;
 
 use crate::cabinet::ensure_incoming_folder;
 use crate::intelligence::CandidateDirectionInterpretation;
+use crate::portable_memory::{
+    PortableDocumentRelationshipKind, PortableHistoryEvent, PortableReference,
+};
+use crate::portable_memory::{PortableFilingRuleDefinition, PortableFilingRuleState};
 use crate::trusted_device::{
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -83,6 +87,15 @@ pub struct DuplicateResolution {
     pub decision: DuplicateDecision,
     pub related_arrival_id: i64,
     pub related_original_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebuiltDocumentRelationship {
+    pub event_id: String,
+    pub document_reference: PortableReference,
+    pub related_document_reference: PortableReference,
+    pub relationship: PortableDocumentRelationshipKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -669,6 +682,23 @@ impl<V: CredentialVault> ConversationStore<V> {
             );
             CREATE INDEX IF NOT EXISTS filing_rules_household
                 ON filing_rules(household_id, id);
+            CREATE TABLE IF NOT EXISTS portable_hidden_filing_rules (
+                household_id TEXT NOT NULL,
+                rule_id INTEGER NOT NULL,
+                PRIMARY KEY (household_id, rule_id)
+            );
+            CREATE TABLE IF NOT EXISTS rebuilt_document_relationships (
+                household_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                protected_payload TEXT NOT NULL,
+                PRIMARY KEY (household_id, event_id)
+            );
+            CREATE TABLE IF NOT EXISTS rebuilt_portable_history (
+                household_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                protected_payload TEXT NOT NULL,
+                PRIMARY KEY (household_id, event_id)
+            );
             CREATE TABLE IF NOT EXISTS filing_rule_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 household_id TEXT NOT NULL,
@@ -1285,7 +1315,13 @@ impl<V: CredentialVault> ConversationStore<V> {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
             "SELECT id, protected_payload FROM filing_rules
-              WHERE household_id = ?1 ORDER BY id DESC",
+              WHERE household_id = ?1
+                AND NOT EXISTS (
+                    SELECT 1 FROM portable_hidden_filing_rules AS hidden
+                     WHERE hidden.household_id = filing_rules.household_id
+                       AND hidden.rule_id = filing_rules.id
+                )
+              ORDER BY id DESC",
         )?;
         let protected_rows = statement
             .query_map(params![household_id], |row| {
@@ -1299,6 +1335,174 @@ impl<V: CredentialVault> ConversationStore<V> {
                 rule.id = id;
                 self.filing_rule_summary(household_id, rule)
             })
+            .collect()
+    }
+
+    pub(crate) fn apply_portable_filing_rule(
+        &self,
+        household_id: &str,
+        local_id: Option<i64>,
+        definition: &PortableFilingRuleDefinition,
+        state: &PortableFilingRuleState,
+    ) -> Result<i64, ConversationError> {
+        let mut rule = FilingRule {
+            id: local_id.unwrap_or_default(),
+            document_type: definition.document_type.clone(),
+            service_provider: definition.service_provider.clone(),
+            addressee: definition.addressee.clone(),
+            property: definition.property.clone(),
+            account: definition.account.clone(),
+            file_name: definition.file_name.clone(),
+            cabinet_destination: definition.cabinet_destination.clone(),
+            teacher: definition.taught_by.to_string(),
+            created_at: definition.created_at.clone(),
+            paused: matches!(
+                state,
+                PortableFilingRuleState::Paused | PortableFilingRuleState::Deleted
+            ),
+            deleted: *state == PortableFilingRuleState::Deleted,
+        };
+        let protected = self.protect(household_id, &rule)?;
+        let connection = self.connect()?;
+        if let Some(local_id) = local_id {
+            let updated = connection.execute(
+                "UPDATE filing_rules SET protected_payload = ?1
+                  WHERE household_id = ?2 AND id = ?3",
+                params![protected, household_id, local_id],
+            )?;
+            if updated > 0 {
+                return Ok(local_id);
+            }
+        }
+        connection.execute(
+            "INSERT INTO filing_rules (household_id, protected_payload) VALUES (?1, ?2)",
+            params![household_id, protected],
+        )?;
+        let local_id = connection.last_insert_rowid();
+        rule.id = local_id;
+        connection.execute(
+            "UPDATE filing_rules SET protected_payload = ?1
+              WHERE household_id = ?2 AND id = ?3",
+            params![self.protect(household_id, &rule)?, household_id, local_id],
+        )?;
+        Ok(local_id)
+    }
+
+    pub(crate) fn set_portable_filing_rule_visibility(
+        &self,
+        household_id: &str,
+        all_bound_rule_ids: &[i64],
+        visible_rule_ids: &[i64],
+    ) -> Result<(), ConversationError> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        for rule_id in all_bound_rule_ids {
+            if visible_rule_ids.contains(rule_id) {
+                transaction.execute(
+                    "DELETE FROM portable_hidden_filing_rules
+                      WHERE household_id = ?1 AND rule_id = ?2",
+                    params![household_id, rule_id],
+                )?;
+            } else {
+                transaction.execute(
+                    "INSERT OR IGNORE INTO portable_hidden_filing_rules (
+                        household_id, rule_id
+                     ) VALUES (?1, ?2)",
+                    params![household_id, rule_id],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn replace_rebuilt_document_relationships(
+        &self,
+        household_id: &str,
+        relationships: &[RebuiltDocumentRelationship],
+    ) -> Result<(), ConversationError> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM rebuilt_document_relationships WHERE household_id = ?1",
+            params![household_id],
+        )?;
+        for relationship in relationships {
+            transaction.execute(
+                "INSERT INTO rebuilt_document_relationships (
+                    household_id, event_id, protected_payload
+                 ) VALUES (?1, ?2, ?3)",
+                params![
+                    household_id,
+                    relationship.event_id,
+                    self.protect(household_id, relationship)?
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn list_rebuilt_document_relationships(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<RebuiltDocumentRelationship>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT protected_payload FROM rebuilt_document_relationships
+              WHERE household_id = ?1 ORDER BY event_id",
+        )?;
+        let protected = statement
+            .query_map(params![household_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected
+            .into_iter()
+            .map(|payload| self.open_protected(household_id, &payload))
+            .collect()
+    }
+
+    pub(crate) fn replace_rebuilt_portable_history(
+        &self,
+        household_id: &str,
+        history: &[PortableHistoryEvent],
+    ) -> Result<(), ConversationError> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM rebuilt_portable_history WHERE household_id = ?1",
+            params![household_id],
+        )?;
+        for event in history {
+            transaction.execute(
+                "INSERT INTO rebuilt_portable_history (
+                    household_id, event_id, protected_payload
+                 ) VALUES (?1, ?2, ?3)",
+                params![
+                    household_id,
+                    event.event_id,
+                    self.protect(household_id, event)?
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn list_rebuilt_portable_history(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<PortableHistoryEvent>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT protected_payload FROM rebuilt_portable_history
+              WHERE household_id = ?1 ORDER BY event_id",
+        )?;
+        let protected = statement
+            .query_map(params![household_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        protected
+            .into_iter()
+            .map(|payload| self.open_protected(household_id, &payload))
             .collect()
     }
 
@@ -1923,7 +2127,13 @@ impl<V: CredentialVault> ConversationStore<V> {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
             "SELECT protected_payload FROM filing_rules
-              WHERE household_id = ?1 ORDER BY id DESC",
+              WHERE household_id = ?1
+                AND NOT EXISTS (
+                    SELECT 1 FROM portable_hidden_filing_rules AS hidden
+                     WHERE hidden.household_id = filing_rules.household_id
+                       AND hidden.rule_id = filing_rules.id
+                )
+              ORDER BY id DESC",
         )?;
         let rules = statement
             .query_map(params![household_id], |row| row.get::<_, String>(0))?

@@ -27,6 +27,11 @@ type TrustedDeviceRow = {
   device_id: string;
   device_label: string;
   device_public_key: string;
+  authorization_public_key?: string;
+  activated_key_epoch?: number;
+  revoked_after_key_epoch?: number | null;
+  revoked_after_sequence?: number | null;
+  revoked_after_event_digest?: string | null;
   key_epoch: number;
   device_status: "active" | "revoked";
 };
@@ -233,13 +238,16 @@ export class SupabaseAccountService implements AccountService {
   }
 
   async revokeTrustedDevice(request: RevokeTrustedDeviceRequest): Promise<TrustedDeviceRecord[]> {
-    const { data, error } = await this.client.rpc("revoke_trusted_device", {
+    const { data, error } = await this.client.rpc("revoke_trusted_device_with_portable_cutoff", {
       requested_device_id: request.deviceId,
       requested_current_device_public_key: request.currentDevicePublicKey,
       requested_current_key_epoch: request.currentKeyEpoch,
       requested_recovery_envelope: request.recoveryEnvelope,
       requested_device_envelopes: request.deviceEnvelopes,
       requested_recovery_authorization_signature: request.recoveryAuthorizationSignature,
+      requested_revoked_after_key_epoch: request.portableCutoff?.keyEpoch ?? null,
+      requested_revoked_after_sequence: request.portableCutoff?.sequence ?? null,
+      requested_revoked_after_event_digest: request.portableCutoff?.eventDigest ?? null,
     });
     if (error) throw error;
     if (!Array.isArray(data)) {
@@ -338,6 +346,26 @@ function singleTrustedDeviceRow(data: unknown): TrustedDeviceRow {
     || typeof candidate.device_label !== "string"
     || typeof candidate.device_public_key !== "string"
     || typeof candidate.key_epoch !== "number"
+    || (
+      candidate.authorization_public_key !== undefined
+      && typeof candidate.authorization_public_key !== "string"
+    )
+    || (
+      candidate.activated_key_epoch !== undefined
+      && typeof candidate.activated_key_epoch !== "number"
+    )
+    || (
+      candidate.revoked_after_key_epoch != null
+      && typeof candidate.revoked_after_key_epoch !== "number"
+    )
+    || (
+      candidate.revoked_after_sequence != null
+      && typeof candidate.revoked_after_sequence !== "number"
+    )
+    || (
+      candidate.revoked_after_event_digest != null
+      && typeof candidate.revoked_after_event_digest !== "string"
+    )
     || (candidate.device_status !== "active" && candidate.device_status !== "revoked")
   ) {
     throw new Error("The Luna account service returned an invalid Trusted Device.");
@@ -350,6 +378,17 @@ function mapTrustedDevice(row: TrustedDeviceRow): TrustedDeviceRecord {
     id: row.device_id,
     label: row.device_label,
     publicKey: row.device_public_key,
+    authorizationPublicKey: row.authorization_public_key,
+    activatedKeyEpoch: row.activated_key_epoch,
+    revokedAfter: (
+      typeof row.revoked_after_key_epoch === "number"
+      && typeof row.revoked_after_sequence === "number"
+      && typeof row.revoked_after_event_digest === "string"
+    ) ? {
+      keyEpoch: row.revoked_after_key_epoch,
+      sequence: row.revoked_after_sequence,
+      eventDigest: row.revoked_after_event_digest,
+    } : undefined,
     keyEpoch: row.key_epoch,
     status: row.device_status,
   };

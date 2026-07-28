@@ -34,11 +34,21 @@ export type HouseholdKeyRotation = {
   recoveryAuthorizationSignature: string;
 };
 
+export type PortableAuthorizationCutoff = {
+  keyEpoch: number;
+  sequence: number;
+  eventDigest: string;
+};
+
 export interface TrustedDeviceService {
   isCurrentDeviceTrusted(householdId: HouseholdId): Promise<boolean>;
   isCurrentDeviceUnlocked(householdId: HouseholdId): Promise<boolean>;
   currentDevicePublicKey(householdId: HouseholdId): Promise<string>;
   currentKeyEpoch(householdId: HouseholdId): Promise<number>;
+  portableAuthorizationCutoff(
+    householdId: HouseholdId,
+    deviceId: string,
+  ): Promise<PortableAuthorizationCutoff | null>;
   setCurrentKeyEpoch(householdId: HouseholdId, keyEpoch: number): Promise<void>;
   configureDevicePin(householdId: HouseholdId, pin: string): Promise<void>;
   unlockDevice(householdId: HouseholdId, pin: string): Promise<void>;
@@ -92,6 +102,9 @@ export const unavailableTrustedDeviceService: TrustedDeviceService = {
   },
   async currentKeyEpoch() {
     throw new Error("Trusted Device key coordination is not configured.");
+  },
+  async portableAuthorizationCutoff() {
+    throw new Error("Portable-memory authorization is not configured.");
   },
   async setCurrentKeyEpoch() {
     throw new Error("Trusted Device key coordination is not configured.");

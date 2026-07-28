@@ -14,6 +14,9 @@ export const tauriTrustedDeviceService: TrustedDeviceService = {
   async currentKeyEpoch(householdId) {
     return invoke<number>("current_key_epoch", { householdId });
   },
+  async portableAuthorizationCutoff(householdId, deviceId) {
+    return invoke("portable_authorization_cutoff", { householdId, deviceId });
+  },
   async setCurrentKeyEpoch(householdId, keyEpoch) {
     await invoke("set_current_key_epoch", { householdId, keyEpoch });
   },

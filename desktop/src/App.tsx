@@ -17,6 +17,7 @@ import type {
   DuplicateAuditEvent,
   FiledOriginal,
   FilingRuleAuditEvent,
+  PortableHistoryEvent,
 } from "./conversation/conversationService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
@@ -62,6 +63,7 @@ export default function App({ accountService, cabinetService, conversationServic
   const [duplicateAuditEvents, setDuplicateAuditEvents] = useState<DuplicateAuditEvent[]>([]);
   const [cloudAssistanceAuditEvents, setCloudAssistanceAuditEvents] = useState<CloudAssistanceAuditEvent[]>([]);
   const [filingRuleAuditEvents, setFilingRuleAuditEvents] = useState<FilingRuleAuditEvent[]>([]);
+  const [portableHistoryEvents, setPortableHistoryEvents] = useState<PortableHistoryEvent[]>([]);
   const [documentSurfaceError, setDocumentSurfaceError] = useState("");
 
   const handleCabinetConfigured = (configuration: NonNullable<CabinetValidation>["configuration"]) => {
@@ -96,6 +98,7 @@ export default function App({ accountService, cabinetService, conversationServic
     setDuplicateAuditEvents([]);
     setCloudAssistanceAuditEvents([]);
     setFilingRuleAuditEvents([]);
+    setPortableHistoryEvents([]);
     setConversationSelectionRequest(null);
     setActiveDestination("Luna");
     setNewConversationRequest(0);
@@ -115,13 +118,31 @@ export default function App({ accountService, cabinetService, conversationServic
         await signOut(unlockedSession);
         return;
       }
+      const trustedDevices = (await accountService.listTrustedDevices())
+        .filter((device) => (
+          device.authorizationPublicKey
+          && device.activatedKeyEpoch
+          && (device.status === "active" || device.revokedAfter)
+        ))
+        .map((device) => ({
+          deviceId: device.publicKey,
+          authorizationPublicKey: device.authorizationPublicKey!,
+          activatedKeyEpoch: device.activatedKeyEpoch!,
+          revokedAfter: device.revokedAfter,
+        }));
+      if (trustedDevices.length > 0) {
+        await conversationService.synchronizePortableMemory(
+          unlockedSession.householdId,
+          trustedDevices,
+        );
+      }
       setCoordinationNotice("");
     } catch {
       setCoordinationNotice(
         "Luna is working offline. Trusted Device changes will be checked when the connection returns.",
       );
     }
-  }, [accountService, signOut, trustedDeviceService]);
+  }, [accountService, conversationService, signOut, trustedDeviceService]);
 
   const authenticate = useCallback(async (
     authenticatedSession: HouseholdSession,
@@ -249,11 +270,13 @@ export default function App({ accountService, cabinetService, conversationServic
         conversationService.listDuplicateAuditEvents(session.householdId),
         conversationService.listCloudAssistanceAuditEvents(session.householdId),
         conversationService.listFilingRuleAuditEvents(session.householdId),
-      ]).then(([events, duplicateEvents, cloudEvents, ruleEvents]) => {
+        conversationService.listPortableHistoryEvents(session.householdId),
+      ]).then(([events, duplicateEvents, cloudEvents, ruleEvents, portableEvents]) => {
         setAuditEvents(events);
         setDuplicateAuditEvents(duplicateEvents);
         setCloudAssistanceAuditEvents(cloudEvents);
         setFilingRuleAuditEvents(ruleEvents);
+        setPortableHistoryEvents(portableEvents);
       });
     void request
       .then(() => setDocumentSurfaceError(""))
@@ -316,6 +339,7 @@ export default function App({ accountService, cabinetService, conversationServic
       onTrusted={() => {
         setSession(pendingTrustedSession.session);
         setPendingTrustedSession(null);
+        void synchronizeAfterUnlock(pendingTrustedSession.session);
       }}
     />;
   }
@@ -439,7 +463,7 @@ export default function App({ accountService, cabinetService, conversationServic
         <header><div><small>Household history</small><h1>History</h1></div></header>
         <section className="messages">
           {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
-          {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && cloudAssistanceAuditEvents.length === 0 && filingRuleAuditEvents.length === 0
+          {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && cloudAssistanceAuditEvents.length === 0 && filingRuleAuditEvents.length === 0 && portableHistoryEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
             : <>{cloudAssistanceAuditEvents.map((event) => <article className="history-event cloud-history-event" key={`cloud-${event.id}`}>
               <strong>Cloud Assistance {event.outcome === "completed" ? "completed" : event.outcome === "denied" ? "kept local" : event.outcome === "cancelled" ? "cancelled" : "waiting to retry"}</strong>
@@ -458,6 +482,10 @@ export default function App({ accountService, cabinetService, conversationServic
               <strong>{event.kind === "updated" ? "Filing Rule updated" : event.kind === "deleted" ? "Filing Rule deleted" : event.kind === "paused" ? "Filing Rule paused" : "Filing Rule resumed"}</strong>
               <p>{event.subject}</p>
               <small>{event.outcome}</small>
+            </article>)}{portableHistoryEvents.map((event) => <article className="history-event portable-history-event" key={`portable-${event.eventId}`}>
+              <strong>{event.eventKind === "documentFiled" ? "Portable document history" : event.eventKind === "exactMatchHandledAutomatically" ? "Portable learned-rule history" : event.eventKind === "filingRuleChanged" ? "Portable Filing Rule history" : event.eventKind === "consentChanged" ? "Portable Consent history" : "Portable execution history"}</strong>
+              <p>{event.subjectReference}</p>
+              <small>{event.outcome} · {event.authority} · {event.occurredAt}</small>
             </article>)}</>}
         </section>
       </main> : <>

@@ -287,6 +287,36 @@ export type AuditEvent = {
   filedOriginal: FiledOriginal;
 };
 
+export type PortableHistoryEvent = {
+  eventId: string;
+  occurredAt: string;
+  eventKind:
+    | "documentFiled"
+    | "exactMatchHandledAutomatically"
+    | "filingRuleChanged"
+    | "consentChanged"
+    | "executionCompleted";
+  authority: "memberDirection" | "filingRule" | "authorityGrant";
+  subjectReference: string;
+  outcome:
+    | "filedAndVerified"
+    | "waitingForCloudAssistance"
+    | "cabinetUnavailable"
+    | "providerUnavailable"
+    | "failed";
+};
+
+export type PortableTrustedDeviceAuthorization = {
+  deviceId: string;
+  authorizationPublicKey: string;
+  activatedKeyEpoch: number;
+  revokedAfter?: {
+    keyEpoch: number;
+    sequence: number;
+    eventDigest: string;
+  };
+};
+
 export type ReviewCard = {
   confidenceState: ConfidenceState;
   evidence: ReviewEvidence[];
@@ -339,6 +369,11 @@ export interface ConversationService {
   listTodoItems(householdId: string): Promise<TodoItem[]>;
   listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
   listAuditEvents(householdId: string): Promise<AuditEvent[]>;
+  listPortableHistoryEvents(householdId: string): Promise<PortableHistoryEvent[]>;
+  synchronizePortableMemory(
+    householdId: string,
+    trustedDevices: PortableTrustedDeviceAuthorization[],
+  ): Promise<{ imported: number; duplicates: number }>;
   listDuplicateAuditEvents(householdId: string): Promise<DuplicateAuditEvent[]>;
   listCloudAssistanceAuditEvents(householdId: string): Promise<CloudAssistanceAuditEvent[]>;
   resolveDuplicate(
@@ -438,6 +473,12 @@ export const tauriConversationService: ConversationService = {
   },
   listAuditEvents(householdId) {
     return invoke<AuditEvent[]>("list_audit_events", { householdId });
+  },
+  listPortableHistoryEvents(householdId) {
+    return invoke<PortableHistoryEvent[]>("list_portable_history_events", { householdId });
+  },
+  synchronizePortableMemory(householdId, trustedDevices) {
+    return invoke("synchronize_portable_memory", { householdId, trustedDevices });
   },
   listDuplicateAuditEvents(householdId) {
     return invoke<DuplicateAuditEvent[]>("list_duplicate_audit_events", { householdId });

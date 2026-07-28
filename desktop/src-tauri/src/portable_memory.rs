@@ -12,7 +12,18 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager};
+use crate::{
+    conversation::{
+        AuditAuthority as ConversationAuditAuthority, AuditEventKind, ConversationError,
+        ConversationStore, DocumentArrival, DocumentProcessingState, DuplicateDecision,
+        RebuiltDocumentRelationship,
+    },
+    intelligence::{
+        CloudAssistanceOutcome, CloudConsentDecision, CloudIntelligenceStore, ConsentGrantKind,
+        IntelligenceFailure,
+    },
+    CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
+};
 
 const PORTABLE_MEMORY_DIRECTORY: &str = ".luna-memory";
 const PORTABLE_MEMORY_VERSION: u8 = 1;
@@ -207,7 +218,19 @@ pub enum PortableAuditEventKind {
 #[serde(rename_all = "camelCase")]
 pub struct PortableConsentScope {
     pub document_type: Option<PortableReference>,
-    pub fields: Vec<PortableReference>,
+    pub fields: Vec<PortableConsentField>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortableConsentField {
+    DocumentType,
+    ServiceProvider,
+    Addressee,
+    Property,
+    Account,
+    Amount,
+    RelevantDates,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,7 +336,8 @@ pub struct TrustedDeviceAuthorization {
     pub revoked_after: Option<PortableAuthorizationCutoff>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PortableAuthorizationCutoff {
     pub key_epoch: u32,
     pub sequence: u64,
@@ -329,7 +353,8 @@ pub struct PortableConflict {
     pub conflicting_event_id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PortableImportReport {
     pub imported: usize,
     pub duplicates: usize,
@@ -347,6 +372,17 @@ pub struct PortableHouseholdProjection {
     pub execution_outcomes: Vec<PortableEvent>,
     pub audit_events: Vec<PortableEvent>,
     pub conflicts: Vec<PortableConflict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableHistoryEvent {
+    pub event_id: String,
+    pub occurred_at: String,
+    pub event_kind: PortableAuditEventKind,
+    pub authority: PortableAuthority,
+    pub subject_reference: PortableReference,
+    pub outcome: PortableExecutionOutcomeKind,
 }
 
 #[derive(Debug, Error)]
@@ -373,6 +409,10 @@ pub enum PortableMemoryError {
     TrustedDevice(#[from] TrustedDeviceError),
     #[error("Portable-memory files are unavailable.")]
     File(#[from] io::Error),
+    #[error("Portable memory could not read or rebuild Conversation-owned state.")]
+    Conversation(#[from] ConversationError),
+    #[error("Portable memory could not read or rebuild Cloud Assistance state.")]
+    Intelligence(#[from] IntelligenceFailure),
 }
 
 #[derive(Clone)]
@@ -402,6 +442,8 @@ struct UnsignedPortableEnvelope {
     version: u8,
     signer_device_id: String,
     key_epoch: u32,
+    sequence: u64,
+    previous_event_digest: Option<String>,
     event_digest: String,
     protected_event: ProtectedHouseholdState,
 }
@@ -412,6 +454,8 @@ struct PortableEnvelope {
     version: u8,
     signer_device_id: String,
     key_epoch: u32,
+    sequence: u64,
+    previous_event_digest: Option<String>,
     event_digest: String,
     protected_event: ProtectedHouseholdState,
     signature: String,
@@ -468,6 +512,23 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 subject_reference TEXT NOT NULL,
                 chosen_event_id TEXT NOT NULL,
                 PRIMARY KEY (household_id, resolution_event_id)
+            );
+            CREATE TABLE IF NOT EXISTS portable_domain_exports (
+                household_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                event_digest TEXT NOT NULL,
+                PRIMARY KEY (household_id, source_kind, source_id)
+            );
+            CREATE TABLE IF NOT EXISTS portable_entity_bindings (
+                household_id TEXT NOT NULL,
+                entity_kind TEXT NOT NULL,
+                local_id INTEGER NOT NULL,
+                portable_reference TEXT NOT NULL,
+                PRIMARY KEY (household_id, entity_kind, local_id),
+                UNIQUE (household_id, entity_kind, portable_reference)
             );",
         )?;
         if !portable_column_exists(&connection, "key_epoch")? {
@@ -574,6 +635,8 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             version: PORTABLE_MEMORY_VERSION,
             signer_device_id: event.signer_device_id.clone(),
             key_epoch,
+            sequence: event.sequence,
+            previous_event_digest: event.previous_event_digest.clone(),
             event_digest: event.digest.clone(),
             protected_event,
         };
@@ -585,6 +648,8 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             version: unsigned.version,
             signer_device_id: unsigned.signer_device_id,
             key_epoch: unsigned.key_epoch,
+            sequence: unsigned.sequence,
+            previous_event_digest: unsigned.previous_event_digest,
             event_digest: unsigned.event_digest,
             protected_event: unsigned.protected_event,
             signature: BASE64.encode(signature),
@@ -625,7 +690,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             .collect::<Result<Vec<_>, _>>()?;
         paths.sort();
 
-        let mut events = Vec::new();
+        let mut records = Vec::new();
         for path in paths {
             if path.extension().and_then(|value| value.to_str()) != Some(PORTABLE_EVENT_EXTENSION) {
                 continue;
@@ -637,26 +702,16 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 .get(envelope.signer_device_id.as_str())
                 .ok_or(PortableMemoryError::UntrustedDevice)?;
             verify_envelope(&envelope, &authorization.authorization_public_key)?;
-            let plaintext = self
-                .trusted_device
-                .open_household_state_at_epoch(
-                    household_id,
-                    envelope.key_epoch,
-                    &envelope.protected_event,
-                )
-                .map_err(|_| PortableMemoryError::RejectedRecord)?;
-            let event: PortableEvent = serde_json::from_slice(&plaintext)
-                .map_err(|_| PortableMemoryError::RejectedRecord)?;
-            verify_event(household_id, &event, &envelope)?;
-            verify_authorization_window(&event, authorization)?;
-            events.push((event, envelope.protected_event, record));
+            verify_envelope_authorization_window(&envelope, authorization)?;
+            records.push((envelope, record));
         }
+        verify_envelope_chains(&self.connect()?, household_id, &records)?;
         for authorization in trusted_devices.values() {
             if let Some(cutoff) = &authorization.revoked_after {
-                let cutoff_is_present = events.iter().any(|(event, _, _)| {
-                    event.signer_device_id == authorization.device_id
-                        && event.sequence == cutoff.sequence
-                        && event.digest == cutoff.event_digest
+                let cutoff_is_present = records.iter().any(|(envelope, _)| {
+                    envelope.signer_device_id == authorization.device_id
+                        && envelope.sequence == cutoff.sequence
+                        && envelope.event_digest == cutoff.event_digest
                 }) || local_event_digest(
                     &self.connect()?,
                     household_id,
@@ -669,6 +724,22 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     return Err(PortableMemoryError::RejectedRecord);
                 }
             }
+        }
+
+        let mut events = Vec::new();
+        for (envelope, record) in records {
+            let plaintext = self
+                .trusted_device
+                .open_household_state_at_epoch(
+                    household_id,
+                    envelope.key_epoch,
+                    &envelope.protected_event,
+                )
+                .map_err(|_| PortableMemoryError::RejectedRecord)?;
+            let event: PortableEvent = serde_json::from_slice(&plaintext)
+                .map_err(|_| PortableMemoryError::RejectedRecord)?;
+            verify_event(household_id, &event, &envelope)?;
+            events.push((event, envelope.protected_event, record));
         }
 
         let mut report = PortableImportReport::default();
@@ -698,6 +769,446 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
         }
         report.conflicts = self.list_conflicts(household_id)?;
         Ok(report)
+    }
+
+    pub fn capture_owned_state(
+        &self,
+        household_id: &str,
+        cabinet_root: impl AsRef<Path>,
+        conversations: &ConversationStore<V>,
+        intelligence: &CloudIntelligenceStore<V>,
+    ) -> Result<(), PortableMemoryError> {
+        let cabinet_root = cabinet_root.as_ref();
+        let mut cabinet_unavailable = false;
+
+        for rule in conversations.list_filing_rules(household_id)? {
+            let rule_reference =
+                self.entity_reference(household_id, "filing-rule", rule.id, "filing-rule")?;
+            let taught_by = PortableReference::new(rule.teacher.clone()).or_else(|_| {
+                deterministic_reference("subject", household_id, "member", &rule.teacher)
+            })?;
+            let fact = PortableFact::FilingRule {
+                rule_reference: rule_reference.clone(),
+                state: if rule.deleted {
+                    PortableFilingRuleState::Deleted
+                } else if rule.paused {
+                    PortableFilingRuleState::Paused
+                } else {
+                    PortableFilingRuleState::Active
+                },
+                definition: PortableFilingRuleDefinition {
+                    document_type: rule.document_type.clone(),
+                    service_provider: rule.service_provider.clone(),
+                    addressee: rule.addressee.clone(),
+                    property: rule.property.clone(),
+                    account: rule.account.clone(),
+                    file_name: rule.file_name.clone(),
+                    cabinet_destination: rule.cabinet_destination.clone(),
+                    taught_by: taught_by.clone(),
+                    created_at: if rule.created_at.is_empty() {
+                        portable_now()
+                    } else {
+                        rule.created_at.clone()
+                    },
+                },
+            };
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "filing-rule",
+                &rule.id.to_string(),
+                fact,
+                None,
+                true,
+            )?;
+
+            let grant_reference =
+                self.entity_reference(household_id, "rule-authority", rule.id, "grant")?;
+            let scope = [
+                "document-type",
+                "service-provider",
+                "addressee",
+                "property",
+                "account",
+            ]
+            .into_iter()
+            .map(|field| deterministic_reference("field", household_id, "rule-field", field))
+            .collect::<Result<Vec<_>, _>>()?;
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "rule-authority",
+                &rule.id.to_string(),
+                PortableFact::AuthorityGrant {
+                    grant_reference,
+                    subject_reference: taught_by,
+                    scope,
+                },
+                None,
+                true,
+            )?;
+        }
+
+        for arrival in conversations.list_document_arrivals(household_id)? {
+            let document_reference =
+                self.entity_reference(household_id, "document", arrival.id, "document")?;
+            let conversation_reference =
+                self.conversation_reference(household_id, conversations, &arrival)?;
+            if arrival.review_card.filing_decision.is_some()
+                || arrival.duplicate_resolution.is_some()
+            {
+                let direction = match arrival
+                    .duplicate_resolution
+                    .as_ref()
+                    .map(|resolution| resolution.decision)
+                {
+                    Some(DuplicateDecision::KeepBoth) => PortableMemberDirectionKind::KeepBoth,
+                    Some(DuplicateDecision::UpdatedVersion) => {
+                        PortableMemberDirectionKind::ReplaceExisting
+                    }
+                    _ => PortableMemberDirectionKind::FileDocument,
+                };
+                cabinet_unavailable |= self.capture_fact(
+                    household_id,
+                    cabinet_root,
+                    "member-direction",
+                    &arrival.id.to_string(),
+                    PortableFact::MemberDirection {
+                        direction,
+                        subject_reference: deterministic_reference(
+                            "subject",
+                            household_id,
+                            "document-direction",
+                            document_reference.as_str(),
+                        )?,
+                    },
+                    conversation_reference.clone(),
+                    false,
+                )?;
+            }
+            if let Some(resolution) = &arrival.duplicate_resolution {
+                let related_document_reference = self.entity_reference(
+                    household_id,
+                    "document",
+                    resolution.related_arrival_id,
+                    "document",
+                )?;
+                let relationship = match resolution.decision {
+                    DuplicateDecision::UpdatedVersion => {
+                        PortableDocumentRelationshipKind::UpdatedVersion
+                    }
+                    DuplicateDecision::LinkCopies => PortableDocumentRelationshipKind::LinkedCopy,
+                    DuplicateDecision::KeepBoth | DuplicateDecision::DiscardNew => {
+                        PortableDocumentRelationshipKind::ExactDuplicate
+                    }
+                };
+                cabinet_unavailable |= self.capture_fact(
+                    household_id,
+                    cabinet_root,
+                    "document-relationship",
+                    &arrival.id.to_string(),
+                    PortableFact::DocumentRelationship {
+                        document_reference: document_reference.clone(),
+                        related_document_reference,
+                        relationship,
+                    },
+                    conversation_reference.clone(),
+                    true,
+                )?;
+            }
+            let outcome = match arrival.processing_state {
+                DocumentProcessingState::Filed => {
+                    Some(PortableExecutionOutcomeKind::FiledAndVerified)
+                }
+                DocumentProcessingState::CabinetUnavailable => {
+                    Some(PortableExecutionOutcomeKind::CabinetUnavailable)
+                }
+                DocumentProcessingState::WaitingForCloudAssistance => {
+                    Some(PortableExecutionOutcomeKind::WaitingForCloudAssistance)
+                }
+                _ => None,
+            };
+            if let Some(outcome) = outcome {
+                cabinet_unavailable |= self.capture_fact(
+                    household_id,
+                    cabinet_root,
+                    "document-outcome",
+                    &arrival.id.to_string(),
+                    PortableFact::ExecutionOutcome {
+                        subject_reference: deterministic_reference(
+                            "subject",
+                            household_id,
+                            "document-outcome",
+                            document_reference.as_str(),
+                        )?,
+                        outcome,
+                    },
+                    conversation_reference,
+                    true,
+                )?;
+            }
+        }
+
+        for event in conversations.list_audit_events(household_id)? {
+            let subject_reference = self.entity_reference(
+                household_id,
+                "document",
+                event.filed_original.arrival_id,
+                "document",
+            )?;
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "filing-audit",
+                &event.id.to_string(),
+                PortableFact::AuditEvent {
+                    event_kind: match event.kind {
+                        AuditEventKind::DocumentFiled => PortableAuditEventKind::DocumentFiled,
+                        AuditEventKind::ExactMatchHandledAutomatically => {
+                            PortableAuditEventKind::ExactMatchHandledAutomatically
+                        }
+                    },
+                    authority: match event.authority {
+                        ConversationAuditAuthority::MemberDirection => {
+                            PortableAuthority::MemberDirection
+                        }
+                        ConversationAuditAuthority::FilingRule => PortableAuthority::FilingRule,
+                    },
+                    subject_reference,
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                },
+                None,
+                false,
+            )?;
+        }
+
+        for event in conversations.list_filing_rule_audit_events(household_id)? {
+            let subject_reference =
+                self.entity_reference(household_id, "filing-rule", event.rule_id, "filing-rule")?;
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "filing-rule-audit",
+                &event.id.to_string(),
+                PortableFact::AuditEvent {
+                    event_kind: PortableAuditEventKind::FilingRuleChanged,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference,
+                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                },
+                None,
+                false,
+            )?;
+        }
+
+        for consent in intelligence.list_consent_scopes(household_id)? {
+            let grant_reference =
+                self.entity_reference(household_id, "consent", consent.id, "grant")?;
+            let fields = consent
+                .fields
+                .iter()
+                .filter_map(|field| portable_consent_field(field))
+                .collect();
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "consent",
+                &consent.id.to_string(),
+                PortableFact::ConsentGrant {
+                    grant_reference,
+                    provider: portable_provider(&consent.provider_id)?,
+                    scope: PortableConsentScope {
+                        document_type: None,
+                        fields,
+                    },
+                    state: if consent.revoked {
+                        PortableConsentState::Revoked
+                    } else if consent.kind == ConsentGrantKind::OneTime {
+                        PortableConsentState::AllowedOnce
+                    } else {
+                        PortableConsentState::Granted
+                    },
+                    details: PortableConsentDetails {
+                        model_id: consent.model_id,
+                        capability: PortableIntelligenceCapability::DirectionInterpretation,
+                        purpose: PortableConsentPurpose::DocumentEvaluation,
+                        kind: match consent.kind {
+                            ConsentGrantKind::OneTime => PortableConsentGrantKind::OneTime,
+                            ConsentGrantKind::Reusable => PortableConsentGrantKind::Reusable,
+                        },
+                        granted_by: deterministic_reference(
+                            "subject",
+                            household_id,
+                            "member",
+                            &consent.granted_by,
+                        )?,
+                        created_at: consent.created_at,
+                        consumed_at: consent.consumed_at,
+                        revoked_at: consent.revoked_at,
+                    },
+                },
+                None,
+                true,
+            )?;
+        }
+
+        for event in intelligence.list_audit_events(household_id)? {
+            let subject_reference = deterministic_reference(
+                "subject",
+                household_id,
+                "cloud-request",
+                &event.request_id,
+            )?;
+            let outcome = match event.outcome {
+                CloudAssistanceOutcome::Completed => PortableExecutionOutcomeKind::FiledAndVerified,
+                CloudAssistanceOutcome::Denied => {
+                    PortableExecutionOutcomeKind::WaitingForCloudAssistance
+                }
+                CloudAssistanceOutcome::WaitingForRetry => {
+                    PortableExecutionOutcomeKind::ProviderUnavailable
+                }
+                CloudAssistanceOutcome::Cancelled => PortableExecutionOutcomeKind::Failed,
+            };
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "cloud-outcome",
+                &event.id.to_string(),
+                PortableFact::ExecutionOutcome {
+                    subject_reference: subject_reference.clone(),
+                    outcome: outcome.clone(),
+                },
+                None,
+                false,
+            )?;
+            cabinet_unavailable |= self.capture_fact(
+                household_id,
+                cabinet_root,
+                "cloud-audit",
+                &event.id.to_string(),
+                PortableFact::AuditEvent {
+                    event_kind: PortableAuditEventKind::ExecutionCompleted,
+                    authority: PortableAuthority::MemberDirection,
+                    subject_reference,
+                    outcome,
+                },
+                None,
+                false,
+            )?;
+            if event.consent == CloudConsentDecision::KeepLocal {
+                let grant_reference = deterministic_reference(
+                    "grant",
+                    household_id,
+                    "denied-cloud-request",
+                    &event.request_id,
+                )?;
+                cabinet_unavailable |= self.capture_fact(
+                    household_id,
+                    cabinet_root,
+                    "denied-consent",
+                    &event.id.to_string(),
+                    PortableFact::ConsentGrant {
+                        grant_reference,
+                        provider: portable_provider(&event.provider_id)?,
+                        scope: PortableConsentScope {
+                            document_type: None,
+                            fields: Vec::new(),
+                        },
+                        state: PortableConsentState::Denied,
+                        details: PortableConsentDetails {
+                            model_id: event.model_id,
+                            capability: PortableIntelligenceCapability::DirectionInterpretation,
+                            purpose: PortableConsentPurpose::DocumentEvaluation,
+                            kind: PortableConsentGrantKind::OneTime,
+                            granted_by: deterministic_reference(
+                                "subject",
+                                household_id,
+                                "member",
+                                &event.granted_by,
+                            )?,
+                            created_at: portable_now(),
+                            consumed_at: None,
+                            revoked_at: None,
+                        },
+                    },
+                    None,
+                    false,
+                )?;
+            }
+        }
+
+        if cabinet_unavailable {
+            return Err(PortableMemoryError::CabinetUnavailable);
+        }
+        Ok(())
+    }
+
+    pub fn synchronize_owned_state(
+        &self,
+        household_id: &str,
+        cabinet_root: impl AsRef<Path>,
+        trusted_devices: &[TrustedDeviceAuthorization],
+        conversations: &ConversationStore<V>,
+        intelligence: &CloudIntelligenceStore<V>,
+    ) -> Result<PortableImportReport, PortableMemoryError> {
+        let cabinet_root = cabinet_root.as_ref();
+        let report = self.import(household_id, cabinet_root, trusted_devices)?;
+        self.rebuild_owned_state(household_id, conversations, intelligence)?;
+        match self.capture_owned_state(household_id, cabinet_root, conversations, intelligence) {
+            Ok(()) | Err(PortableMemoryError::CabinetUnavailable) => {}
+            Err(error) => return Err(error),
+        }
+        Ok(report)
+    }
+
+    pub fn list_portable_history(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<PortableHistoryEvent>, PortableMemoryError> {
+        Ok(self
+            .household_projection(household_id)?
+            .audit_events
+            .into_iter()
+            .filter_map(|event| match event.fact {
+                PortableFact::AuditEvent {
+                    event_kind,
+                    authority,
+                    subject_reference,
+                    outcome,
+                } => Some(PortableHistoryEvent {
+                    event_id: event.event_id,
+                    occurred_at: event.occurred_at,
+                    event_kind,
+                    authority,
+                    subject_reference,
+                    outcome,
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
+    pub fn authorization_cutoff(
+        &self,
+        household_id: &str,
+        device_id: &str,
+    ) -> Result<Option<PortableAuthorizationCutoff>, PortableMemoryError> {
+        Ok(self
+            .connect()?
+            .query_row(
+                "SELECT key_epoch, sequence, event_digest FROM portable_events
+                  WHERE household_id = ?1 AND signer_device_id = ?2
+                  ORDER BY sequence DESC LIMIT 1",
+                params![household_id, device_id],
+                |row| {
+                    Ok(PortableAuthorizationCutoff {
+                        key_epoch: row.get(0)?,
+                        sequence: row.get(1)?,
+                        event_digest: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     pub fn list_events(
@@ -800,6 +1311,13 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
         household_id: &str,
         subject_reference: &str,
     ) -> Result<Option<PortableEvent>, PortableMemoryError> {
+        let conflicts = self.list_conflicts(household_id)?;
+        if self
+            .conflicted_projection_subjects(household_id, &conflicts)?
+            .contains(subject_reference)
+        {
+            return Ok(None);
+        }
         let connection = self.connect()?;
         let protected: Option<(u32, String)> = connection
             .query_row(
@@ -901,6 +1419,391 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
         Ok(ImportOutcome::Imported(conflict))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn capture_fact(
+        &self,
+        household_id: &str,
+        cabinet_root: &Path,
+        source_kind: &str,
+        source_id: &str,
+        fact: PortableFact,
+        conversation_reference: Option<PortableConversationReference>,
+        mutable: bool,
+    ) -> Result<bool, PortableMemoryError> {
+        let fingerprint = sha256_hex(&serde_json::to_vec(&(&fact, &conversation_reference))?);
+        let connection = self.connect()?;
+        let exported: Option<(String, String, String)> = connection
+            .query_row(
+                "SELECT fingerprint, event_id, event_digest
+                   FROM portable_domain_exports
+                  WHERE household_id = ?1 AND source_kind = ?2 AND source_id = ?3",
+                params![household_id, source_kind, source_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if exported
+            .as_ref()
+            .is_some_and(|(existing, _, _)| existing == &fingerprint)
+        {
+            return Ok(false);
+        }
+        if exported.is_none() && mutable {
+            if let Some(subject_reference) = portable_subject_reference(&fact) {
+                if let Some(current) =
+                    self.current_subject_event(household_id, &subject_reference)?
+                {
+                    if current.fact == fact {
+                        self.save_export(
+                            household_id,
+                            source_kind,
+                            source_id,
+                            &fingerprint,
+                            &current,
+                        )?;
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        let event_id = deterministic_reference(
+            "event",
+            household_id,
+            source_kind,
+            &format!("{source_id}:{fingerprint}"),
+        )?
+        .to_string();
+        if let Some(event) = self.event_by_id(household_id, &event_id)? {
+            if event.fact != fact || event.conversation_reference != conversation_reference {
+                return Err(PortableMemoryError::RecordConflict);
+            }
+            self.save_export(household_id, source_kind, source_id, &fingerprint, &event)?;
+            return Ok(false);
+        }
+        let signer_device_id = self
+            .trusted_device
+            .current_device_public_key(household_id)?;
+        let previous: Option<(u64, String)> = connection
+            .query_row(
+                "SELECT sequence, event_digest FROM portable_events
+                  WHERE household_id = ?1 AND signer_device_id = ?2
+                  ORDER BY sequence DESC LIMIT 1",
+                params![household_id, signer_device_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let sequence = previous.as_ref().map_or(1, |(sequence, _)| sequence + 1);
+        let previous_event_digest = previous.map(|(_, digest)| digest);
+        let supersedes_event_digest = mutable
+            .then(|| {
+                exported
+                    .as_ref()
+                    .map(|(_, _, event_digest)| event_digest.clone())
+            })
+            .flatten();
+        let draft = PortableEventDraft {
+            event_id: event_id.clone(),
+            sequence,
+            previous_event_digest,
+            supersedes_event_digest,
+            occurred_at: portable_now(),
+            conversation_reference,
+            fact,
+        };
+        let (event, cabinet_unavailable) = match self.append(household_id, cabinet_root, draft) {
+            Ok(event) => (event, false),
+            Err(PortableMemoryError::CabinetUnavailable) => (
+                self.event_by_id(household_id, &event_id)?
+                    .ok_or(PortableMemoryError::Storage(
+                        rusqlite::Error::QueryReturnedNoRows,
+                    ))?,
+                true,
+            ),
+            Err(error) => return Err(error),
+        };
+        self.save_export(household_id, source_kind, source_id, &fingerprint, &event)?;
+        Ok(cabinet_unavailable)
+    }
+
+    fn save_export(
+        &self,
+        household_id: &str,
+        source_kind: &str,
+        source_id: &str,
+        fingerprint: &str,
+        event: &PortableEvent,
+    ) -> Result<(), PortableMemoryError> {
+        self.connect()?.execute(
+            "INSERT INTO portable_domain_exports (
+                household_id, source_kind, source_id, fingerprint, event_id, event_digest
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(household_id, source_kind, source_id) DO UPDATE SET
+                fingerprint = excluded.fingerprint,
+                event_id = excluded.event_id,
+                event_digest = excluded.event_digest",
+            params![
+                household_id,
+                source_kind,
+                source_id,
+                fingerprint,
+                event.event_id,
+                event.digest
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn event_by_id(
+        &self,
+        household_id: &str,
+        event_id: &str,
+    ) -> Result<Option<PortableEvent>, PortableMemoryError> {
+        let protected: Option<(u32, String)> = self
+            .connect()?
+            .query_row(
+                "SELECT key_epoch, protected_payload FROM portable_events
+                  WHERE household_id = ?1 AND event_id = ?2",
+                params![household_id, event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        protected
+            .map(|(key_epoch, protected)| {
+                let protected: ProtectedHouseholdState = serde_json::from_str(&protected)?;
+                let plaintext = self.trusted_device.open_household_state_at_epoch(
+                    household_id,
+                    key_epoch,
+                    &protected,
+                )?;
+                Ok(serde_json::from_slice(&plaintext)?)
+            })
+            .transpose()
+    }
+
+    fn entity_reference(
+        &self,
+        household_id: &str,
+        entity_kind: &str,
+        local_id: i64,
+        reference_kind: &str,
+    ) -> Result<PortableReference, PortableMemoryError> {
+        let connection = self.connect()?;
+        let existing: Option<String> = connection
+            .query_row(
+                "SELECT portable_reference FROM portable_entity_bindings
+                  WHERE household_id = ?1 AND entity_kind = ?2 AND local_id = ?3",
+                params![household_id, entity_kind, local_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            return PortableReference::new(existing);
+        }
+        let device_id = self
+            .trusted_device
+            .current_device_public_key(household_id)?;
+        let reference = deterministic_reference(
+            reference_kind,
+            household_id,
+            entity_kind,
+            &format!("{device_id}:{local_id}"),
+        )?;
+        connection.execute(
+            "INSERT INTO portable_entity_bindings (
+                household_id, entity_kind, local_id, portable_reference
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![household_id, entity_kind, local_id, reference.as_str()],
+        )?;
+        Ok(reference)
+    }
+
+    fn conversation_reference(
+        &self,
+        household_id: &str,
+        conversations: &ConversationStore<V>,
+        arrival: &DocumentArrival,
+    ) -> Result<Option<PortableConversationReference>, PortableMemoryError> {
+        let Some(message) = conversations
+            .list_messages(household_id, arrival.conversation_id)?
+            .last()
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        Ok(Some(PortableConversationReference {
+            conversation_id: self.entity_reference(
+                household_id,
+                "conversation",
+                arrival.conversation_id,
+                "conversation",
+            )?,
+            message_id: self.entity_reference(household_id, "message", message.id, "message")?,
+        }))
+    }
+
+    fn rebuild_owned_state(
+        &self,
+        household_id: &str,
+        conversations: &ConversationStore<V>,
+        intelligence: &CloudIntelligenceStore<V>,
+    ) -> Result<(), PortableMemoryError> {
+        let projection = self.household_projection(household_id)?;
+        let mut visible_rule_ids = Vec::new();
+        for event in &projection.filing_rules {
+            let PortableFact::FilingRule {
+                rule_reference,
+                state,
+                definition,
+            } = &event.fact
+            else {
+                continue;
+            };
+            let local_id =
+                self.bound_local_id(household_id, "filing-rule", rule_reference.as_str())?;
+            let local_id = conversations.apply_portable_filing_rule(
+                household_id,
+                local_id,
+                definition,
+                state,
+            )?;
+            self.bind_imported_entity(
+                household_id,
+                "filing-rule",
+                local_id,
+                rule_reference.as_str(),
+            )?;
+            visible_rule_ids.push(local_id);
+        }
+        let all_bound_rule_ids = self.bound_local_ids(household_id, "filing-rule")?;
+        conversations.set_portable_filing_rule_visibility(
+            household_id,
+            &all_bound_rule_ids,
+            &visible_rule_ids,
+        )?;
+        let relationships = projection
+            .document_relationships
+            .iter()
+            .filter_map(|event| {
+                let PortableFact::DocumentRelationship {
+                    document_reference,
+                    related_document_reference,
+                    relationship,
+                } = &event.fact
+                else {
+                    return None;
+                };
+                Some(RebuiltDocumentRelationship {
+                    event_id: event.event_id.clone(),
+                    document_reference: document_reference.clone(),
+                    related_document_reference: related_document_reference.clone(),
+                    relationship: relationship.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        conversations.replace_rebuilt_document_relationships(household_id, &relationships)?;
+        let history = projection
+            .audit_events
+            .iter()
+            .filter_map(|event| {
+                let PortableFact::AuditEvent {
+                    event_kind,
+                    authority,
+                    subject_reference,
+                    outcome,
+                } = &event.fact
+                else {
+                    return None;
+                };
+                Some(PortableHistoryEvent {
+                    event_id: event.event_id.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    event_kind: event_kind.clone(),
+                    authority: authority.clone(),
+                    subject_reference: subject_reference.clone(),
+                    outcome: outcome.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        conversations.replace_rebuilt_portable_history(household_id, &history)?;
+        for event in &projection.consent_grants {
+            let PortableFact::ConsentGrant {
+                grant_reference,
+                provider,
+                scope,
+                state,
+                details,
+            } = &event.fact
+            else {
+                continue;
+            };
+            if *state == PortableConsentState::Denied {
+                continue;
+            }
+            let local_id =
+                self.bound_local_id(household_id, "consent", grant_reference.as_str())?;
+            let local_id = intelligence.apply_portable_consent(
+                household_id,
+                local_id,
+                provider,
+                scope,
+                state,
+                details,
+            )?;
+            self.bind_imported_entity(household_id, "consent", local_id, grant_reference.as_str())?;
+        }
+        Ok(())
+    }
+
+    fn bound_local_ids(
+        &self,
+        household_id: &str,
+        entity_kind: &str,
+    ) -> Result<Vec<i64>, PortableMemoryError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT local_id FROM portable_entity_bindings
+              WHERE household_id = ?1 AND entity_kind = ?2",
+        )?;
+        let local_ids = statement
+            .query_map(params![household_id, entity_kind], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(local_ids)
+    }
+
+    fn bound_local_id(
+        &self,
+        household_id: &str,
+        entity_kind: &str,
+        portable_reference: &str,
+    ) -> Result<Option<i64>, PortableMemoryError> {
+        Ok(self
+            .connect()?
+            .query_row(
+                "SELECT local_id FROM portable_entity_bindings
+                  WHERE household_id = ?1 AND entity_kind = ?2 AND portable_reference = ?3",
+                params![household_id, entity_kind, portable_reference],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    fn bind_imported_entity(
+        &self,
+        household_id: &str,
+        entity_kind: &str,
+        local_id: i64,
+        portable_reference: &str,
+    ) -> Result<(), PortableMemoryError> {
+        self.connect()?.execute(
+            "INSERT INTO portable_entity_bindings (
+                household_id, entity_kind, local_id, portable_reference
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(household_id, entity_kind, local_id) DO UPDATE SET
+                portable_reference = excluded.portable_reference",
+            params![household_id, entity_kind, local_id, portable_reference],
+        )?;
+        Ok(())
+    }
+
     fn connect(&self) -> Result<Connection, PortableMemoryError> {
         Ok(Connection::open(&self.database)?)
     }
@@ -982,6 +1885,76 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
 enum ImportOutcome {
     Imported(Option<PortableConflict>),
     Duplicate,
+}
+
+fn deterministic_reference(
+    kind: &str,
+    household_id: &str,
+    namespace: &str,
+    value: &str,
+) -> Result<PortableReference, PortableMemoryError> {
+    let digest = Sha256::digest(
+        format!("luna:portable-reference:v1:{household_id}:{namespace}:{value}").as_bytes(),
+    );
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    PortableReference::new(format!(
+        "{kind}:{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
+
+fn portable_now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_owned())
+}
+
+fn portable_provider(provider_id: &str) -> Result<PortableConsentProvider, PortableMemoryError> {
+    match provider_id {
+        "openai" | "luna-managed-openai" | "luna-managed" => {
+            Ok(PortableConsentProvider::LunaManaged)
+        }
+        "openai-byok" => Ok(PortableConsentProvider::OpenAi),
+        "anthropic" | "anthropic-byok" => Ok(PortableConsentProvider::Anthropic),
+        _ => Err(PortableMemoryError::InvalidEvent),
+    }
+}
+
+fn portable_consent_field(field: &str) -> Option<PortableConsentField> {
+    match field
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-', ' '], "")
+        .as_str()
+    {
+        "documenttype" => Some(PortableConsentField::DocumentType),
+        "serviceprovider" => Some(PortableConsentField::ServiceProvider),
+        "addressee" => Some(PortableConsentField::Addressee),
+        "property" => Some(PortableConsentField::Property),
+        "account" => Some(PortableConsentField::Account),
+        "amount" => Some(PortableConsentField::Amount),
+        "relevantdates" => Some(PortableConsentField::RelevantDates),
+        _ => None,
+    }
 }
 
 fn portable_column_exists(
@@ -1397,10 +2370,6 @@ fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
                     .document_type
                     .as_ref()
                     .is_none_or(|reference| reference.kind() == "document-type")
-                && scope
-                    .fields
-                    .iter()
-                    .all(|reference| reference.kind() == "field")
         }
         PortableFact::ExecutionOutcome {
             subject_reference, ..
@@ -1501,11 +2470,14 @@ fn event_matches_draft(event: &PortableEvent, draft: &PortableEventDraft) -> boo
 }
 
 fn valid_portable_timestamp(value: &str) -> bool {
-    (20..=35).contains(&value.len())
+    let unix_seconds =
+        (1..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit());
+    let iso_8601 = (20..=35).contains(&value.len())
         && value.contains('T')
         && value.bytes().all(|byte| {
             byte.is_ascii_digit() || matches!(byte, b'-' | b':' | b'.' | b'+' | b'T' | b'Z')
-        })
+        });
+    unix_seconds || iso_8601
 }
 
 fn valid_optional_digest(value: &Option<String>) -> bool {
@@ -1530,6 +2502,8 @@ fn verify_envelope(
         version: envelope.version,
         signer_device_id: envelope.signer_device_id.clone(),
         key_epoch: envelope.key_epoch,
+        sequence: envelope.sequence,
+        previous_event_digest: envelope.previous_event_digest.clone(),
         event_digest: envelope.event_digest.clone(),
         protected_event: envelope.protected_event.clone(),
     };
@@ -1582,6 +2556,8 @@ fn verify_event(
     if event.household_id != household_id
         || event.signer_device_id != envelope.signer_device_id
         || event.key_epoch != envelope.key_epoch
+        || event.sequence != envelope.sequence
+        || event.previous_event_digest != envelope.previous_event_digest
         || event.digest != envelope.event_digest
         || event.digest != expected_digest
     {
@@ -1590,6 +2566,31 @@ fn verify_event(
     Ok(())
 }
 
+fn verify_envelope_authorization_window(
+    envelope: &PortableEnvelope,
+    authorization: &TrustedDeviceAuthorization,
+) -> Result<(), PortableMemoryError> {
+    if authorization.activated_key_epoch == 0
+        || envelope.key_epoch < authorization.activated_key_epoch
+    {
+        return Err(PortableMemoryError::UntrustedDevice);
+    }
+    if let Some(cutoff) = &authorization.revoked_after {
+        if cutoff.key_epoch == 0
+            || cutoff.sequence == 0
+            || !valid_optional_digest(&Some(cutoff.event_digest.clone()))
+            || envelope.key_epoch > cutoff.key_epoch
+            || envelope.sequence > cutoff.sequence
+            || (envelope.sequence == cutoff.sequence
+                && envelope.event_digest != cutoff.event_digest)
+        {
+            return Err(PortableMemoryError::UntrustedDevice);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn verify_authorization_window(
     event: &PortableEvent,
     authorization: &TrustedDeviceAuthorization,
@@ -1607,6 +2608,52 @@ fn verify_authorization_window(
             || (event.sequence == cutoff.sequence && event.digest != cutoff.event_digest)
         {
             return Err(PortableMemoryError::UntrustedDevice);
+        }
+    }
+    Ok(())
+}
+
+fn verify_envelope_chains(
+    connection: &Connection,
+    household_id: &str,
+    records: &[(PortableEnvelope, Vec<u8>)],
+) -> Result<(), PortableMemoryError> {
+    let mut incoming = HashMap::new();
+    for (envelope, _) in records {
+        if envelope.sequence == 0
+            || (envelope.sequence == 1 && envelope.previous_event_digest.is_some())
+            || (envelope.sequence > 1 && envelope.previous_event_digest.is_none())
+            || !valid_optional_digest(&envelope.previous_event_digest)
+            || !valid_optional_digest(&Some(envelope.event_digest.clone()))
+        {
+            return Err(PortableMemoryError::RejectedRecord);
+        }
+        let key = (envelope.signer_device_id.as_str(), envelope.sequence);
+        if incoming
+            .insert(key, envelope.event_digest.as_str())
+            .is_some_and(|digest| digest != envelope.event_digest)
+        {
+            return Err(PortableMemoryError::RejectedRecord);
+        }
+    }
+    for (envelope, _) in records {
+        if envelope.sequence == 1 {
+            continue;
+        }
+        let predecessor = match incoming.get(&(
+            envelope.signer_device_id.as_str(),
+            envelope.sequence.saturating_sub(1),
+        )) {
+            Some(digest) => Some((*digest).to_owned()),
+            None => local_event_digest(
+                connection,
+                household_id,
+                &envelope.signer_device_id,
+                envelope.sequence - 1,
+            )?,
+        };
+        if predecessor.as_deref() != envelope.previous_event_digest.as_deref() {
+            return Err(PortableMemoryError::RejectedRecord);
         }
     }
     Ok(())

@@ -73,7 +73,7 @@ The removal of a Trusted Device's authority to receive future Household keys; af
 _Avoid_: Remote wipe, remove device
 
 **Portable Memory Record**:
-A signed, Household-key-encrypted, append-only record of one durable household fact stored in Luna's reserved Cabinet memory area and imported into each Trusted Device's separate local database.
+A signed, Household-key-encrypted, append-only record of one durable household fact captured from its owning Luna behavior, stored in Luna's reserved Cabinet memory area and rebuilt into each Trusted Device's separate owning local stores.
 _Avoid_: Synced database, chat memory, model memory
 
 **Portable Memory Conflict**:

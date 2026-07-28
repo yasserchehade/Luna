@@ -21,8 +21,8 @@ pub use conversation::{
     DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
     FilingDecisionDirection, FilingDecisionReview, FilingRuleAuditEvent, FilingRuleAuditKind,
     FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
-    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
-    TesseractOcr, TodoItem,
+    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, RebuiltDocumentRelationship, ReviewCard,
+    ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
 };
 pub use document_intelligence::{
     CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
@@ -40,13 +40,14 @@ pub use intelligence::{
 };
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff, PortableConflict,
-    PortableConflictResolutionDraft, PortableConsentDetails, PortableConsentGrantKind,
-    PortableConsentProvider, PortableConsentPurpose, PortableConsentScope, PortableConsentState,
-    PortableConversationReference, PortableDocumentRelationshipKind, PortableEvent,
-    PortableEventDraft, PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
-    PortableFilingRuleState, PortableHouseholdProjection, PortableImportReport,
-    PortableIntelligenceCapability, PortableMemberDirectionKind, PortableMemoryError,
-    PortableMemoryStore, PortableReference, TrustedDeviceAuthorization,
+    PortableConflictResolutionDraft, PortableConsentDetails, PortableConsentField,
+    PortableConsentGrantKind, PortableConsentProvider, PortableConsentPurpose,
+    PortableConsentScope, PortableConsentState, PortableConversationReference,
+    PortableDocumentRelationshipKind, PortableEvent, PortableEventDraft,
+    PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
+    PortableFilingRuleState, PortableHistoryEvent, PortableHouseholdProjection,
+    PortableImportReport, PortableIntelligenceCapability, PortableMemberDirectionKind,
+    PortableMemoryError, PortableMemoryStore, PortableReference, TrustedDeviceAuthorization,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -86,6 +87,10 @@ type ConversationState = ConversationStore<E2eCredentialVault>;
 type IntelligenceState = CloudIntelligenceStore<OsCredentialVault>;
 #[cfg(feature = "e2e")]
 type IntelligenceState = CloudIntelligenceStore<E2eCredentialVault>;
+#[cfg(not(feature = "e2e"))]
+type PortableState = PortableMemoryStore<OsCredentialVault>;
+#[cfg(feature = "e2e")]
+type PortableState = PortableMemoryStore<E2eCredentialVault>;
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -343,6 +348,8 @@ fn list_conversation_messages(
 #[tauri::command]
 fn attach_document(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
     cabinet: State<'_, CabinetState>,
     household_id: String,
     conversation_id: i64,
@@ -352,9 +359,17 @@ fn attach_document(
         .load(&household_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "A Cabinet must be configured before attaching a document.".to_owned())?;
-    store
-        .attach_document(&household_id, conversation_id, path, configuration.root)
-        .map_err(|error| error.to_string())
+    let arrival = store
+        .attach_document(&household_id, conversation_id, path, &configuration.root)
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(arrival)
 }
 
 #[tauri::command]
@@ -501,24 +516,139 @@ fn current_household_actor(
     Ok(session.account_id)
 }
 
+fn capture_portable_state(
+    portable: &PortableState,
+    conversations: &ConversationState,
+    intelligence: &IntelligenceState,
+    cabinet: &CabinetState,
+    household_id: &str,
+) -> Result<(), String> {
+    let configuration = cabinet
+        .load(household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            "A Cabinet must be configured before synchronising Household memory.".to_owned()
+        })?;
+    match portable.capture_owned_state(
+        household_id,
+        configuration.root,
+        conversations,
+        intelligence,
+    ) {
+        Ok(()) | Err(PortableMemoryError::CabinetUnavailable) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableAuthorizationInput {
+    device_id: String,
+    authorization_public_key: String,
+    activated_key_epoch: u32,
+    revoked_after: Option<PortableAuthorizationCutoff>,
+}
+
+impl TryFrom<PortableAuthorizationInput> for TrustedDeviceAuthorization {
+    type Error = String;
+
+    fn try_from(value: PortableAuthorizationInput) -> Result<Self, Self::Error> {
+        let authorization_public_key: [u8; 32] = BASE64
+            .decode(value.authorization_public_key)
+            .map_err(|_| "A Trusted Device authorization key is invalid.".to_owned())?
+            .try_into()
+            .map_err(|_| "A Trusted Device authorization key is invalid.".to_owned())?;
+        Ok(Self {
+            device_id: value.device_id,
+            authorization_public_key,
+            activated_key_epoch: value.activated_key_epoch,
+            revoked_after: value.revoked_after,
+        })
+    }
+}
+
+#[tauri::command]
+fn synchronize_portable_memory(
+    portable: State<'_, PortableState>,
+    conversations: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    trusted_devices: Vec<PortableAuthorizationInput>,
+) -> Result<PortableImportReport, String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            "A Cabinet must be configured before synchronising Household memory.".to_owned()
+        })?;
+    let trusted_devices = trusted_devices
+        .into_iter()
+        .map(TrustedDeviceAuthorization::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    portable
+        .synchronize_owned_state(
+            &household_id,
+            configuration.root,
+            &trusted_devices,
+            conversations.inner(),
+            intelligence.inner(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_portable_history_events(
+    conversations: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<PortableHistoryEvent>, String> {
+    conversations
+        .list_rebuilt_portable_history(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn portable_authorization_cutoff(
+    portable: State<'_, PortableState>,
+    household_id: String,
+    device_id: String,
+) -> Result<Option<PortableAuthorizationCutoff>, String> {
+    portable
+        .authorization_cutoff(&household_id, &device_id)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn evaluate_document_with_cloud_assistance(
     conversations: State<'_, ConversationState>,
     intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     sessions: State<'_, AccountSessionManager>,
     input: CloudAssistanceCommand,
 ) -> Result<CloudAssistanceResolution, String> {
     let granted_by = current_household_actor(sessions.inner(), &input.household_id)?;
-    DocumentIntelligenceService::new(conversations.inner().clone(), intelligence.inner().clone())
-        .evaluate_document(
-            &input.household_id,
-            input.arrival_id,
-            input.selection,
-            input.consent,
-            &granted_by,
-            input.existing_consent_grant_id,
-        )
-        .map_err(|error| error.to_string())
+    let household_id = input.household_id.clone();
+    let result = DocumentIntelligenceService::new(
+        conversations.inner().clone(),
+        intelligence.inner().clone(),
+    )
+    .evaluate_document(
+        &input.household_id,
+        input.arrival_id,
+        input.selection,
+        input.consent,
+        &granted_by,
+        input.existing_consent_grant_id,
+    );
+    capture_portable_state(
+        portable.inner(),
+        conversations.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -534,12 +664,22 @@ fn list_cloud_consent_scopes(
 #[tauri::command]
 fn revoke_cloud_consent_scope(
     store: State<'_, IntelligenceState>,
+    conversations: State<'_, ConversationState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     scope_id: i64,
 ) -> Result<(), String> {
     store
         .revoke_scope(&household_id, scope_id)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        conversations.inner(),
+        store.inner(),
+        cabinet.inner(),
+        &household_id,
+    )
 }
 
 #[tauri::command]
@@ -600,15 +740,19 @@ fn record_cloud_candidate_disposition(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn resolve_duplicate(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     arrival_id: i64,
     related_arrival_id: i64,
     decision: DuplicateDecision,
     remember_preference: bool,
 ) -> Result<DocumentArrival, String> {
-    store
+    let arrival = store
         .resolve_duplicate(
             &household_id,
             arrival_id,
@@ -616,7 +760,15 @@ fn resolve_duplicate(
             decision,
             remember_preference,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(arrival)
 }
 
 #[tauri::command]
@@ -633,6 +785,8 @@ fn dismiss_document_arrival(
 #[tauri::command]
 fn record_member_direction(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
     cabinet: State<'_, CabinetState>,
     household_id: String,
     arrival_id: i64,
@@ -646,14 +800,24 @@ fn record_member_direction(
         .sections
         .first()
         .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
-    store
+    let arrival = store
         .record_member_direction(&household_id, arrival_id, direction, cabinet_section)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(arrival)
 }
 
 #[tauri::command]
 fn confirm_filing_decision(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
     cabinet: State<'_, CabinetState>,
     household_id: String,
     arrival_id: i64,
@@ -666,9 +830,17 @@ fn confirm_filing_decision(
     store
         .confirm_filing_decision(&household_id, arrival_id, direction)
         .map_err(|error| error.to_string())?;
-    store
+    let arrival = store
         .file_document(&household_id, arrival_id, configuration.root)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(arrival)
 }
 
 #[cfg(feature = "e2e")]
@@ -689,36 +861,69 @@ fn list_filing_rules(
 #[tauri::command]
 fn update_filing_rule(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     rule_id: i64,
     update: FilingRuleUpdate,
 ) -> Result<FilingRuleSummary, String> {
-    store
+    let rule = store
         .update_filing_rule(&household_id, rule_id, update)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(rule)
 }
 
 #[tauri::command]
 fn pause_filing_rule(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     rule_id: i64,
     paused: bool,
 ) -> Result<FilingRuleSummary, String> {
-    store
+    let rule = store
         .pause_filing_rule(&household_id, rule_id, paused)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(rule)
 }
 
 #[tauri::command]
 fn delete_filing_rule(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     household_id: String,
     rule_id: i64,
 ) -> Result<FilingRuleSummary, String> {
-    store
+    let rule = store
         .delete_filing_rule(&household_id, rule_id)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(rule)
 }
 
 #[tauri::command]
@@ -1205,6 +1410,10 @@ pub fn run() {
                 &database,
                 trusted_device.clone(),
             )?);
+            app.manage(PortableMemoryStore::open(
+                &database,
+                trusted_device.clone(),
+            )?);
             app.manage(trusted_device);
         }
         #[cfg(not(feature = "e2e"))]
@@ -1224,6 +1433,10 @@ pub fn run() {
                     std::collections::BTreeMap::from([("amount".to_owned(), "$184.72".to_owned())]),
                 ),
                 intelligence::provider_catalog(),
+            )?);
+            app.manage(PortableMemoryStore::open(
+                &database,
+                trusted_device.clone(),
             )?);
             app.manage(trusted_device);
         }
@@ -1268,6 +1481,9 @@ pub fn run() {
         pause_filing_rule,
         delete_filing_rule,
         list_filing_rule_audit_events,
+        synchronize_portable_memory,
+        list_portable_history_events,
+        portable_authorization_cutoff,
         preview_filing_rule_reorganization,
         list_manual_move_candidates,
         record_manual_move_decision,
