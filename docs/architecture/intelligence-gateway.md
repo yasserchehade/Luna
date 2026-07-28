@@ -37,6 +37,14 @@ Luna-managed Intelligence is an entitlement of an eligible paid Household plan a
 
 The managed adapter authenticates with a bearer gateway credential. The BYOK adapter sends the automatically provisioned gateway credential as `x-litellm-api-key` and the transient customer provider credential separately as `x-api-key`. The provider credential is loaded from the OS vault and never enters the request body. The BYOK LiteLLM process has no `OPENAI_API_KEY`; its configured model is `byok/openai/gpt-4.1-mini`, and its virtual keys cannot address the managed route.
 
+## Household Plan and billing
+
+A Managed Intelligence Entitlement belongs to the Household and remains distinct from Trusted Device provisioning. During the first prototype, a small beta cohort receives complimentary, usage-capped entitlements through the same server-side interface that will later consume paid subscription state. No account identity is hard-coded and a checkout redirect can never grant access.
+
+Paddle sandbox is the first Billing Subscription adapter evaluated under ADR 0017. Luna creates checkout and customer-portal sessions only for an authenticated Household Organiser, accepts entitlement changes only from verified and idempotently processed server-side billing events, and retains only external billing identifiers plus access-critical status. Card data and billing secrets never enter the desktop, Cabinet or protected Household state.
+
+Live charging remains disabled until issue #53's remote gateway can provision and revoke narrow managed credentials for entitled Trusted Devices and enforce abuse controls. Bring-your-own and Local-only Intelligence remain available regardless of Billing Subscription state.
+
 `DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
 
 For prototype acceptance, an operator may run the pinned gateway deployment ephemerally on loopback and send only the fixed synthetic canary. This validates the real provider contract without adding LiteLLM or Python to the desktop. Before external testing, the same boundary moves behind authenticated remote HTTPS ingress with managed secrets and attributable gateway credentials.
