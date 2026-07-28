@@ -1,23 +1,45 @@
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, expect } from "@wdio/globals";
+import { Key } from "webdriverio";
 import { onboardTestHousehold } from "./onboardTestHousehold";
 import { testHousehold } from "./testHousehold";
 
 describe("Luna Conversation desk", () => {
   it("keeps document work consistent between Conversation and To do", async () => {
     await onboardTestHousehold();
-    const activateByKeyboard = async (selector: string, key: "Enter" | " ") => {
-      await browser.execute((targetSelector, pressedKey) => {
-        const target = document.querySelector<HTMLElement>(targetSelector);
-        target?.focus();
-        target?.dispatchEvent(new KeyboardEvent("keydown", {
-          key: pressedKey,
-          bubbles: true,
-          cancelable: true,
-        }));
-      }, selector, key);
+    const sendKeyboardKey = async (key: "tab" | "enter" | "space") => {
+      if (process.platform === "win32") {
+        // WebView2's test driver sends text but does not perform Tab's native focus movement.
+        // SendKeys exercises the foreground installed application with real keyboard input.
+        const sendKeysValue = { tab: "{TAB}", enter: "{ENTER}", space: " " }[key];
+        execFileSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${sendKeysValue}')`,
+          ],
+          { windowsHide: true },
+        );
+        await browser.pause(50);
+        return;
+      }
+      await browser.keys({ tab: Key.Tab, enter: Key.Enter, space: Key.Space }[key]);
+    };
+    const focusByTab = async (selector: string) => {
+      await $("#message-composer").click();
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        await sendKeyboardKey("tab");
+        const matched = await browser.execute((targetSelector) => (
+          document.activeElement?.matches(targetSelector) ?? false
+        ), selector);
+        if (matched) return;
+      }
+      throw new Error(`Keyboard Tab navigation did not reach ${selector}.`);
     };
     const openConversationActions = async () => {
       await $("button[aria-label='Conversation actions']").click();
@@ -63,13 +85,13 @@ describe("Luna Conversation desk", () => {
     await expect(cloudAssistance).toHaveText(expect.stringContaining("OpenAI"));
     await expect(cloudAssistance).toHaveText(expect.stringContaining("4,000 characters"));
     await expect(cloudAssistance.$("button=Keep local")).toBeDisplayed();
-    const reviewDetailsSummary = $(".review-details summary");
-    await reviewDetailsSummary.click();
+    await focusByTab(".review-details summary");
+    await sendKeyboardKey("space");
     await expect($("label=Service provider relevance")).toBeDisplayed();
     await expect($("label=Property relevance")).toBeDisplayed();
-    await activateByKeyboard(".review-details summary", "Enter");
+    await sendKeyboardKey("enter");
     await expect($("label=Service provider relevance")).not.toBeDisplayed();
-    await activateByKeyboard(".review-details summary", " ");
+    await sendKeyboardKey("space");
     await expect($("label=Service provider relevance")).toBeDisplayed();
     const reviewCard = $(".document-arrival .review-card");
     await cloudAssistance.$("button=Keep local").click();
@@ -129,7 +151,9 @@ describe("Luna Conversation desk", () => {
     await expect($(".document-luna-message .conversation-copy")).toHaveText(
       expect.stringContaining("Bills & Services/12 Seabreeze Avenue/AGL/2026/"),
     );
-    await activateByKeyboard(".conversation-inline-actions button", "Enter");
+    await focusByTab(".conversation-inline-actions button");
+    expect(await browser.execute(() => document.activeElement?.textContent)).toBe("Always do this");
+    await sendKeyboardKey("enter");
     await browser.waitUntil(
       async () => !(await $("button=Always do this").isExisting()),
       { timeoutMsg: "The Filing Rule direction was not recorded." },
@@ -400,13 +424,15 @@ describe("Luna Conversation desk", () => {
     await expect(assistance).toHaveText(expect.stringContaining(
       "Reusable scope: future difficult application/pdf Documents with the same currently displayed local context values and disclosed fields.",
     ));
-    await assistance.$("button=Allow this scoped future use").click();
+    await $("#message-composer").setValue("Allow this scoped future use");
+    await $("button[aria-label='Send message']").click();
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     arrival = await attach("cloud-reuse");
     assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
     await expect(assistance.$("button=Use existing Consent Grant")).toBeDisplayed();
-    await assistance.$("button=Use existing Consent Grant").click();
+    await $("#message-composer").setValue("Use existing Consent Grant");
+    await $("button[aria-label='Send message']").click();
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     await browser.execute(() => {
@@ -469,12 +495,14 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Luna']").click();
     arrival = await attach("cloud-once");
     assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
-    await assistance.$("button=Allow once").click();
+    await $("#message-composer").setValue("Allow once");
+    await $("button[aria-label='Send message']").click();
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     arrival = await attach("cloud-local");
     assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
-    await assistance.$("button=Keep local").click();
+    await $("#message-composer").setValue("Keep local");
+    await $("button[aria-label='Send message']").click();
     await expect(assistance).toHaveText(expect.stringContaining("Kept local"));
   });
 });
