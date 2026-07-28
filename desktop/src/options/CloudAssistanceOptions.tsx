@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
   AccountService,
+  HouseholdId,
   HouseholdIntelligenceAccess,
 } from "../account/accountService";
 import type {
@@ -8,6 +9,7 @@ import type {
   ConversationService,
   IntelligenceProviderStatus,
 } from "../conversation/conversationService";
+import type { TrustedDeviceService } from "../trusted-device/trustedDeviceService";
 
 type CloudAssistanceDataService = Pick<
   ConversationService,
@@ -24,7 +26,8 @@ type CloudAssistanceAccountService = Pick<
 export async function loadCloudAssistanceOptionsData(
   conversationService: CloudAssistanceDataService,
   accountService: CloudAssistanceAccountService,
-  householdId: string,
+  trustedDeviceService: Pick<TrustedDeviceService, "currentDevicePublicKey">,
+  householdId: HouseholdId,
 ): Promise<{
   access: HouseholdIntelligenceAccess | null;
   providers: IntelligenceProviderStatus[];
@@ -34,7 +37,8 @@ export async function loadCloudAssistanceOptionsData(
   consentError: string;
 }> {
   const [accessResult, providersResult, scopesResult] = await Promise.allSettled([
-    accountService.getHouseholdIntelligenceAccess(),
+    trustedDeviceService.currentDevicePublicKey(householdId)
+      .then((devicePublicKey) => accountService.getHouseholdIntelligenceAccess(devicePublicKey)),
     conversationService.listIntelligenceProviderStatuses(householdId),
     conversationService.listCloudConsentScopes(householdId),
   ]);
@@ -80,10 +84,11 @@ function managedAccessStatus(
   providerConfigured: boolean,
 ): string {
   if (!access) return "Managed access unavailable";
-  switch (access.state) {
+  switch (access.entitlementState) {
     case "checkoutPending": return "Checkout pending";
-    case "provisioning": return "Preparing managed access";
-    case "ready": return providerConfigured ? "Managed access ready" : "Preparing this Trusted Device";
+    case "entitled": return access.deviceState === "ready" && providerConfigured
+      ? "Managed access ready"
+      : "Preparing this Trusted Device";
     case "paymentProblem": return "Payment needs attention";
     case "ended": return "Managed access ended";
     default: return "Managed access not included";
@@ -94,10 +99,12 @@ export function CloudAssistanceOptions({
   accountService,
   conversationService,
   householdId,
+  trustedDeviceService,
 }: {
   accountService: CloudAssistanceAccountService;
   conversationService: ConversationService;
-  householdId: string;
+  householdId: HouseholdId;
+  trustedDeviceService: Pick<TrustedDeviceService, "currentDevicePublicKey">;
 }) {
   const [access, setAccess] = useState<HouseholdIntelligenceAccess | null>(null);
   const [providers, setProviders] = useState<IntelligenceProviderStatus[]>([]);
@@ -112,7 +119,12 @@ export function CloudAssistanceOptions({
   const [billingSession, setBillingSession] = useState<{ url: string; kind: "checkout" | "portal" } | null>(null);
 
   const refresh = async () => {
-    const data = await loadCloudAssistanceOptionsData(conversationService, accountService, householdId);
+    const data = await loadCloudAssistanceOptionsData(
+      conversationService,
+      accountService,
+      trustedDeviceService,
+      householdId,
+    );
     setAccess(data.access);
     setProviders(data.providers);
     setScopes(data.scopes);
@@ -121,7 +133,7 @@ export function CloudAssistanceOptions({
     setAccessError(data.accessError);
   };
 
-  useEffect(() => { void refresh(); }, [accountService, conversationService, householdId]);
+  useEffect(() => { void refresh(); }, [accountService, conversationService, householdId, trustedDeviceService]);
 
   const revoke = async (scopeId: number) => {
     try {
@@ -194,17 +206,17 @@ export function CloudAssistanceOptions({
           <div><strong>{descriptor.name}</strong><span>{descriptor.description}</span></div>
           <small>{managedAccessStatus(access, configured)}</small>
         </div>
-        {access?.entitlementSource === "complimentary" && access.state !== "ended" && <p>
+        {access?.entitlementSource === "complimentary" && access.entitlementState !== "ended" && <p>
           <strong>Complimentary beta</strong>
-          {access.requestLimit !== null && <> · managed usage is capped for this prototype</>}
+          {access.maxBudgetUsd !== null && <> · US${access.maxBudgetUsd.toFixed(2)} managed-usage cap</>}
         </p>}
         <p>Approved models: {descriptor.models.map(({ name }) => name).join(", ")}</p>
-        {(access?.state !== "ready" || !configured) && <p className="muted">There is nothing to paste here. Luna will enable this automatically when the Household Plan and Trusted Device are eligible.</p>}
-        {access?.state === "free" && <div className="default-intelligence-actions">
+        {(access?.entitlementState !== "entitled" || access.deviceState !== "ready" || !configured) && <p className="muted">There is nothing to paste here. Luna will enable this automatically when the Household Plan and Trusted Device are eligible.</p>}
+        {access?.entitlementState === "free" && <div className="default-intelligence-actions">
           <button type="button" disabled={billingBusy} onClick={() => void createBillingSession("checkout")}>Start Paddle sandbox checkout</button>
           <span className="muted">No real charge will be made in this prototype.</span>
         </div>}
-        {access?.entitlementSource === "billing" && ["ready", "paymentProblem", "ended"].includes(access.state) && <button
+        {access?.entitlementSource === "billing" && ["entitled", "paymentProblem", "ended"].includes(access.entitlementState) && <button
           type="button"
           disabled={billingBusy}
           onClick={() => void createBillingSession("portal")}

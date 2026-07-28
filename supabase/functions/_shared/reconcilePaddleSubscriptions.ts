@@ -7,7 +7,7 @@ type SubscriptionReference = {
 };
 
 export async function reconcilePaddleSubscriptions(dependencies: {
-  requestLimit: number;
+  maxBudgetUsd: number;
   listSubscriptions(): Promise<SubscriptionReference[]>;
   getPaddleSubscription(subscriptionId: string): Promise<{
     status: PaddleSubscriptionEvent["status"];
@@ -32,7 +32,7 @@ export async function reconcilePaddleSubscriptions(dependencies: {
         subscriptionId: subscription.subscriptionId,
         status: current.status,
         validUntil: current.validUntil,
-        requestLimit: dependencies.requestLimit,
+        maxBudgetUsd: dependencies.maxBudgetUsd,
       });
       if (result.applied) applied += 1;
     } catch {

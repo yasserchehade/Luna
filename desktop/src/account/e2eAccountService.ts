@@ -25,7 +25,8 @@ let recoveryEnvelope = "";
 let recoveryVerificationKey = "";
 let trustedDevices: TrustedDeviceRecord[] = [];
 const trustedDeviceEnvelopes = new Map<string, string>();
-let managedIntelligenceState: "free" | "ready" = "ready";
+type E2eManagedIntelligenceState = "free" | "checkoutPending" | "provisioning" | "ready" | "paymentProblem" | "ended";
+let managedIntelligenceState: E2eManagedIntelligenceState = "ready";
 
 type E2eRemoteRotation = {
   currentKeyEpoch: number;
@@ -34,7 +35,7 @@ type E2eRemoteRotation = {
 };
 
 export const e2eAccountTestControl = {
-  setManagedIntelligenceState(state: "free" | "ready") {
+  setManagedIntelligenceState(state: E2eManagedIntelligenceState) {
     managedIntelligenceState = state;
   },
   setCoordinationAvailable(available: boolean) {
@@ -261,21 +262,49 @@ export const e2eAccountService: AccountService = {
       return {
         householdId: householdSession.householdId,
         plan: "free",
-        state: "free",
+        entitlementState: "free",
+        deviceState: "notApplicable",
         entitlementSource: null,
-        requestLimit: null,
-        requestsUsed: 0,
+        maxBudgetUsd: null,
         validUntil: null,
+        credentialExpiresAt: null,
+      };
+    }
+    if (managedIntelligenceState === "checkoutPending") {
+      return {
+        householdId: householdSession.householdId,
+        plan: "free",
+        entitlementState: "checkoutPending",
+        deviceState: "notApplicable",
+        entitlementSource: null,
+        maxBudgetUsd: null,
+        validUntil: null,
+        credentialExpiresAt: null,
+      };
+    }
+    if (managedIntelligenceState === "paymentProblem" || managedIntelligenceState === "ended") {
+      return {
+        householdId: householdSession.householdId,
+        plan: managedIntelligenceState === "ended" ? "free" : "managed",
+        entitlementState: managedIntelligenceState,
+        deviceState: "notApplicable",
+        entitlementSource: "billing",
+        maxBudgetUsd: 1,
+        validUntil: "2026-09-01T00:00:00+00:00",
+        credentialExpiresAt: null,
       };
     }
     return {
       householdId: householdSession.householdId,
       plan: "managed",
-      state: "ready",
+      entitlementState: "entitled",
+      deviceState: managedIntelligenceState === "ready" ? "ready" : "pending",
       entitlementSource: "complimentary",
-      requestLimit: 500,
-      requestsUsed: 0,
+      maxBudgetUsd: 1,
       validUntil: "2026-09-01T00:00:00+00:00",
+      credentialExpiresAt: managedIntelligenceState === "ready"
+        ? "2026-09-01T00:00:00+00:00"
+        : null,
     };
   },
   async createManagedIntelligenceCheckoutSession() {
@@ -290,10 +319,6 @@ export const e2eAccountService: AccountService = {
       nonce: "e2e-managed-nonce",
       expiresAt: "2026-09-01T00:00:00+00:00",
     };
-  },
-  async authorizeManagedIntelligenceDeviceProvisioning() {
-    if (!householdSession) throw new Error("Household membership is required.");
-    return { householdId: householdSession.householdId, deviceId: "device-sam-rivera" };
   },
   async provisionManagedIntelligenceDeviceAccess() {
     return { state: "ready", credential: "sk-e2e-managed-device-key" };

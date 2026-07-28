@@ -42,11 +42,12 @@ type TrustedDeviceRow = {
 type HouseholdIntelligenceAccessRow = {
   household_id: string;
   plan_code: "free" | "managed";
-  access_state: "free" | "checkout_pending" | "provisioning" | "ready" | "payment_problem" | "ended";
+  entitlement_state: "free" | "checkout_pending" | "entitled" | "payment_problem" | "ended";
+  device_state: "not_applicable" | "pending" | "ready" | "revoked";
   entitlement_source: "complimentary" | "billing" | null;
-  request_limit: number | null;
-  requests_used: number;
+  max_budget_usd: number | null;
   valid_until: string | null;
+  credential_expires_at: string | null;
 };
 
 const accountExistsCodes = new Set(["email_exists", "user_already_exists"]);
@@ -269,8 +270,10 @@ export class SupabaseAccountService implements AccountService {
     return data.map((row) => mapTrustedDevice(singleTrustedDeviceRow(row)));
   }
 
-  async getHouseholdIntelligenceAccess(): Promise<HouseholdIntelligenceAccess> {
-    const { data, error } = await this.client.rpc("current_household_intelligence_access");
+  async getHouseholdIntelligenceAccess(devicePublicKey?: string): Promise<HouseholdIntelligenceAccess> {
+    const { data, error } = await this.client.rpc("current_household_intelligence_access", {
+      requested_device_public_key: devicePublicKey ?? null,
+    });
     if (error) throw error;
     return mapHouseholdIntelligenceAccess(singleHouseholdIntelligenceAccessRow(data));
   }
@@ -298,23 +301,6 @@ export class SupabaseAccountService implements AccountService {
       || typeof row.expires_at !== "string"
     ) throw new Error("The Luna account service returned an invalid provisioning challenge.");
     return { id: row.challenge_id, nonce: row.challenge_nonce, expiresAt: row.expires_at };
-  }
-
-  async authorizeManagedIntelligenceDeviceProvisioning(
-    request: AuthorizeManagedIntelligenceDeviceProvisioningRequest,
-  ): Promise<{ householdId: HouseholdId; deviceId: string }> {
-    const { data, error } = await this.client.rpc("authorize_managed_intelligence_device_provisioning", {
-      requested_device_public_key: request.devicePublicKey,
-      requested_challenge_id: request.challengeId,
-      requested_nonce: request.nonce,
-      requested_authorization_signature: request.authorizationSignature,
-    });
-    if (error) throw error;
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!row || typeof row.household_id !== "string" || typeof row.device_id !== "string") {
-      throw new Error("The Luna account service returned an invalid provisioning authorization.");
-    }
-    return { householdId: row.household_id as HouseholdId, deviceId: row.device_id };
   }
 
   async provisionManagedIntelligenceDeviceAccess(
@@ -399,18 +385,21 @@ function singleHouseholdIntelligenceAccessRow(data: unknown): HouseholdIntellige
     throw new Error("The Luna account service returned invalid Household Intelligence access.");
   }
   const candidate = row as Record<string, unknown>;
-  const validStates = new Set(["free", "checkout_pending", "provisioning", "ready", "payment_problem", "ended"]);
+  const validEntitlementStates = new Set(["free", "checkout_pending", "entitled", "payment_problem", "ended"]);
+  const validDeviceStates = new Set(["not_applicable", "pending", "ready", "revoked"]);
   if (
     typeof candidate.household_id !== "string"
     || (candidate.plan_code !== "free" && candidate.plan_code !== "managed")
-    || typeof candidate.access_state !== "string"
-    || !validStates.has(candidate.access_state)
+    || typeof candidate.entitlement_state !== "string"
+    || !validEntitlementStates.has(candidate.entitlement_state)
+    || typeof candidate.device_state !== "string"
+    || !validDeviceStates.has(candidate.device_state)
     || (candidate.entitlement_source !== null
       && candidate.entitlement_source !== "complimentary"
       && candidate.entitlement_source !== "billing")
-    || (candidate.request_limit !== null && typeof candidate.request_limit !== "number")
-    || typeof candidate.requests_used !== "number"
+    || (candidate.max_budget_usd !== null && typeof candidate.max_budget_usd !== "number")
     || (candidate.valid_until !== null && typeof candidate.valid_until !== "string")
+    || (candidate.credential_expires_at !== null && typeof candidate.credential_expires_at !== "string")
   ) {
     throw new Error("The Luna account service returned invalid Household Intelligence access.");
   }
@@ -421,15 +410,16 @@ function mapHouseholdIntelligenceAccess(row: HouseholdIntelligenceAccessRow): Ho
   return {
     householdId: row.household_id as HouseholdId,
     plan: row.plan_code,
-    state: row.access_state === "checkout_pending"
+    entitlementState: row.entitlement_state === "checkout_pending"
       ? "checkoutPending"
-      : row.access_state === "payment_problem"
+      : row.entitlement_state === "payment_problem"
       ? "paymentProblem"
-      : row.access_state,
+      : row.entitlement_state,
+    deviceState: row.device_state === "not_applicable" ? "notApplicable" : row.device_state,
     entitlementSource: row.entitlement_source,
-    requestLimit: row.request_limit,
-    requestsUsed: row.requests_used,
+    maxBudgetUsd: row.max_budget_usd,
     validUntil: row.valid_until,
+    credentialExpiresAt: row.credential_expires_at,
   };
 }
 

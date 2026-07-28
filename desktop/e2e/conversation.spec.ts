@@ -360,7 +360,7 @@ describe("Luna Conversation desk", () => {
 
     await browser.execute(() => {
       (window as typeof window & {
-        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "free" | "ready"): void };
+        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "free" | "checkoutPending" | "provisioning" | "ready" | "paymentProblem" | "ended"): void };
       }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState("free");
     });
     await $("button[aria-label='Options']").click();
@@ -370,9 +370,27 @@ describe("Luna Conversation desk", () => {
     await cloudOptions.$("button=Start Paddle sandbox checkout").click();
     await expect(cloudOptions.$("a=Continue to Paddle sandbox")).toBeDisplayed();
     await expect(cloudOptions).toHaveText(expect.stringContaining("No real charge"));
+
+    for (const [state, status] of [
+      ["checkoutPending", "Checkout pending"],
+      ["provisioning", "Preparing this Trusted Device"],
+      ["paymentProblem", "Payment needs attention"],
+      ["ended", "Managed access ended"],
+    ] as const) {
+      await browser.execute((nextState) => {
+        (window as typeof window & {
+          __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(value: typeof nextState): void };
+        }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState(nextState);
+      }, state);
+      await $("button[aria-label='Learned Filing Rules options']").click();
+      await $("button[aria-label='Cloud assistance options']").click();
+      cloudOptions = $("section[aria-label='Cloud assistance']");
+      await expect(cloudOptions).toHaveText(expect.stringContaining(status));
+    }
+
     await browser.execute(() => {
       (window as typeof window & {
-        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "free" | "ready"): void };
+        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "free" | "checkoutPending" | "provisioning" | "ready" | "paymentProblem" | "ended"): void };
       }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState("ready");
     });
     await $("button[aria-label='Learned Filing Rules options']").click();

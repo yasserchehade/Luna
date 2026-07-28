@@ -1,14 +1,14 @@
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export function createPaddleBillingClient(configuration: {
-  apiBaseUrl: string;
   apiKey: string;
   managedPriceId: string;
   fetch: FetchLike;
 }) {
+  const apiBaseUrl = "https://sandbox-api.paddle.com";
   const request = async (path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const response = await configuration.fetch(
-      `${configuration.apiBaseUrl.replace(/\/$/, "")}${path}`,
+      `${apiBaseUrl}${path}`,
       {
         method: "POST",
         headers: {
@@ -61,7 +61,7 @@ export function createPaddleBillingClient(configuration: {
     },
     async getPaddleSubscription(subscriptionId: string) {
       const response = await configuration.fetch(
-        `${configuration.apiBaseUrl.replace(/\/$/, "")}/subscriptions/${encodeURIComponent(subscriptionId)}`,
+        `${apiBaseUrl}/subscriptions/${encodeURIComponent(subscriptionId)}`,
         {
           method: "GET",
           headers: {

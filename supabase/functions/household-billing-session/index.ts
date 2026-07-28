@@ -10,7 +10,6 @@ const publishableKey = requiredAnyEnvironment("SUPABASE_PUBLISHABLE_KEY", "SUPAB
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
 const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 const paddle = createPaddleBillingClient({
-  apiBaseUrl: Deno.env.get("PADDLE_API_BASE_URL") ?? "https://sandbox-api.paddle.com",
   apiKey: requiredEnvironment("PADDLE_API_KEY"),
   managedPriceId: requiredEnvironment("PADDLE_MANAGED_PRICE_ID"),
   fetch,

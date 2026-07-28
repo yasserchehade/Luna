@@ -7,13 +7,13 @@ export type PaddleSubscriptionEvent = {
   subscriptionId: string;
   status: "trialing" | "active" | "past_due" | "paused" | "canceled";
   validUntil: string | null;
-  requestLimit: number;
+  maxBudgetUsd: number;
 };
 
 export type PaddleWebhookDependencies = {
   webhookSecret: string;
   expectedPriceId: string;
-  managedRequestLimit: number;
+  managedMaxBudgetUsd: number;
   now(): Date;
   applySubscriptionEvent(event: PaddleSubscriptionEvent): Promise<{ applied: boolean }>;
 };
@@ -47,7 +47,7 @@ export async function handlePaddleWebhook(
     event = parseSubscriptionEvent(
       JSON.parse(rawBody) as unknown,
       dependencies.expectedPriceId,
-      dependencies.managedRequestLimit,
+      dependencies.managedMaxBudgetUsd,
     );
   } catch {
     return json({ error: "Invalid webhook event" }, 400);
@@ -88,7 +88,7 @@ async function validSignature(
 function parseSubscriptionEvent(
   input: unknown,
   expectedPriceId: string,
-  requestLimit: number,
+  maxBudgetUsd: number,
 ): PaddleSubscriptionEvent {
   if (!input || typeof input !== "object") throw new Error("event");
   const event = input as Record<string, unknown>;
@@ -121,8 +121,9 @@ function parseSubscriptionEvent(
       return price && typeof price === "object"
         && (price as Record<string, unknown>).id === expectedPriceId;
     })
-    || !Number.isSafeInteger(requestLimit)
-    || requestLimit <= 0
+    || !Number.isFinite(maxBudgetUsd)
+    || maxBudgetUsd <= 0
+    || maxBudgetUsd > 100
   ) throw new Error("subscription");
 
   const validUntil = billingPeriod?.ends_at;
@@ -139,7 +140,7 @@ function parseSubscriptionEvent(
     subscriptionId: data.id,
     status: data.status as PaddleSubscriptionEvent["status"],
     validUntil: validUntil as string | null | undefined ?? null,
-    requestLimit,
+    maxBudgetUsd,
   };
 }
 

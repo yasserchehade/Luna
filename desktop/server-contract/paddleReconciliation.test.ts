@@ -5,7 +5,7 @@ import { reconcilePaddleSubscriptions } from "../../supabase/functions/_shared/r
 test("Paddle reconciliation repairs missed subscription state through the same ordered event seam", async () => {
   const applied: unknown[] = [];
   const result = await reconcilePaddleSubscriptions({
-    requestLimit: 1_000,
+    maxBudgetUsd: 2,
     async listSubscriptions() {
       return [{
         householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
@@ -37,6 +37,6 @@ test("Paddle reconciliation repairs missed subscription state through the same o
     subscriptionId: "sub_01k1a2b3c4d5e6f7g8h9j0k1m2",
     status: "active",
     validUntil: "2026-08-28T15:00:00.000Z",
-    requestLimit: 1_000,
+    maxBudgetUsd: 2,
   }]);
 });

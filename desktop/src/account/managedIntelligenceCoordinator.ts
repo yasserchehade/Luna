@@ -7,9 +7,11 @@ export async function synchronizeManagedIntelligenceAccess(
   conversationService: ConversationService,
   trustedDeviceService: TrustedDeviceService,
   session: HouseholdSession,
+  now: Date = new Date(),
 ): Promise<void> {
-  const access = await accountService.getHouseholdIntelligenceAccess();
-  if (!["provisioning", "ready"].includes(access.state)) {
+  const devicePublicKey = await trustedDeviceService.currentDevicePublicKey(session.householdId);
+  const access = await accountService.getHouseholdIntelligenceAccess(devicePublicKey);
+  if (access.entitlementState !== "entitled" || access.deviceState === "revoked") {
     await conversationService.clearManagedIntelligenceGatewayCredential(session.householdId);
     return;
   }
@@ -17,9 +19,12 @@ export async function synchronizeManagedIntelligenceAccess(
   const managedProvider = (await conversationService.listIntelligenceProviderStatuses(
     session.householdId,
   )).find(({ descriptor }) => descriptor.managedByLuna);
-  if (managedProvider?.configured) return;
+  const renewalThreshold = now.getTime() + 60 * 60 * 1_000;
+  const credentialIsCurrent = access.deviceState === "ready"
+    && access.credentialExpiresAt !== null
+    && Date.parse(access.credentialExpiresAt) > renewalThreshold;
+  if (managedProvider?.configured && credentialIsCurrent) return;
 
-  const devicePublicKey = await trustedDeviceService.currentDevicePublicKey(session.householdId);
   const challenge = await accountService.beginManagedIntelligenceDeviceProvisioning(devicePublicKey);
   const authorizationSignature = await trustedDeviceService.signManagedIntelligenceDeviceProvisioning(
     session.householdId,

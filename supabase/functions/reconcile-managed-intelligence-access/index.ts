@@ -10,8 +10,9 @@ const gateway = createLiteLlmManagedAccessClient({
   adminEndpoint: requiredEnvironment("LITELLM_ADMIN_URL"),
   endpoint: requiredEnvironment("LUNA_MANAGED_INTELLIGENCE_URL"),
   masterKey: requiredEnvironment("LITELLM_MASTER_KEY"),
-  maxBudgetUsd: Number(requiredEnvironment("LITELLM_DEVICE_MAX_BUDGET_USD")),
-  duration: Deno.env.get("LITELLM_DEVICE_KEY_DURATION") ?? "24h",
+  durationHours: Number(Deno.env.get("LITELLM_DEVICE_KEY_DURATION_HOURS") ?? "24"),
+  rpmLimit: Number(Deno.env.get("LITELLM_HOUSEHOLD_RPM_LIMIT") ?? "6"),
+  tpmLimit: Number(Deno.env.get("LITELLM_HOUSEHOLD_TPM_LIMIT") ?? "8000"),
   fetch,
 });
 

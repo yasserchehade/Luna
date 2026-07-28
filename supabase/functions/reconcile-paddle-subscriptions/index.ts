@@ -5,10 +5,9 @@ import { reconcilePaddleSubscriptions } from "../_shared/reconcilePaddleSubscrip
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
 const reconcileSecret = requiredEnvironment("LUNA_RECONCILIATION_SECRET");
-const requestLimit = Number(requiredEnvironment("PADDLE_MANAGED_REQUEST_LIMIT"));
+const maxBudgetUsd = Number(requiredEnvironment("PADDLE_MANAGED_MAX_BUDGET_USD"));
 const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 const paddle = createPaddleBillingClient({
-  apiBaseUrl: Deno.env.get("PADDLE_API_BASE_URL") ?? "https://sandbox-api.paddle.com",
   apiKey: requiredEnvironment("PADDLE_API_KEY"),
   managedPriceId: requiredEnvironment("PADDLE_MANAGED_PRICE_ID"),
   fetch,
@@ -20,7 +19,7 @@ Deno.serve(async (request) => {
     return Response.json({ error: "Reconciliation authority is required" }, { status: 401 });
   }
   const result = await reconcilePaddleSubscriptions({
-    requestLimit,
+    maxBudgetUsd,
     async listSubscriptions() {
       const { data, error } = await admin.rpc("paddle_subscriptions_for_reconciliation");
       if (error) throw new Error("Paddle subscriptions could not be loaded.");
@@ -41,7 +40,7 @@ Deno.serve(async (request) => {
         requested_subscription_id: event.subscriptionId,
         requested_status: event.status,
         requested_valid_until: event.validUntil,
-        requested_request_limit: event.requestLimit,
+        requested_max_budget_usd: event.maxBudgetUsd,
       });
       if (error) throw new Error("Reconciled Paddle subscription state could not be applied.");
       return { applied: data === true };

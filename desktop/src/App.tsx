@@ -213,6 +213,20 @@ export default function App({ accountService, cabinetService, conversationServic
   }, [coordinationNotice, session, synchronizeAfterUnlock]);
 
   useEffect(() => {
+    if (!session) return;
+    const renewManagedAccess = () => void synchronizeManagedIntelligenceAccess(
+      accountService,
+      conversationService,
+      trustedDeviceService,
+      session,
+    ).catch(() => setCoordinationNotice(
+      "Luna is working offline. Trusted Device changes will be checked when the connection returns.",
+    ));
+    const renewalTimer = window.setInterval(renewManagedAccess, 30 * 60 * 1_000);
+    return () => window.clearInterval(renewalTimer);
+  }, [accountService, conversationService, session, trustedDeviceService]);
+
+  useEffect(() => {
     if (!session) {
       setCabinetValidation(undefined);
       return;

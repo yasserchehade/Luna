@@ -36,7 +36,7 @@ test("a signed Paddle subscription event reaches the access-critical server boun
     body,
   }), {
     expectedPriceId: "pri_01k1a2b3c4d5e6f7g8h9j0k1m2",
-    managedRequestLimit: 1_000,
+    managedMaxBudgetUsd: 2,
     now: () => new Date("2026-07-28T14:00:03.000Z"),
     webhookSecret: secret,
     async applySubscriptionEvent(event) {
@@ -56,7 +56,7 @@ test("a signed Paddle subscription event reaches the access-critical server boun
     subscriptionId: "sub_01k1a2b3c4d5e6f7g8h9j0k1m2",
     status: "active",
     validUntil: "2026-08-28T14:00:00.000Z",
-    requestLimit: 1_000,
+    maxBudgetUsd: 2,
   }]);
 });
 
@@ -83,7 +83,7 @@ test("Paddle events with a bad signature or a different price are rejected", asy
   let applyCount = 0;
   const dependencies = {
     expectedPriceId: "pri_01k1a2b3c4d5e6f7g8h9j0k1m2",
-    managedRequestLimit: 1_000,
+    managedMaxBudgetUsd: 2,
     now: () => new Date("2026-07-28T14:00:03.000Z"),
     webhookSecret: secret,
     async applySubscriptionEvent() {

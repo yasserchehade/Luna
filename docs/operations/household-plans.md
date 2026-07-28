@@ -9,18 +9,19 @@ Configure these values as Supabase Edge Function secrets, never in a desktop env
 - `PADDLE_API_KEY` — Paddle sandbox API key;
 - `PADDLE_WEBHOOK_SECRET` — Paddle notification destination secret;
 - `PADDLE_MANAGED_PRICE_ID` — the single accepted sandbox price;
-- `PADDLE_API_BASE_URL` — `https://sandbox-api.paddle.com` for the prototype;
+- `PADDLE_MANAGED_MAX_BUDGET_USD` — the Household-level sandbox entitlement budget;
 - `LITELLM_ADMIN_URL` — remote HTTPS LiteLLM administration endpoint;
 - `LITELLM_MASTER_KEY` — LiteLLM administrative key;
 - `LUNA_MANAGED_INTELLIGENCE_URL` — customer-facing remote HTTPS chat-completions endpoint;
-- `LUNA_MANAGED_REQUEST_LIMIT`, `LUNA_MANAGED_MAX_BUDGET`, `LUNA_MANAGED_RPM_LIMIT` and `LUNA_MANAGED_TPM_LIMIT` — prototype abuse caps;
+- `LITELLM_DEVICE_KEY_DURATION_HOURS` — virtual-key lifetime, defaulting to 24 hours;
+- `LITELLM_HOUSEHOLD_RPM_LIMIT` and `LITELLM_HOUSEHOLD_TPM_LIMIT` — shared Household throughput caps;
 - `LUNA_RECONCILIATION_SECRET` — independent high-entropy bearer value for scheduled reconciliation calls.
 
 Supabase supplies `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the functions. Keep live Paddle credentials disabled until the remote-gateway gate in issue #53 is complete.
 
 ## Complimentary beta grant
 
-An operator grants access to a Household, not to an email address or an application build. Look up and verify the intended Household identifier, then invoke `grant_complimentary_managed_intelligence` with the service role. Set a bounded request limit and expiry. Ordinary authenticated members cannot call this function.
+An operator grants access to a Household, not to an email address or an application build. Look up and verify the intended Household identifier, then invoke `grant_complimentary_managed_intelligence` with the service role. Set a bounded USD budget and expiry. Ordinary authenticated members cannot call this function. The generated entitlement budget scope becomes one shared LiteLLM team budget across all of that Household's device keys.
 
 After the next unlock, an entitled enrolled Trusted Device requests a five-minute challenge, signs it with its existing device-authorisation key and asks the provisioning function for a narrow 24-hour LiteLLM virtual key. The desktop retains that key only in its operating-system credential vault.
 
@@ -28,7 +29,7 @@ To end the grant, invoke `revoke_complimentary_managed_intelligence` with the se
 
 ## Paddle sandbox
 
-Set Paddle's default payment link to an HTTPS page on a domain controlled by Luna. The app asks `household-billing-session` for a transaction checkout URL; it never collects card data. Paddle must send subscription events to `paddle-webhook`. Only the configured sandbox price and a signed opaque `household_id` reference are accepted.
+Set Paddle's default payment link to an HTTPS page on a domain controlled by Luna. The app asks `household-billing-session` for a transaction checkout URL; it never collects card data. Paddle must send subscription events to `paddle-webhook`. Only the configured sandbox price and a signed opaque `household_id` reference are accepted. The billing adapter is compiled against `https://sandbox-api.paddle.com`; no environment setting can redirect this prototype code to Paddle's live API.
 
 The customer portal is also Paddle-hosted and available only after the Household has an external customer and subscription identifier. Sandbox screens must continue to say that no real charge will be made.
 

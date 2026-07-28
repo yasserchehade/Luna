@@ -62,6 +62,7 @@ export function OptionsWorkspace({
         accountService={accountService}
         conversationService={conversationService}
         householdId={session.householdId}
+        trustedDeviceService={trustedDeviceService}
       />}
   </main>;
 }

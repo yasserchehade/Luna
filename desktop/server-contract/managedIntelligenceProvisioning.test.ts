@@ -28,14 +28,23 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
       return {
         householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
         deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        existingAlias: null,
+        budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+        maxBudgetUsd: 1,
       };
     },
     async createGatewayAccess(input) {
       assert.deepEqual(input, {
         householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
         deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+        maxBudgetUsd: 1,
       });
-      return { alias: "luna-device-acdf892b", credential: "sk-narrow-device-key" };
+      return {
+        alias: "luna-device-acdf892b",
+        credential: "sk-narrow-device-key",
+        expiresAt: "2026-07-29T14:00:00.000Z",
+      };
     },
     async recordReady(input) {
       recorded.push(input);
@@ -46,12 +55,58 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
   assert.deepEqual(await response.json(), {
     state: "ready",
     credential: "sk-narrow-device-key",
+    expiresAt: "2026-07-29T14:00:00.000Z",
   });
   assert.deepEqual(recorded, [{
     householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
     deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
     alias: "luna-device-acdf892b",
+    expiresAt: "2026-07-29T14:00:00.000Z",
   }]);
+});
+
+test("renewal revokes the previous device alias before minting its replacement", async () => {
+  const actions: string[] = [];
+  const response = await handleManagedIntelligenceProvisioning(new Request(
+    "https://luna.test/managed-intelligence-provisioning",
+    { method: "POST", body: JSON.stringify({
+      devicePublicKey: "age1trusteddevice",
+      challengeId: "f462a4ac-9688-4c23-90e7-8a9f449b975d",
+      nonce: "d916a996-710d-4a43-84ac-b28427151a7f",
+      authorizationSignature: "base64-device-signature",
+    }) },
+  ), {
+    async authorizeDevice() {
+      return {
+        householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
+        deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        existingAlias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+        budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+        maxBudgetUsd: 1,
+      };
+    },
+    async revokeGatewayAccessByAlias(alias) {
+      actions.push(`revoke:${alias}`);
+    },
+    async createGatewayAccess() {
+      actions.push("generate");
+      return {
+        alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+        credential: "renewed-key",
+        expiresAt: "2026-07-29T14:00:00.000Z",
+      };
+    },
+    async recordReady() {
+      actions.push("ready");
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(actions, [
+    "revoke:luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
+    "generate",
+    "ready",
+  ]);
 });
 
 test("revoked Household access removes each attributable gateway key", async () => {
@@ -86,11 +141,16 @@ test("generated LiteLLM access is device-attributed, route-limited, rate-limited
     adminEndpoint: "https://gateway-admin.luna.test",
     endpoint: "https://gateway.luna.test/v1/chat/completions",
     masterKey: "sk-litellm-master-secret",
-    maxBudgetUsd: 1,
-    duration: "24h",
+    durationHours: 24,
+    rpmLimit: 6,
+    tpmLimit: 8_000,
+    now: () => new Date("2026-07-28T14:00:00.000Z"),
     fetch: async (url, init) => {
       requests.push({ url: String(url), init });
-      return new Response(JSON.stringify({ key: "sk-narrow-device-key" }), {
+      const payload = String(url).endsWith("/key/generate")
+        ? { key: "sk-narrow-device-key", expires: "2026-07-29T14:00:00.000Z" }
+        : {};
+      return new Response(JSON.stringify(payload), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -100,21 +160,33 @@ test("generated LiteLLM access is device-attributed, route-limited, rate-limited
   const access = await client.createGatewayAccess({
     householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
     deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+    budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+    maxBudgetUsd: 1,
   });
 
   assert.equal(access.credential, "sk-narrow-device-key");
-  assert.equal(requests[0].url, "https://gateway-admin.luna.test/key/generate");
-  const body = JSON.parse(String(requests[0].init?.body));
-  assert.deepEqual(body.models, ["openai/gpt-4.1-mini"]);
-  assert.deepEqual(body.allowed_routes, ["/v1/chat/completions", "/v1/models"]);
-  assert.equal(body.duration, "24h");
-  assert.equal(body.max_budget, 1);
-  assert.equal(body.rpm_limit, 6);
-  assert.equal(body.tpm_limit, 8_000);
-  assert.deepEqual(body.metadata, {
+  assert.equal(access.expiresAt, "2026-07-29T14:00:00.000Z");
+  assert.equal(requests[0].url, "https://gateway-admin.luna.test/team/new");
+  const team = JSON.parse(String(requests[0].init?.body));
+  const expectedTeamId = "luna-household-d70c8675-0261-4797-b6df-4109c3d678cd-49c52e29-bd9b-4bcb-a4e8-030f9de11111";
+  assert.equal(team.team_id, expectedTeamId);
+  assert.equal(team.max_budget, 1);
+  assert.equal(team.rpm_limit, 6);
+  assert.equal(team.tpm_limit, 8_000);
+  assert.equal(requests[1].url, "https://gateway-admin.luna.test/key/generate");
+  const key = JSON.parse(String(requests[1].init?.body));
+  assert.deepEqual(key.models, ["openai/gpt-4.1-mini"]);
+  assert.deepEqual(key.allowed_routes, ["/v1/chat/completions"]);
+  assert.equal(key.duration, "24h");
+  assert.equal(key.team_id, expectedTeamId);
+  assert.equal(key.max_budget, undefined, "the cap must be shared by the Household team, not multiplied per key");
+  assert.equal(key.rpm_limit, 6);
+  assert.equal(key.tpm_limit, 8_000);
+  assert.deepEqual(key.metadata, {
     purpose: "luna-managed-intelligence",
     household_id: "d70c8675-0261-4797-b6df-4109c3d678cd",
     trusted_device_id: "acdf892b-1967-4376-82b2-e144ff480740",
+    budget_scope_id: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
   });
-  assert.doesNotMatch(String(requests[0].init?.body), /master-secret|provider|document|email/i);
+  assert.doesNotMatch(String(requests[1].init?.body), /master-secret|provider|document|email/i);
 });

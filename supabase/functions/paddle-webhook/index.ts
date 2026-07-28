@@ -8,7 +8,7 @@ const supabaseUrl = requiredEnvironment("SUPABASE_URL");
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
 const webhookSecret = requiredEnvironment("PADDLE_WEBHOOK_SECRET");
 const expectedPriceId = requiredEnvironment("PADDLE_MANAGED_PRICE_ID");
-const managedRequestLimit = Number(requiredEnvironment("PADDLE_MANAGED_REQUEST_LIMIT"));
+const managedMaxBudgetUsd = Number(requiredEnvironment("PADDLE_MANAGED_MAX_BUDGET_USD"));
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false },
 });
@@ -16,7 +16,7 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 Deno.serve((request) => handlePaddleWebhook(request, {
   webhookSecret,
   expectedPriceId,
-  managedRequestLimit,
+  managedMaxBudgetUsd,
   now: () => new Date(),
   async applySubscriptionEvent(event: PaddleSubscriptionEvent) {
     const { data, error } = await supabase.rpc("apply_paddle_subscription_event", {
@@ -28,7 +28,7 @@ Deno.serve((request) => handlePaddleWebhook(request, {
       requested_subscription_id: event.subscriptionId,
       requested_status: event.status,
       requested_valid_until: event.validUntil,
-      requested_request_limit: event.requestLimit,
+      requested_max_budget_usd: event.maxBudgetUsd,
     });
     if (error) throw new Error("The Paddle subscription event could not be applied.");
     return { applied: data === true };

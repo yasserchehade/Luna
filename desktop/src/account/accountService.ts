@@ -101,11 +101,12 @@ export type HouseholdSession = {
 export type HouseholdIntelligenceAccess = {
   householdId: HouseholdId;
   plan: "free" | "managed";
-  state: "free" | "checkoutPending" | "provisioning" | "ready" | "paymentProblem" | "ended";
+  entitlementState: "free" | "checkoutPending" | "entitled" | "paymentProblem" | "ended";
+  deviceState: "notApplicable" | "pending" | "ready" | "revoked";
   entitlementSource: "complimentary" | "billing" | null;
-  requestLimit: number | null;
-  requestsUsed: number;
+  maxBudgetUsd: number | null;
   validUntil: string | null;
+  credentialExpiresAt: string | null;
 };
 
 export type ManagedIntelligenceProvisioningChallenge = {
@@ -148,15 +149,12 @@ export interface AccountService {
   getTrustedDeviceKeyCoordination(publicKey: string): Promise<TrustedDeviceKeyCoordination>;
   replaceRecoveryKey(request: ReplaceRecoveryKeyRequest): Promise<void>;
   revokeTrustedDevice(request: RevokeTrustedDeviceRequest): Promise<TrustedDeviceRecord[]>;
-  getHouseholdIntelligenceAccess(): Promise<HouseholdIntelligenceAccess>;
+  getHouseholdIntelligenceAccess(devicePublicKey?: string): Promise<HouseholdIntelligenceAccess>;
   createManagedIntelligenceCheckoutSession(): Promise<{ url: string }>;
   createManagedIntelligenceCustomerPortalSession(): Promise<{ url: string }>;
   beginManagedIntelligenceDeviceProvisioning(
     devicePublicKey: string,
   ): Promise<ManagedIntelligenceProvisioningChallenge>;
-  authorizeManagedIntelligenceDeviceProvisioning(
-    request: AuthorizeManagedIntelligenceDeviceProvisioningRequest,
-  ): Promise<{ householdId: HouseholdId; deviceId: string }>;
   provisionManagedIntelligenceDeviceAccess(
     request: AuthorizeManagedIntelligenceDeviceProvisioningRequest,
   ): Promise<{ state: "ready"; credential: string }>;
@@ -224,9 +222,6 @@ export const unavailableAccountService: AccountService = {
     throw new Error("Managed Intelligence subscription management is not configured.");
   },
   async beginManagedIntelligenceDeviceProvisioning() {
-    throw new Error("Managed Intelligence device provisioning is not configured.");
-  },
-  async authorizeManagedIntelligenceDeviceProvisioning() {
     throw new Error("Managed Intelligence device provisioning is not configured.");
   },
   async provisionManagedIntelligenceDeviceAccess() {

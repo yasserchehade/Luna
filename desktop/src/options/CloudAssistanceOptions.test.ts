@@ -42,11 +42,12 @@ test("provider controls remain available when protected Consent Grants cannot be
       return {
         householdId: "household" as never,
         plan: "free",
-        state: "free",
+        entitlementState: "free",
+        deviceState: "notApplicable",
         entitlementSource: null,
-        requestLimit: null,
-        requestsUsed: 0,
+        maxBudgetUsd: null,
         validUntil: null,
+        credentialExpiresAt: null,
       };
     },
     async createManagedIntelligenceCheckoutSession() {
@@ -55,7 +56,11 @@ test("provider controls remain available when protected Consent Grants cannot be
     async createManagedIntelligenceCustomerPortalSession() {
       return { url: "https://customer-portal.paddle.com/test" };
     },
-  }, "household");
+  }, {
+    async currentDevicePublicKey() {
+      return "age1trusteddevice";
+    },
+  }, "household" as never);
 
   assert.deepEqual(result.providers, providers);
   assert.deepEqual(result.scopes, []);

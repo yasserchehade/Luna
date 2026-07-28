@@ -58,7 +58,7 @@ test("an authenticated Household Organiser can create a Paddle sandbox checkout 
   }]);
 });
 
-test("an existing subscriber receives a temporary Paddle customer-portal session", async () => {
+test("a Household with a Billing Subscription receives a temporary Paddle customer-portal session", async () => {
   const context: HouseholdBillingContext = {
     householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
     email: "organiser@example.com",
@@ -101,7 +101,6 @@ test("an existing subscriber receives a temporary Paddle customer-portal session
 test("Paddle checkout receives only the managed price and opaque Household reference", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const client = createPaddleBillingClient({
-    apiBaseUrl: "https://sandbox-api.paddle.com",
     apiKey: "pdl_sdbx_test_secret",
     managedPriceId: "pri_01k1a2b3c4d5e6f7g8h9j0k1m2",
     async fetch(url, init) {

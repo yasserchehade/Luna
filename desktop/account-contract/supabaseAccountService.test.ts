@@ -30,11 +30,12 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
   assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
     householdId: household.householdId,
     plan: "free",
-    state: "free",
+    entitlementState: "free",
+    deviceState: "notApplicable",
     entitlementSource: null,
-    requestLimit: null,
-    requestsUsed: 0,
+    maxBudgetUsd: null,
     validUntil: null,
+    credentialExpiresAt: null,
   });
 
   const memberClient = createClient(supabaseUrl, publishableKey, {
@@ -43,7 +44,7 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
   assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
   const forbiddenGrant = await memberClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
-    requested_request_limit: 500,
+    requested_max_budget_usd: 1,
     requested_valid_until: "2026-09-01T00:00:00.000Z",
   });
   assert.ok(forbiddenGrant.error, "a Household Member must not grant its own entitlement");
@@ -53,7 +54,7 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
   });
   const grant = await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
-    requested_request_limit: 500,
+    requested_max_budget_usd: 1,
     requested_valid_until: "2026-09-01T00:00:00.000Z",
   });
   assert.equal(grant.error, null);
@@ -61,11 +62,12 @@ test("complimentary Managed Intelligence is granted by an operator at the Househ
   assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
     householdId: household.householdId,
     plan: "managed",
-    state: "provisioning",
+    entitlementState: "entitled",
+    deviceState: "pending",
     entitlementSource: "complimentary",
-    requestLimit: 500,
-    requestsUsed: 0,
+    maxBudgetUsd: 1,
     validUntil: "2026-09-01T00:00:00+00:00",
+    credentialExpiresAt: null,
   });
 });
 
@@ -101,7 +103,7 @@ test("verified Paddle events are idempotent and older subscription state cannot 
     requested_transaction_id: `txn_${billingRunId}`,
   });
   assert.equal(checkout.error, null);
-  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "checkoutPending");
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).entitlementState, "checkoutPending");
   const activeEvent = {
     requested_event_id: `evt_active_${billingRunId}`,
     requested_event_type: "subscription.updated",
@@ -111,7 +113,7 @@ test("verified Paddle events are idempotent and older subscription state cannot 
     requested_subscription_id: `sub_${billingRunId}`,
     requested_status: "active",
     requested_valid_until: "2026-08-28T14:00:00.000Z",
-    requested_request_limit: 1_000,
+    requested_max_budget_usd: 2,
   };
 
   const first = await operatorClient.rpc("apply_paddle_subscription_event", activeEvent);
@@ -121,11 +123,12 @@ test("verified Paddle events are idempotent and older subscription state cannot 
   assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
     householdId: household.householdId,
     plan: "managed",
-    state: "provisioning",
+    entitlementState: "entitled",
+    deviceState: "pending",
     entitlementSource: "billing",
-    requestLimit: 1_000,
-    requestsUsed: 0,
+    maxBudgetUsd: 2,
     validUntil: "2026-08-28T14:00:00+00:00",
+    credentialExpiresAt: null,
   });
 
   const paymentProblem = await operatorClient.rpc("apply_paddle_subscription_event", {
@@ -144,21 +147,22 @@ test("verified Paddle events are idempotent and older subscription state cannot 
   });
   assert.equal(staleActive.error, null);
   assert.equal(staleActive.data, false);
-  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "paymentProblem");
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).entitlementState, "paymentProblem");
 
   assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
-    requested_request_limit: 100,
+    requested_max_budget_usd: 1,
     requested_valid_until: "2026-09-01T00:00:00.000Z",
   })).error, null);
   assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
     householdId: household.householdId,
     plan: "managed",
-    state: "provisioning",
+    entitlementState: "entitled",
+    deviceState: "pending",
     entitlementSource: "complimentary",
-    requestLimit: 100,
-    requestsUsed: 0,
+    maxBudgetUsd: 1,
     validUntil: "2026-09-01T00:00:00+00:00",
+    credentialExpiresAt: null,
   });
 });
 
@@ -198,7 +202,7 @@ test("an entitled Trusted Device proves possession before managed access is prov
   });
   assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
-    requested_request_limit: 500,
+    requested_max_budget_usd: 1,
     requested_valid_until: "2026-09-01T00:00:00.000Z",
   })).error, null);
 
@@ -207,35 +211,66 @@ test("an entitled Trusted Device proves possession before managed access is prov
     "luna:managed-intelligence-device:v1:",
     [household.householdId, device.publicKey, challenge.nonce],
   ));
-  assert.deepEqual(await accountService.authorizeManagedIntelligenceDeviceProvisioning({
-    devicePublicKey: device.publicKey,
-    challengeId: challenge.id,
-    nonce: challenge.nonce,
-    authorizationSignature: authorization,
-  }), {
-    householdId: household.householdId,
-    deviceId: device.id,
+  const memberClient = createClient(supabaseUrl, publishableKey, { auth: { persistSession: false } });
+  assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
+  const factors = await memberClient.auth.mfa.listFactors();
+  assert.equal(factors.error, null);
+  const memberFactor = factors.data?.totp.find(({ status }) => status === "verified");
+  assert.ok(memberFactor);
+  const memberChallenge = await memberClient.auth.mfa.challenge({ factorId: memberFactor.id });
+  assert.equal(memberChallenge.error, null);
+  const memberVerification = await memberClient.auth.mfa.verify({
+    factorId: memberFactor.id,
+    challengeId: memberChallenge.data.id,
+    code: totp.generate(),
   });
+  assert.equal(memberVerification.error, null);
+  const authorized = await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: challenge.id,
+    requested_nonce: challenge.nonce,
+    requested_authorization_signature: authorization,
+  });
+  assert.equal(authorized.error, null);
+  const authorizedRow = Array.isArray(authorized.data) ? authorized.data[0] : authorized.data;
+  assert.equal(authorizedRow.household_id, household.householdId);
+  assert.equal(authorizedRow.device_id, device.id);
+  assert.equal(authorizedRow.existing_gateway_key_alias, null);
+  assert.equal(Number(authorizedRow.max_budget_usd), 1);
   assert.equal((await operatorClient.rpc("record_managed_intelligence_device_access", {
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_status: "ready",
     requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_credential_expires_at: "2026-07-29T14:00:00.000Z",
   })).error, null);
-  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "ready");
-  await assert.rejects(() => accountService.authorizeManagedIntelligenceDeviceProvisioning({
-    devicePublicKey: device.publicKey,
-    challengeId: challenge.id,
-    nonce: challenge.nonce,
-    authorizationSignature: authorization,
-  }));
+  const ready = await accountService.getHouseholdIntelligenceAccess(device.publicKey);
+  assert.equal(ready.entitlementState, "entitled");
+  assert.equal(ready.deviceState, "ready");
+  assert.equal(ready.credentialExpiresAt, "2026-07-29T14:00:00+00:00");
+  assert.ok((await memberClient.rpc("authorize_managed_intelligence_device_provisioning", {
+    requested_device_public_key: device.publicKey,
+    requested_challenge_id: challenge.id,
+    requested_nonce: challenge.nonce,
+    requested_authorization_signature: authorization,
+  })).error, "a provisioning challenge cannot be replayed");
   assert.equal((await operatorClient.rpc("revoke_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
   })).error, null);
-  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "ended");
+  assert.equal((await accountService.getHouseholdIntelligenceAccess(device.publicKey)).entitlementState, "ended");
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.5,
+    requested_valid_until: "2026-10-01T00:00:00.000Z",
+  })).error, null);
+  await assert.rejects(
+    () => accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey),
+  );
   const pendingRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
   assert.equal(pendingRevocations.error, null);
-  assert.deepEqual(pendingRevocations.data, [{
+  assert.deepEqual(pendingRevocations.data.filter(
+    (row: { household_id: string }) => row.household_id === household.householdId,
+  ), [{
     household_id: household.householdId,
     device_id: device.id,
     gateway_key_alias: `luna-managed-${device.id}`,
@@ -244,13 +279,11 @@ test("an entitled Trusted Device proves possession before managed access is prov
     requested_household_id: household.householdId,
     requested_device_id: device.id,
   })).error, null);
-  assert.deepEqual((await operatorClient.rpc("pending_managed_intelligence_revocations")).data, []);
-
-  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
-    requested_household_id: household.householdId,
-    requested_request_limit: 250,
-    requested_valid_until: "2026-10-01T00:00:00.000Z",
-  })).error, null);
+  assert.deepEqual(
+    (await operatorClient.rpc("pending_managed_intelligence_revocations")).data
+      .filter((row: { household_id: string }) => row.household_id === household.householdId),
+    [],
+  );
   const replacementChallenge = await accountService.beginManagedIntelligenceDeviceProvisioning(
     device.publicKey,
   );

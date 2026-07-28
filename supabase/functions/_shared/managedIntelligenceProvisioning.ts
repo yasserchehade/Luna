@@ -9,17 +9,27 @@ type ProvisioningDependencies = {
   authorizeDevice(
     request: Request,
     proof: DeviceProof,
-  ): Promise<{ householdId: string; deviceId: string } | null>;
+  ): Promise<{
+    householdId: string;
+    deviceId: string;
+    existingAlias: string | null;
+    budgetScopeId: string;
+    maxBudgetUsd: number;
+  } | null>;
   createGatewayAccess(input: {
     householdId: string;
     deviceId: string;
-  }): Promise<{ alias: string; credential: string }>;
+    budgetScopeId: string;
+    maxBudgetUsd: number;
+  }): Promise<{ alias: string; credential: string; expiresAt: string }>;
   recordReady(input: {
     householdId: string;
     deviceId: string;
     alias: string;
+    expiresAt: string;
   }): Promise<void>;
   revokeGatewayAccess?(credential: string): Promise<void>;
+  revokeGatewayAccessByAlias?(alias: string): Promise<void>;
 };
 
 export async function handleManagedIntelligenceProvisioning(
@@ -41,17 +51,30 @@ export async function handleManagedIntelligenceProvisioning(
 
   const authorization = await dependencies.authorizeDevice(request, proof);
   if (!authorization) return json({ error: "Trusted Device authorization is required" }, 401);
-  const access = await dependencies.createGatewayAccess(authorization);
-  if (!access.alias || !access.credential) {
+  if (authorization.existingAlias) {
+    await dependencies.revokeGatewayAccessByAlias?.(authorization.existingAlias);
+  }
+  const access = await dependencies.createGatewayAccess({
+    householdId: authorization.householdId,
+    deviceId: authorization.deviceId,
+    budgetScopeId: authorization.budgetScopeId,
+    maxBudgetUsd: authorization.maxBudgetUsd,
+  });
+  if (!access.alias || !access.credential || Number.isNaN(Date.parse(access.expiresAt))) {
     return json({ error: "Managed access could not be provisioned" }, 502);
   }
   try {
-    await dependencies.recordReady({ ...authorization, alias: access.alias });
+    await dependencies.recordReady({
+      householdId: authorization.householdId,
+      deviceId: authorization.deviceId,
+      alias: access.alias,
+      expiresAt: access.expiresAt,
+    });
   } catch (error) {
     await dependencies.revokeGatewayAccess?.(access.credential).catch(() => undefined);
     throw error;
   }
-  return json({ state: "ready", credential: access.credential }, 200);
+  return json({ state: "ready", credential: access.credential, expiresAt: access.expiresAt }, 200);
 }
 
 function json(value: Record<string, unknown>, status: number): Response {
