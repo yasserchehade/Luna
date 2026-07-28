@@ -41,6 +41,10 @@ export function TrustedDevicesOptions({
     let serviceRotationCommitted = false;
     void (async () => {
       const recovery = await accountService.getTrustedDeviceRecoveryEnvelope();
+      const portableCutoff = await trustedDeviceService.portableAuthorizationCutoff(
+        session.householdId,
+        target.publicKey,
+      );
       const retainedPublicKeys = devices
         .filter(({ id, status }) => id !== target.id && status === "active")
         .map(({ publicKey }) => publicKey);
@@ -60,6 +64,7 @@ export function TrustedDevicesOptions({
           recoveryEnvelope: rotation.recoveryEnvelope,
           deviceEnvelopes: rotation.deviceEnvelopes,
           recoveryAuthorizationSignature: rotation.recoveryAuthorizationSignature,
+          portableCutoff: portableCutoff ?? undefined,
         });
         serviceRotationCommitted = true;
         await trustedDeviceService.finalizeHouseholdKeyRotation(

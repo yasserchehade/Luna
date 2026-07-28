@@ -154,6 +154,8 @@ export const e2eAccountService: AccountService = {
       id: "device-sam-rivera",
       label: request.label,
       publicKey: request.publicKey,
+      authorizationPublicKey: request.authorizationPublicKey,
+      activatedKeyEpoch: 1,
       keyEpoch: 1,
       status: "active",
     };
@@ -167,6 +169,8 @@ export const e2eAccountService: AccountService = {
       id: "device-sam-rivera-replacement",
       label: request.label,
       publicKey: request.publicKey,
+      authorizationPublicKey: request.authorizationPublicKey,
+      activatedKeyEpoch: request.keyEpoch,
       keyEpoch: request.keyEpoch,
       status: "active",
     };
@@ -235,7 +239,13 @@ export const e2eAccountService: AccountService = {
       trustedDeviceEnvelopes.set(envelope.devicePublicKey, envelope.keyEnvelope);
     }
     trustedDevices = trustedDevices.map((device) => {
-      if (device.id === target.id) return { ...device, status: "revoked" };
+      if (device.id === target.id) {
+        return {
+          ...device,
+          status: "revoked",
+          revokedAfter: request.portableCutoff,
+        };
+      }
       if (device.status !== "active") return device;
       return { ...device, keyEpoch: nextEpoch };
     });

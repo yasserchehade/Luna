@@ -84,6 +84,8 @@ A Trusted Device controls one device identity and its participation in household
 
 A Trusted Device must also be locally unlocked with its Device PIN for the current session. Recovery material remains pending until its service registration succeeds, and Device Revocation advances the Household key epoch for every retained device.
 
+Portable Memory Records carry only typed durable facts and opaque owning-domain UUID references. Conversation, Filing Rule, duplicate and Cloud Assistance owners capture their consequential facts automatically; credential-vault operations are outside that adapter, Filing Rules never manufacture Authority Grants, and Keep local never manufactures a denied Consent Grant. A Trusted Device signs each encrypted append-only record with its device-held authorisation key. The local database commits a record before Cabinet delivery, so an unavailable Cabinet leaves an exact pending record for later synchronisation. Import verifies the signed public chain metadata and device activation/revocation validity window before decrypting with the correct Household key epoch, then rebuilds executable Filing Rules and reusable Consent Grants plus protected relationship and History projections in their owning local stores. Reusable Consent retains the exact provider, model, permitted disclosure names and field/value evidence scope required by the owning validator. One-time grants remain portable historical authority and identify their Document through a canonical Portable Reference, but are not rebound as executable Consent to a different device's local Document Arrival. The Recovery Key protects the complete historical Household-key ring so a device recovered after rotation can rebuild pre-rotation History without restoring access to a revoked device. Competing mutable facts or opposing resolution events become a Portable Memory Conflict; the affected current projection, including Filing Rule automation, is withheld until explicit resolution and neither record silently overwrites the other.
+
 ## Invariants
 
 1. **Originals are immutable.** Luna may rename or relocate an Original but never silently change its bytes.
@@ -104,6 +106,11 @@ A Trusted Device must also be locally unlocked with its Device PIN for the curre
 16. **Staging ends only after verification.** Luna removes a staged copy only after the cabinet copy is checksum-verified and the outcome is durably recorded.
 17. **Rules change prospectively.** Historical reorganisation requires a preview and explicit direction.
 18. **Deletion meanings are separate.** Deleting a file does not implicitly delete its Filing Rule, related future obligation, conversation or Audit Events.
+19. **Portable memory contains durable facts only.** Filing Rules, relationships, Member Direction, authority, Consent Grants, outcomes, Audit Events and stable references may cross devices; derived prompts, transient orchestration, hidden reasoning and raw provider output do not.
+20. **Secrets never become portable memory.** Credentials, tokens, device private keys and plaintext encryption keys remain in their owning credential boundary.
+21. **Portable delivery is append-only and idempotent.** A duplicate record has no additional effect, an interrupted Cabinet write can be repaired from the exact committed record across key rotation, and modified, replay-invalid, post-revocation or untrusted records are rejected.
+22. **Concurrent portable state never silently overwrites.** Valid competing changes to one mutable subject remain detectable until an explicit resolution selects the current projection.
+23. **Each Trusted Device owns a separate local database.** The Cabinet carries Portable Memory Records, never a live database file.
 
 ## Document Handling lifecycle
 

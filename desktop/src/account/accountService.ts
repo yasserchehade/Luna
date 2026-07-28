@@ -53,6 +53,13 @@ export type TrustedDeviceRecord = {
   id: string;
   label: string;
   publicKey: string;
+  authorizationPublicKey?: string;
+  activatedKeyEpoch?: number;
+  revokedAfter?: {
+    keyEpoch: number;
+    sequence: number;
+    eventDigest: string;
+  };
   keyEpoch: number;
   status: "active" | "revoked";
 };
@@ -64,6 +71,11 @@ export type RevokeTrustedDeviceRequest = {
   recoveryEnvelope: string;
   deviceEnvelopes: Array<{ devicePublicKey: string; keyEnvelope: string }>;
   recoveryAuthorizationSignature: string;
+  portableCutoff?: {
+    keyEpoch: number;
+    sequence: number;
+    eventDigest: string;
+  };
 };
 
 export type TrustedDeviceKeyCoordination = {

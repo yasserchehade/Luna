@@ -17,6 +17,10 @@ use thiserror::Error;
 
 use crate::{
     litellm::LiteLlmGateway,
+    portable_memory::{
+        PortableConsentDetails, PortableConsentField, PortableConsentGrantKind,
+        PortableConsentProvider, PortableConsentScope, PortableConsentState,
+    },
     trusted_device::{
         CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
         VaultError,
@@ -104,6 +108,12 @@ pub struct CloudConsentScope {
     pub consumed_at: Option<String>,
     pub revoked_at: Option<String>,
     pub revoked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PortableConsentExport {
+    pub scope: CloudConsentScope,
+    pub future_scope_evidence: Vec<IntelligenceEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -704,6 +714,107 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                 Ok(consent_scope(household_id, id, payload))
             })
             .collect()
+    }
+
+    pub(crate) fn portable_consent_exports(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<PortableConsentExport>, IntelligenceFailure> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, protected_payload FROM cloud_consents
+                 WHERE household_id = ?1 ORDER BY id DESC",
+            )
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        let rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        rows.into_iter()
+            .map(|(id, protected)| {
+                let payload: ConsentPayload = self.open_protected(household_id, &protected)?;
+                Ok(PortableConsentExport {
+                    scope: consent_scope(household_id, id, payload.clone()),
+                    future_scope_evidence: payload.future_scope_evidence,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn apply_portable_consent(
+        &self,
+        household_id: &str,
+        local_id: Option<i64>,
+        provider: &PortableConsentProvider,
+        scope: &PortableConsentScope,
+        state: &PortableConsentState,
+        details: &PortableConsentDetails,
+    ) -> Result<i64, IntelligenceFailure> {
+        if details.kind == PortableConsentGrantKind::OneTime {
+            return Err(IntelligenceFailure::ConsentRequired);
+        }
+        let payload = ConsentPayload {
+            provider_id: match provider {
+                PortableConsentProvider::LunaManaged => MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+                PortableConsentProvider::OpenAi => BYOK_OPENAI_PROVIDER_ID.to_owned(),
+                PortableConsentProvider::Anthropic => "anthropic-byok".to_owned(),
+            },
+            model_id: details.model_id.clone(),
+            capability: IntelligenceCapability::DirectionInterpretation,
+            purpose: capability_purpose(IntelligenceCapability::DirectionInterpretation).to_owned(),
+            document_arrival_id: None,
+            future_scope: scope.future_scope.clone(),
+            future_scope_evidence: scope
+                .future_scope_evidence
+                .iter()
+                .map(|evidence| IntelligenceEvidence {
+                    field: evidence.field.clone(),
+                    value: evidence.value.clone(),
+                    source: String::new(),
+                })
+                .collect(),
+            fields: scope
+                .fields
+                .iter()
+                .map(|field| match field {
+                    PortableConsentField::DocumentType => "documentType",
+                    PortableConsentField::ServiceProvider => "serviceProvider",
+                    PortableConsentField::Addressee => "addressee",
+                    PortableConsentField::Property => "property",
+                    PortableConsentField::Account => "account",
+                    PortableConsentField::Amount => "amount",
+                    PortableConsentField::RelevantDates => "relevantDates",
+                    PortableConsentField::Additional(field) => field.as_str(),
+                })
+                .map(str::to_owned)
+                .collect(),
+            kind: match details.kind {
+                PortableConsentGrantKind::OneTime => ConsentGrantKind::OneTime,
+                PortableConsentGrantKind::Reusable => ConsentGrantKind::Reusable,
+            },
+            granted_by: details.granted_by.to_string(),
+            created_at: details.created_at.clone(),
+            consumed_at: details.consumed_at.clone(),
+            revoked_at: if *state == PortableConsentState::Revoked {
+                details
+                    .revoked_at
+                    .clone()
+                    .or_else(|| Some(details.created_at.clone()))
+            } else {
+                details.revoked_at.clone()
+            },
+        };
+        if let Some(local_id) = local_id {
+            if self.load_consent(household_id, local_id).is_ok() {
+                self.save_consent(household_id, local_id, &payload)?;
+                return Ok(local_id);
+            }
+        }
+        Ok(self.insert_consent(household_id, payload)?.id)
     }
 
     #[allow(clippy::too_many_arguments)]
