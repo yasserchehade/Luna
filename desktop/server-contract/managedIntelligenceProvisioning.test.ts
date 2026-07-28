@@ -6,6 +6,7 @@ import { reconcileManagedIntelligenceAccess } from "../../supabase/functions/_sh
 
 test("an entitled Trusted Device receives a narrow generated gateway credential", async () => {
   const recorded: unknown[] = [];
+  let reservationId = "";
   const response = await handleManagedIntelligenceProvisioning(new Request(
     "https://luna.test/managed-intelligence-provisioning",
     {
@@ -48,16 +49,22 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
       };
     },
     async reserveGatewayAlias(input) {
-      assert.deepEqual(input, {
+      reservationId = input.reservationId;
+      assert.match(reservationId, /^[0-9a-f-]{36}$/);
+      assert.deepEqual({ ...input, reservationId: undefined }, {
         householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
         deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
         alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
         budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
         maxBudgetUsd: 1,
+        reservationId: undefined,
       });
     },
     async recordReady(input) {
       recorded.push(input);
+    },
+    async recordProvisioningFailed() {
+      throw new Error("must not run");
     },
   });
 
@@ -72,6 +79,9 @@ test("an entitled Trusted Device receives a narrow generated gateway credential"
     deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
     alias: "luna-managed-acdf892b-1967-4376-82b2-e144ff480740",
     expiresAt: "2026-07-29T14:00:00.000Z",
+    budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+    maxBudgetUsd: 1,
+    reservationId,
   }]);
 });
 
@@ -112,6 +122,9 @@ test("renewal revokes the previous device alias before minting its replacement",
     async recordReady() {
       actions.push("ready");
     },
+    async recordProvisioningFailed() {
+      actions.push("failed");
+    },
   });
 
   assert.equal(response.status, 200);
@@ -151,8 +164,46 @@ test("an entitlement revoked before alias reservation cannot mint a gateway key"
       throw new Error("must not run");
     },
     async recordReady() {},
+    async recordProvisioningFailed() {},
   }), /entitlement revoked/);
   assert.equal(generated, false);
+});
+
+test("a failed mint leaves its reserved alias in the durable failure path", async () => {
+  const actions: string[] = [];
+  await assert.rejects(() => handleManagedIntelligenceProvisioning(new Request(
+    "https://luna.test/managed-intelligence-provisioning",
+    { method: "POST", body: JSON.stringify({
+      devicePublicKey: "age1trusteddevice",
+      challengeId: "f462a4ac-9688-4c23-90e7-8a9f449b975d",
+      nonce: "d916a996-710d-4a43-84ac-b28427151a7f",
+      authorizationSignature: "base64-device-signature",
+    }) },
+  ), {
+    async authorizeDevice() {
+      return {
+        householdId: "d70c8675-0261-4797-b6df-4109c3d678cd",
+        deviceId: "acdf892b-1967-4376-82b2-e144ff480740",
+        existingAlias: null,
+        budgetScopeId: "49c52e29-bd9b-4bcb-a4e8-030f9de11111",
+        maxBudgetUsd: 1,
+      };
+    },
+    async reserveGatewayAlias() {
+      actions.push("reserve");
+    },
+    async createGatewayAccess() {
+      actions.push("generate");
+      throw new Error("unsafe credential expiry");
+    },
+    async recordReady() {
+      actions.push("ready");
+    },
+    async recordProvisioningFailed() {
+      actions.push("failed");
+    },
+  }), /unsafe credential expiry/);
+  assert.deepEqual(actions, ["reserve", "generate", "failed"]);
 });
 
 test("revoked Household access removes each attributable gateway key", async () => {
@@ -188,6 +239,7 @@ test("generated LiteLLM access is device-attributed, route-limited, rate-limited
     endpoint: "https://gateway.luna.test/v1/chat/completions",
     masterKey: "sk-litellm-master-secret",
     durationHours: 24,
+    requestTimeoutMs: 10_000,
     rpmLimit: 6,
     tpmLimit: 8_000,
     now: () => new Date("2026-07-28T14:00:00.000Z"),
@@ -244,10 +296,24 @@ test("managed gateway credentials cannot exceed the 24-hour safety bound", () =>
     endpoint: "https://gateway.luna.test/v1/chat/completions",
     masterKey: "sk-litellm-master-secret",
     durationHours: 240,
+    requestTimeoutMs: 10_000,
     rpmLimit: 6,
     tpmLimit: 8_000,
     fetch,
   }), /credential duration is invalid/);
+});
+
+test("managed gateway administration calls cannot outlive the provisioning lease margin", () => {
+  assert.throws(() => createLiteLlmManagedAccessClient({
+    adminEndpoint: "https://gateway-admin.luna.test",
+    endpoint: "https://gateway.luna.test/v1/chat/completions",
+    masterKey: "sk-litellm-master-secret",
+    durationHours: 24,
+    requestTimeoutMs: 15_001,
+    rpmLimit: 6,
+    tpmLimit: 8_000,
+    fetch,
+  }), /administration timeout is invalid/);
 });
 
 test("an overlong generated expiry is rejected and its key is revoked", async () => {
@@ -257,6 +323,7 @@ test("an overlong generated expiry is rejected and its key is revoked", async ()
     endpoint: "https://gateway.luna.test/v1/chat/completions",
     masterKey: "sk-litellm-master-secret",
     durationHours: 24,
+    requestTimeoutMs: 10_000,
     rpmLimit: 6,
     tpmLimit: 8_000,
     now: () => new Date("2026-07-28T14:00:00.000Z"),

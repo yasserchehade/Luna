@@ -5,6 +5,7 @@ type ManagedAccessConfiguration = {
   endpoint: string;
   masterKey: string;
   durationHours: number;
+  requestTimeoutMs: number;
   rpmLimit: number;
   tpmLimit: number;
   fetch: FetchLike;
@@ -30,6 +31,13 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
   if (!Number.isInteger(configuration.rpmLimit) || configuration.rpmLimit <= 0) {
     throw new Error("The managed gateway request limit is invalid.");
   }
+  if (
+    !Number.isInteger(configuration.requestTimeoutMs)
+    || configuration.requestTimeoutMs <= 0
+    || configuration.requestTimeoutMs > 15_000
+  ) {
+    throw new Error("The managed gateway administration timeout is invalid.");
+  }
   if (!Number.isInteger(configuration.tpmLimit) || configuration.tpmLimit <= 0) {
     throw new Error("The managed gateway token limit is invalid.");
   }
@@ -42,6 +50,7 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
         ...(body ? { "content-type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(configuration.requestTimeoutMs),
     })
   );
 

@@ -257,12 +257,14 @@ test("an entitled Trusted Device proves possession before managed access is prov
   assert.equal(authorizedRow.device_id, device.id);
   assert.equal(authorizedRow.existing_gateway_key_alias, null);
   assert.equal(Number(authorizedRow.max_budget_usd), 1);
+  const initialReservationId = crypto.randomUUID();
   assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_gateway_key_alias: `luna-managed-${device.id}`,
     requested_budget_scope_id: authorizedRow.budget_scope_id,
     requested_max_budget_usd: Number(authorizedRow.max_budget_usd),
+    requested_reservation_id: initialReservationId,
   })).error, null);
   assert.equal((await operatorClient.rpc("record_managed_intelligence_device_access", {
     requested_household_id: household.householdId,
@@ -270,6 +272,9 @@ test("an entitled Trusted Device proves possession before managed access is prov
     requested_status: "ready",
     requested_gateway_key_alias: `luna-managed-${device.id}`,
     requested_credential_expires_at: credentialExpiresAt,
+    requested_budget_scope_id: authorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(authorizedRow.max_budget_usd),
+    requested_reservation_id: initialReservationId,
   })).error, null);
   const ready = await accountService.getHouseholdIntelligenceAccess(device.publicKey);
   assert.equal(ready.entitlementState, "entitled");
@@ -333,12 +338,14 @@ test("an entitled Trusted Device proves possession before managed access is prov
     requested_max_budget_usd: 0.25,
     requested_valid_until: replacementValidUntil,
   })).error, null);
+  const staleReservationId = crypto.randomUUID();
   assert.ok((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_gateway_key_alias: `luna-managed-${device.id}`,
     requested_budget_scope_id: replacementAuthorizedRow.budget_scope_id,
     requested_max_budget_usd: Number(replacementAuthorizedRow.max_budget_usd),
+    requested_reservation_id: staleReservationId,
   })).error, "a stale budget authorization cannot restore an earlier Household cap");
 
   assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
@@ -359,16 +366,30 @@ test("an entitled Trusted Device proves possession before managed access is prov
   });
   assert.equal(raceAuthorized.error, null);
   const raceAuthorizedRow = Array.isArray(raceAuthorized.data) ? raceAuthorized.data[0] : raceAuthorized.data;
+  const raceReservationId = crypto.randomUUID();
   assert.equal((await operatorClient.rpc("reserve_managed_intelligence_device_gateway_alias", {
     requested_household_id: household.householdId,
     requested_device_id: device.id,
     requested_gateway_key_alias: `luna-managed-${device.id}`,
     requested_budget_scope_id: raceAuthorizedRow.budget_scope_id,
     requested_max_budget_usd: Number(raceAuthorizedRow.max_budget_usd),
+    requested_reservation_id: raceReservationId,
   })).error, null);
-  assert.equal((await operatorClient.rpc("revoke_complimentary_managed_intelligence", {
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
     requested_household_id: household.householdId,
+    requested_max_budget_usd: 0.125,
+    requested_valid_until: replacementValidUntil,
   })).error, null);
+  assert.ok((await operatorClient.rpc("record_managed_intelligence_device_access", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_status: "ready",
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+    requested_credential_expires_at: credentialExpiresAt,
+    requested_budget_scope_id: raceAuthorizedRow.budget_scope_id,
+    requested_max_budget_usd: Number(raceAuthorizedRow.max_budget_usd),
+    requested_reservation_id: raceReservationId,
+  })).error, "a cap rotation after reservation cannot restore stale managed access");
   const leasedRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
   assert.equal(leasedRevocations.error, null);
   assert.deepEqual(leasedRevocations.data.filter(

@@ -29,12 +29,21 @@ type ProvisioningDependencies = {
     alias: string;
     budgetScopeId: string;
     maxBudgetUsd: number;
+    reservationId: string;
   }): Promise<void>;
   recordReady(input: {
     householdId: string;
     deviceId: string;
     alias: string;
     expiresAt: string;
+    budgetScopeId: string;
+    maxBudgetUsd: number;
+    reservationId: string;
+  }): Promise<void>;
+  recordProvisioningFailed(input: {
+    householdId: string;
+    deviceId: string;
+    reservationId: string;
   }): Promise<void>;
   revokeGatewayAccess?(credential: string): Promise<void>;
   revokeGatewayAccessByAlias?(alias: string): Promise<void>;
@@ -63,22 +72,34 @@ export async function handleManagedIntelligenceProvisioning(
     await dependencies.revokeGatewayAccessByAlias?.(authorization.existingAlias);
   }
   const reservedAlias = `luna-managed-${authorization.deviceId}`;
+  const reservationId = crypto.randomUUID();
   await dependencies.reserveGatewayAlias({
     householdId: authorization.householdId,
     deviceId: authorization.deviceId,
     alias: reservedAlias,
     budgetScopeId: authorization.budgetScopeId,
     maxBudgetUsd: authorization.maxBudgetUsd,
+    reservationId,
   });
-  const access = await dependencies.createGatewayAccess({
-    householdId: authorization.householdId,
-    deviceId: authorization.deviceId,
-    alias: reservedAlias,
-    budgetScopeId: authorization.budgetScopeId,
-    maxBudgetUsd: authorization.maxBudgetUsd,
-  });
-  if (access.alias !== reservedAlias || !access.credential || Number.isNaN(Date.parse(access.expiresAt))) {
-    return json({ error: "Managed access could not be provisioned" }, 502);
+  let access: { alias: string; credential: string; expiresAt: string };
+  try {
+    access = await dependencies.createGatewayAccess({
+      householdId: authorization.householdId,
+      deviceId: authorization.deviceId,
+      alias: reservedAlias,
+      budgetScopeId: authorization.budgetScopeId,
+      maxBudgetUsd: authorization.maxBudgetUsd,
+    });
+    if (access.alias !== reservedAlias || !access.credential || Number.isNaN(Date.parse(access.expiresAt))) {
+      throw new Error("Managed access could not be provisioned");
+    }
+  } catch (error) {
+    await dependencies.recordProvisioningFailed({
+      householdId: authorization.householdId,
+      deviceId: authorization.deviceId,
+      reservationId,
+    }).catch(() => undefined);
+    throw error;
   }
   try {
     await dependencies.recordReady({
@@ -86,8 +107,16 @@ export async function handleManagedIntelligenceProvisioning(
       deviceId: authorization.deviceId,
       alias: access.alias,
       expiresAt: access.expiresAt,
+      budgetScopeId: authorization.budgetScopeId,
+      maxBudgetUsd: authorization.maxBudgetUsd,
+      reservationId,
     });
   } catch (error) {
+    await dependencies.recordProvisioningFailed({
+      householdId: authorization.householdId,
+      deviceId: authorization.deviceId,
+      reservationId,
+    }).catch(() => undefined);
     await dependencies.revokeGatewayAccess?.(access.credential).catch(() => undefined);
     throw error;
   }

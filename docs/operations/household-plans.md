@@ -14,6 +14,7 @@ Configure these values as Supabase Edge Function secrets, never in a desktop env
 - `LITELLM_MASTER_KEY` — LiteLLM administrative key;
 - `LUNA_MANAGED_INTELLIGENCE_URL` — customer-facing remote HTTPS chat-completions endpoint;
 - `LITELLM_DEVICE_KEY_DURATION_HOURS` — virtual-key lifetime, defaulting to 24 hours and rejected unless it is an integer from 2 through 24;
+- `LITELLM_ADMIN_REQUEST_TIMEOUT_MS` — each LiteLLM administration call, defaulting to 10 seconds and rejected above 15 seconds so the complete mint path remains well inside the two-minute provisioning lease;
 - `LITELLM_HOUSEHOLD_RPM_LIMIT` and `LITELLM_HOUSEHOLD_TPM_LIMIT` — shared Household throughput caps;
 - `LUNA_RECONCILIATION_SECRET` — independent high-entropy bearer value for scheduled reconciliation calls.
 

@@ -11,6 +11,7 @@ const gateway = createLiteLlmManagedAccessClient({
   endpoint: requiredEnvironment("LUNA_MANAGED_INTELLIGENCE_URL"),
   masterKey: requiredEnvironment("LITELLM_MASTER_KEY"),
   durationHours: Number(Deno.env.get("LITELLM_DEVICE_KEY_DURATION_HOURS") ?? "24"),
+  requestTimeoutMs: Number(Deno.env.get("LITELLM_ADMIN_REQUEST_TIMEOUT_MS") ?? "10000"),
   rpmLimit: Number(Deno.env.get("LITELLM_HOUSEHOLD_RPM_LIMIT") ?? "6"),
   tpmLimit: Number(Deno.env.get("LITELLM_HOUSEHOLD_TPM_LIMIT") ?? "8000"),
   fetch,
@@ -56,6 +57,7 @@ Deno.serve(async (request) => {
         requested_gateway_key_alias: input.alias,
         requested_budget_scope_id: input.budgetScopeId,
         requested_max_budget_usd: input.maxBudgetUsd,
+        requested_reservation_id: input.reservationId,
       });
       if (error) throw new Error("Managed Trusted Device access is no longer eligible.");
     },
@@ -66,8 +68,19 @@ Deno.serve(async (request) => {
         requested_status: "ready",
         requested_gateway_key_alias: input.alias,
         requested_credential_expires_at: input.expiresAt,
+        requested_budget_scope_id: input.budgetScopeId,
+        requested_max_budget_usd: input.maxBudgetUsd,
+        requested_reservation_id: input.reservationId,
       });
       if (error) throw new Error("Managed Trusted Device access could not be recorded.");
+    },
+    async recordProvisioningFailed(input) {
+      const { error } = await admin.rpc("record_managed_intelligence_device_provisioning_failed", {
+        requested_household_id: input.householdId,
+        requested_device_id: input.deviceId,
+        requested_reservation_id: input.reservationId,
+      });
+      if (error) throw new Error("Managed Trusted Device provisioning failure could not be recorded.");
     },
   });
   for (const [name, value] of Object.entries(corsHeaders)) response.headers.set(name, value);
