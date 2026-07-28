@@ -2,10 +2,11 @@ import { useState } from "react";
 import type { AccountService, HouseholdSession } from "../account/accountService";
 import { FilingRulesOptions } from "../conversation/FilingRulesOptions";
 import type { ConversationService } from "../conversation/conversationService";
+import { CloudAssistanceOptions } from "./CloudAssistanceOptions";
 import { TrustedDevicesOptions } from "../trusted-device/TrustedDevicesOptions";
 import type { TrustedDeviceService } from "../trusted-device/trustedDeviceService";
 
-type OptionsSection = "devices" | "rules";
+type OptionsSection = "devices" | "rules" | "cloud";
 
 export function OptionsWorkspace({
   accountService,
@@ -39,6 +40,13 @@ export function OptionsWorkspace({
         onClick={() => setSection("rules")}
         type="button"
       >Learned Filing Rules</button>
+      <button
+        aria-current={section === "cloud" ? "page" : undefined}
+        aria-label="Cloud assistance options"
+        className={section === "cloud" ? "selected" : undefined}
+        onClick={() => setSection("cloud")}
+        type="button"
+      >Cloud assistance</button>
     </nav>
     {section === "devices"
       ? <TrustedDevicesOptions
@@ -47,9 +55,9 @@ export function OptionsWorkspace({
         session={session}
         trustedDeviceService={trustedDeviceService}
       />
-      : <FilingRulesOptions
+      : section === "rules" ? <FilingRulesOptions
         conversationService={conversationService}
         householdId={session.householdId}
-      />}
+      /> : <CloudAssistanceOptions conversationService={conversationService} householdId={session.householdId} />}
   </main>;
 }

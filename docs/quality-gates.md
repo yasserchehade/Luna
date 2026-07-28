@@ -74,6 +74,14 @@ Path-filtered workflow names must not be configured as unconditional repository 
 
 A milestone-closing issue cannot close while its checkpoint is incomplete, even if its own narrower acceptance criteria pass.
 
+## Cloud Assistance environment gates
+
+The prototype's evaluated-real-provider criterion may be demonstrated by the pinned LiteLLM deployment running ephemerally on an operator's loopback interface. It must use the fixed synthetic canary, disposable credentials and the same privacy, exact-route, structured-result, usage and revocation checks as a remote deployment. This is release-environment evidence, not a standard-suite dependency or a supported desktop sidecar.
+
+Before Luna-managed Intelligence is available to external testers, the gateway must be remotely operated behind authenticated TLS ingress with managed secrets, attributable client credentials, abuse controls and verified body-free logs. Issue #53 owns this pre-production gate; it does not block completion of issue #13's prototype contract after the local real-provider canary passes.
+
+Managed gateway credentials are provisioned automatically and are not customer configuration. Bring-your-own Intelligence remains unavailable until a separate canary proves BYOK-only route isolation, provider-key non-persistence, credential-free logs and failure without fallback to a Luna-funded route.
+
 ## Severity and release policy
 
 | Severity | Meaning | Policy |

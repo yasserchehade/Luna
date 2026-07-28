@@ -1,6 +1,9 @@
 mod account_session;
 mod cabinet;
 mod conversation;
+mod document_intelligence;
+mod intelligence;
+mod litellm;
 mod settings;
 mod trusted_device;
 
@@ -19,6 +22,20 @@ pub use conversation::{
     FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
     FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
     TesseractOcr, TodoItem,
+};
+pub use document_intelligence::{
+    CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
+};
+pub use intelligence::{
+    AdditionalIntelligenceEvidence, CandidateDirectionInterpretation, CandidateDisposition,
+    CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
+    CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
+    DocumentContentExcerpt, IntelligenceCapability, IntelligenceEvidence,
+    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceGateway,
+    IntelligenceModelDescriptor, IntelligenceProviderDescriptor, IntelligenceProviderStatus,
+    IntelligenceRequest, IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection,
+    IntelligenceUsage, UntrustedIntelligenceResult, MANAGED_INTELLIGENCE_MODEL_ID,
+    MANAGED_INTELLIGENCE_PROVIDER_ID,
 };
 pub use settings::SettingsStore;
 pub use trusted_device::{
@@ -53,6 +70,11 @@ type CabinetState = CabinetManager;
 type ConversationState = ConversationStore<OsCredentialVault>;
 #[cfg(feature = "e2e")]
 type ConversationState = ConversationStore<E2eCredentialVault>;
+
+#[cfg(not(feature = "e2e"))]
+type IntelligenceState = CloudIntelligenceStore<OsCredentialVault>;
+#[cfg(feature = "e2e")]
+type IntelligenceState = CloudIntelligenceStore<E2eCredentialVault>;
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -392,6 +414,154 @@ fn list_duplicate_audit_events(
 }
 
 #[tauri::command]
+fn list_intelligence_providers(
+    store: State<'_, IntelligenceState>,
+) -> Vec<IntelligenceProviderDescriptor> {
+    store.providers()
+}
+
+#[tauri::command]
+fn list_intelligence_provider_statuses(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+) -> Result<Vec<IntelligenceProviderStatus>, String> {
+    store
+        .provider_statuses(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudAssistanceCommand {
+    household_id: String,
+    arrival_id: i64,
+    selection: IntelligenceSelection,
+    consent: CloudConsentDecision,
+    existing_consent_grant_id: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredHouseholdSession {
+    account_id: String,
+    household_id: String,
+}
+
+fn current_household_actor(
+    sessions: &AccountSessionManager,
+    household_id: &str,
+) -> Result<String, String> {
+    let stored = sessions
+        .get("luna-household-session")
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A verified Luna Account session is required.".to_owned())?;
+    let session: StoredHouseholdSession = serde_json::from_str(&stored)
+        .map_err(|_| "The stored Luna Household session is invalid.".to_owned())?;
+    if session.household_id != household_id {
+        return Err("The Luna Account session does not belong to this Household.".to_owned());
+    }
+    Ok(session.account_id)
+}
+
+#[tauri::command]
+fn evaluate_document_with_cloud_assistance(
+    conversations: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    input: CloudAssistanceCommand,
+) -> Result<CloudAssistanceResolution, String> {
+    let granted_by = current_household_actor(sessions.inner(), &input.household_id)?;
+    DocumentIntelligenceService::new(conversations.inner().clone(), intelligence.inner().clone())
+        .evaluate_document(
+            &input.household_id,
+            input.arrival_id,
+            input.selection,
+            input.consent,
+            &granted_by,
+            input.existing_consent_grant_id,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_cloud_consent_scopes(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+) -> Result<Vec<CloudConsentScope>, String> {
+    store
+        .list_consent_scopes(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn revoke_cloud_consent_scope(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+    scope_id: i64,
+) -> Result<(), String> {
+    store
+        .revoke_scope(&household_id, scope_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_cloud_assistance_audit_events(
+    store: State<'_, IntelligenceState>,
+    household_id: String,
+) -> Result<Vec<CloudAssistanceAuditEvent>, String> {
+    store
+        .list_audit_events(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_cloud_candidate_disposition(
+    store: State<'_, IntelligenceState>,
+    conversations: State<'_, ConversationState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    arrival_id: i64,
+    request_id: String,
+    disposition: CandidateDisposition,
+) -> Result<(), String> {
+    current_household_actor(sessions.inner(), &household_id)?;
+    if !matches!(
+        disposition,
+        CandidateDisposition::Accepted | CandidateDisposition::Corrected
+    ) {
+        return Err(
+            "Only accepted or corrected candidate Evidence can be recorded here.".to_owned(),
+        );
+    }
+    let event = store
+        .list_audit_events(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|event| event.request_id == request_id)
+        .ok_or_else(|| "The Cloud Assistance History event was not found.".to_owned())?;
+    if event.document_arrival_id != format!("arrival-{arrival_id}")
+        || event.outcome != CloudAssistanceOutcome::Completed
+        || event.candidate_disposition != CandidateDisposition::Pending
+    {
+        return Err("The candidate Evidence is not pending for this Document Arrival.".to_owned());
+    }
+    let arrival = conversations
+        .list_document_arrivals(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|arrival| arrival.id == arrival_id)
+        .ok_or_else(|| "The Document Arrival was not found.".to_owned())?;
+    if arrival.processing_state != DocumentProcessingState::ReadyToFile {
+        return Err(
+            "Member Direction must be recorded before candidate History changes.".to_owned(),
+        );
+    }
+    store
+        .record_candidate_disposition(&household_id, &request_id, disposition)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn resolve_duplicate(
     store: State<'_, ConversationState>,
     household_id: String,
@@ -607,6 +777,10 @@ fn select_e2e_context_document_file(kind: String) -> Result<String, String> {
         "matching" => "Document Type: Electricity bill; Service Provider: Mercury Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
         "rule-match" => "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-16",
         "changed-provider" => "Document Type: Electricity bill; Service Provider: Origin Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-09-15",
+        "cloud-scope" => "Unfamiliar cloud scope notice 2026-10-01",
+        "cloud-reuse" => "Unfamiliar cloud reuse notice 2026-10-02",
+        "cloud-once" => "Unfamiliar cloud once notice 2026-10-03",
+        "cloud-local" => "Unfamiliar cloud local notice 2026-10-04",
         _ => return Err("Unknown E2E context document kind.".to_owned()),
     };
     let document = std::env::temp_dir().join(format!(
@@ -964,6 +1138,10 @@ pub fn run() {
             let trusted_device =
                 TrustedDeviceManager::new(OsCredentialVault::new("app.luna.household"));
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
+            app.manage(CloudIntelligenceStore::open(
+                &database,
+                trusted_device.clone(),
+            )?);
             app.manage(trusted_device);
         }
         #[cfg(not(feature = "e2e"))]
@@ -974,6 +1152,16 @@ pub fn run() {
         {
             let trusted_device = TrustedDeviceManager::new(E2eCredentialVault::default());
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
+            app.manage(CloudIntelligenceStore::open_with_gateway(
+                &database,
+                trusted_device.clone(),
+                DeterministicIntelligenceGateway::new(
+                    MANAGED_INTELLIGENCE_PROVIDER_ID,
+                    MANAGED_INTELLIGENCE_MODEL_ID,
+                    std::collections::BTreeMap::from([("amount".to_owned(), "$184.72".to_owned())]),
+                ),
+                intelligence::managed_provider_catalog(),
+            )?);
             app.manage(trusted_device);
         }
         #[cfg(feature = "e2e")]
@@ -1002,6 +1190,13 @@ pub fn run() {
         list_filed_originals,
         list_audit_events,
         list_duplicate_audit_events,
+        list_intelligence_providers,
+        list_intelligence_provider_statuses,
+        evaluate_document_with_cloud_assistance,
+        list_cloud_consent_scopes,
+        revoke_cloud_consent_scope,
+        list_cloud_assistance_audit_events,
+        record_cloud_candidate_disposition,
         resolve_duplicate,
         list_filing_rules,
         update_filing_rule,

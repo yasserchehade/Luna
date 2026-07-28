@@ -11,6 +11,7 @@ import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService
 import { ConversationWorkspace } from "./conversation/ConversationWorkspace";
 import type {
   AuditEvent,
+  CloudAssistanceAuditEvent,
   Conversation,
   ConversationService,
   DuplicateAuditEvent,
@@ -58,6 +59,7 @@ export default function App({ accountService, cabinetService, conversationServic
   const [filedOriginals, setFiledOriginals] = useState<FiledOriginal[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [duplicateAuditEvents, setDuplicateAuditEvents] = useState<DuplicateAuditEvent[]>([]);
+  const [cloudAssistanceAuditEvents, setCloudAssistanceAuditEvents] = useState<CloudAssistanceAuditEvent[]>([]);
   const [filingRuleAuditEvents, setFilingRuleAuditEvents] = useState<FilingRuleAuditEvent[]>([]);
   const [documentSurfaceError, setDocumentSurfaceError] = useState("");
 
@@ -80,6 +82,7 @@ export default function App({ accountService, cabinetService, conversationServic
     setActiveConversationId(null);
     setAuditEvents([]);
     setDuplicateAuditEvents([]);
+    setCloudAssistanceAuditEvents([]);
     setFilingRuleAuditEvents([]);
     setConversationSelectionRequest(null);
     setActiveDestination("Luna");
@@ -196,10 +199,12 @@ export default function App({ accountService, cabinetService, conversationServic
       : Promise.all([
         conversationService.listAuditEvents(session.householdId),
         conversationService.listDuplicateAuditEvents(session.householdId),
+        conversationService.listCloudAssistanceAuditEvents(session.householdId),
         conversationService.listFilingRuleAuditEvents(session.householdId),
-      ]).then(([events, duplicateEvents, ruleEvents]) => {
+      ]).then(([events, duplicateEvents, cloudEvents, ruleEvents]) => {
         setAuditEvents(events);
         setDuplicateAuditEvents(duplicateEvents);
+        setCloudAssistanceAuditEvents(cloudEvents);
         setFilingRuleAuditEvents(ruleEvents);
       });
     void request
@@ -380,9 +385,14 @@ export default function App({ accountService, cabinetService, conversationServic
         <header><div><small>Household history</small><h1>History</h1></div></header>
         <section className="messages">
           {documentSurfaceError && <p role="alert">{documentSurfaceError}</p>}
-          {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && filingRuleAuditEvents.length === 0
+          {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && cloudAssistanceAuditEvents.length === 0 && filingRuleAuditEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
-            : <>{duplicateAuditEvents.map((event) => <article className="history-event duplicate-history-event" key={`duplicate-${event.id}`}>
+            : <>{cloudAssistanceAuditEvents.map((event) => <article className="history-event cloud-history-event" key={`cloud-${event.id}`}>
+              <strong>Cloud Assistance {event.outcome === "completed" ? "completed" : event.outcome === "denied" ? "kept local" : event.outcome === "cancelled" ? "cancelled" : "waiting to retry"}</strong>
+              <p>{event.providerId} · {event.purpose} · {event.consent}</p>
+              <small>Provider model: {event.modelId} · Consent Grant {event.consentGrantId ?? "not created"} · granted by {event.grantedBy} · candidate {event.candidateDisposition}</small>
+              <small>{event.reason}{event.usage.inputTokens != null || event.usage.outputTokens != null ? ` · ${event.usage.inputTokens ?? 0} input / ${event.usage.outputTokens ?? 0} output tokens` : ""}</small>
+            </article>)}{duplicateAuditEvents.map((event) => <article className="history-event duplicate-history-event" key={`duplicate-${event.id}`}>
               <strong>{event.kind === "duplicatePreferenceApplied" ? "Duplicate preference applied" : "Duplicate decision recorded"}</strong>
               <p>{event.subject}</p>
               <small>{event.outcome}</small>

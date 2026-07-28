@@ -14,7 +14,16 @@ export type ConversationMessage = {
   body: string;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "possibleDuplicate" | "readyToFile" | "filing" | "filed" | "dismissed";
+export type DocumentProcessingState =
+  | "needsCloudConsent"
+  | "inspectingWithAssistance"
+  | "waitingForCloudAssistance"
+  | "needsMemberDirection"
+  | "possibleDuplicate"
+  | "readyToFile"
+  | "filing"
+  | "filed"
+  | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -133,6 +142,93 @@ export type DuplicateAuditEvent = {
   relatedArrivalId: number;
 };
 
+export type IntelligenceProviderDescriptor = {
+  id: string;
+  name: string;
+  description: string;
+  models: Array<{ id: string; name: string }>;
+  managedByLuna: boolean;
+  authUrl: string | null;
+};
+
+export type IntelligenceProviderStatus = {
+  descriptor: IntelligenceProviderDescriptor;
+  configured: boolean;
+};
+
+export type IntelligenceSelection = {
+  providerId: string;
+  modelId: string;
+};
+
+export type IntelligenceResult = {
+  requestId: string;
+  documentArrivalId: string;
+  providerId: string;
+  modelId: string;
+  consentGrantId: number;
+  fields: Record<string, string>;
+  evidence: Array<{ field: string; value: string; sourceReference: string | null }>;
+  sourceReferences: string[];
+  candidateDirection: {
+    documentType: string | null;
+    serviceProvider: string | null;
+    addressee: string | null;
+    property: string | null;
+    account: string | null;
+    amount: string | null;
+    relevantDates: string[];
+  } | null;
+  usage: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+    estimatedCostUsd: number | null;
+  };
+};
+
+export type CloudConsentDecision = "allowOnce" | "allowForScope" | "keepLocal" | "useExistingScope";
+
+export type CloudConsentScope = {
+  id: number;
+  householdId: string;
+  providerId: string;
+  modelId: string;
+  capability: "directionInterpretation";
+  purpose: string;
+  documentArrivalId: string | null;
+  futureScope: string | null;
+  fields: string[];
+  kind: "oneTime" | "reusable";
+  grantedBy: string;
+  createdAt: string;
+  consumedAt: string | null;
+  revokedAt: string | null;
+  revoked: boolean;
+};
+
+export type CloudAssistanceAuditEvent = {
+  id: number;
+  householdId: string;
+  requestId: string;
+  documentArrivalId: string;
+  providerId: string;
+  modelId: string;
+  capability: "directionInterpretation";
+  purpose: string;
+  consent: CloudConsentDecision;
+  consentGrantId: number | null;
+  grantedBy: string;
+  outcome: "completed" | "denied" | "waitingForRetry" | "cancelled";
+  candidateDisposition: "pending" | "accepted" | "corrected" | "rejected";
+  reason: string;
+  usage: IntelligenceResult["usage"];
+};
+
+export type CloudAssistanceResolution = {
+  result: IntelligenceResult | null;
+  processingState: DocumentProcessingState;
+};
+
 export type ManualMoveCandidate = {
   arrivalId: number;
   originalName: string;
@@ -242,6 +338,7 @@ export interface ConversationService {
   listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
   listAuditEvents(householdId: string): Promise<AuditEvent[]>;
   listDuplicateAuditEvents(householdId: string): Promise<DuplicateAuditEvent[]>;
+  listCloudAssistanceAuditEvents(householdId: string): Promise<CloudAssistanceAuditEvent[]>;
   resolveDuplicate(
     householdId: string,
     arrivalId: number,
@@ -268,6 +365,23 @@ export interface ConversationService {
     arrivalId: number,
     direction: FilingDecisionDirection,
   ): Promise<DocumentArrival>;
+  listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
+  listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
+  listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
+  revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
+  evaluateDocumentWithCloudAssistance(
+    householdId: string,
+    arrivalId: number,
+    selection: IntelligenceSelection,
+    consent: CloudConsentDecision,
+    existingConsentGrantId: number | null,
+  ): Promise<CloudAssistanceResolution>;
+  recordCloudCandidateDisposition(
+    householdId: string,
+    arrivalId: number,
+    requestId: string,
+    disposition: "accepted" | "corrected" | "rejected",
+  ): Promise<void>;
 }
 
 export const tauriConversationService: ConversationService = {
@@ -319,6 +433,9 @@ export const tauriConversationService: ConversationService = {
   },
   listDuplicateAuditEvents(householdId) {
     return invoke<DuplicateAuditEvent[]>("list_duplicate_audit_events", { householdId });
+  },
+  listCloudAssistanceAuditEvents(householdId) {
+    return invoke<CloudAssistanceAuditEvent[]>("list_cloud_assistance_audit_events", { householdId });
   },
   resolveDuplicate(householdId, arrivalId, relatedArrivalId, decision, rememberPreference) {
     return invoke<DocumentArrival>("resolve_duplicate", {
@@ -376,6 +493,37 @@ export const tauriConversationService: ConversationService = {
       householdId,
       arrivalId,
       direction,
+    });
+  },
+  listIntelligenceProviders() {
+    return invoke<IntelligenceProviderDescriptor[]>("list_intelligence_providers");
+  },
+  listIntelligenceProviderStatuses(householdId) {
+    return invoke<IntelligenceProviderStatus[]>("list_intelligence_provider_statuses", { householdId });
+  },
+  listCloudConsentScopes(householdId) {
+    return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
+  },
+  revokeCloudConsentScope(householdId, scopeId) {
+    return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
+  },
+  evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, existingConsentGrantId) {
+    return invoke<CloudAssistanceResolution>("evaluate_document_with_cloud_assistance", {
+      input: {
+        householdId,
+        arrivalId,
+        selection,
+        consent,
+        existingConsentGrantId,
+      },
+    });
+  },
+  recordCloudCandidateDisposition(householdId, arrivalId, requestId, disposition) {
+    return invoke("record_cloud_candidate_disposition", {
+      householdId,
+      arrivalId,
+      requestId,
+      disposition,
     });
   },
 };
