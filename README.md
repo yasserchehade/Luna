@@ -2,8 +2,6 @@
 
 Luna is being rebuilt from a clean sheet as a permissioned AI household employee that learns how a household handles administrative records while leaving people in control of privacy, authority and consequential decisions.
 
-The default household experience is conversation-first: members delegate in ordinary language, Luna asks only the next materially necessary question, and typed Household Context, Filing Decisions and execution state remain behind the interaction. Structured inspection and correction are available through **Review details** without turning the main experience into a form.
-
 ## Current design sources
 
 - `CONTEXT.md` — the domain glossary and preferred language.
