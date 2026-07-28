@@ -637,7 +637,14 @@ export function ConversationWorkspace({
     if (!selectedConversationId) return;
     try {
       for (const path of paths) {
-        await conversationService.attachDocument(householdId, selectedConversationId, path);
+        const attached = await conversationService.attachDocument(
+          householdId,
+          selectedConversationId,
+          path,
+        );
+        if (attached.processingState === "cabinetUnavailable") {
+          onCabinetUnavailable();
+        }
       }
       setError("");
       const loadedArrivals = await loadHouseholdWork();
@@ -649,7 +656,13 @@ export function ConversationWorkspace({
     } catch (attachmentError) {
       setError(String(attachmentError));
     }
-  }, [conversationService, householdId, loadHouseholdWork, selectedConversationId]);
+  }, [
+    conversationService,
+    householdId,
+    loadHouseholdWork,
+    onCabinetUnavailable,
+    selectedConversationId,
+  ]);
 
   useEffect(() => {
     let disposed = false;

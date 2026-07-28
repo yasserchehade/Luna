@@ -69,6 +69,12 @@ export default function App({ accountService, cabinetService, conversationServic
     setCabinetRecoveryRequest((request) => request + 1);
   };
 
+  const handleCabinetUnavailable = useCallback(() => {
+    setCabinetValidation((current) => (
+      current ? { ...current, availability: "unavailable" } : current
+    ));
+  }, []);
+
   const lockLuna = async () => {
     if (!session) return;
     await trustedDeviceService.lockDevice(session.householdId);
@@ -206,12 +212,16 @@ export default function App({ accountService, cabinetService, conversationServic
       if (checking) return;
       checking = true;
       void cabinetService.validate(session.householdId)
-        .then((validation) => {
+        .then(async (validation) => {
           if (!active || !validation) return;
-          if (
+          const cabinetReturned = (
             cabinetValidation.availability === "unavailable"
             && validation.availability === "ready"
-          ) {
+          );
+          const hasWaitingFiling = validation.availability === "ready"
+            && (await conversationService.listTodoItems(session.householdId))
+              .some(({ processingState }) => processingState === "cabinetUnavailable");
+          if (cabinetReturned || hasWaitingFiling) {
             setCabinetRecoveryRequest((request) => request + 1);
           }
           setCabinetValidation(validation);
@@ -228,7 +238,7 @@ export default function App({ accountService, cabinetService, conversationServic
       window.clearInterval(retryTimer);
       window.removeEventListener("online", recheckCabinet);
     };
-  }, [cabinetService, cabinetValidation, session]);
+  }, [cabinetService, cabinetValidation, conversationService, session]);
 
   useEffect(() => {
     if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
@@ -461,9 +471,7 @@ export default function App({ accountService, cabinetService, conversationServic
           cabinetRecoveryRequest={cabinetRecoveryRequest}
           newConversationRequest={newConversationRequest}
           conversationSelectionRequest={conversationSelectionRequest}
-          onCabinetUnavailable={() => setCabinetValidation((current) => (
-            current ? { ...current, availability: "unavailable" } : current
-          ))}
+          onCabinetUnavailable={handleCabinetUnavailable}
           onRecentConversationsChange={setRecentConversations}
           onActiveConversationChange={setActiveConversationId}
           onOpenConversation={() => setActiveDestination("Luna")}

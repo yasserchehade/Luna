@@ -229,7 +229,7 @@ describe("Luna Conversation desk", () => {
       event: "tauri://drag-drop",
       payload: { paths: [documentPath], position: { x: 40, y: 40 } },
     }), matchingDocument);
-    await expect($(".document-arrival[data-focused='true'] > div > p")).toHaveText("Filed");
+    await expect($(".messages > .document-arrival:last-child > div > p")).toHaveText("Filed");
     await $("button[aria-label='History']").click();
     await expect($(".history-event:not(.cloud-history-event):not(.duplicate-history-event):not(.rule-history-event) strong")).toHaveText("Automatically filed by learned rule");
     await $("button[aria-label='Luna']").click();
