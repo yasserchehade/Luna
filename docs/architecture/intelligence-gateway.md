@@ -26,13 +26,16 @@ flowchart TD
 
 `DocumentIntelligenceService` is the application seam joining protected Document Handling state to that boundary. The frontend supplies only a Document Arrival identifier, exact selection, consent choice, granting Luna Account and optional existing Consent Grant. It cannot construct an arbitrary provider payload.
 
-The production catalogue contains one evaluated route:
+The production catalogue contains two deliberately separate OpenAI routes:
 
 | Intelligence Provider | Model | Mode | Harness |
 | --- | --- | --- | --- |
 | OpenAI | `gpt-4.1-mini` | Luna-managed Intelligence | isolated LiteLLM; remote before external testing |
+| OpenAI | `gpt-4.1-mini` | Bring-your-own Intelligence | separate BYOK-only LiteLLM process; customer provider key required |
 
 Luna-managed Intelligence is an entitlement of an eligible paid Household plan and uses provider credentials billed to Luna. A free Household may instead configure a supported Bring-your-own provider connection entirely through Luna's interface, with provider usage billed to the connection owner, or remain Local-only. Paid Households retain those choices. Managed gateway credentials are automatically provisioned to Trusted Devices and are never customer-entered settings.
+
+The managed adapter authenticates with a bearer gateway credential. The BYOK adapter sends the automatically provisioned gateway credential as `x-litellm-api-key` and the transient customer provider credential separately as `x-api-key`. The provider credential is loaded from the OS vault and never enters the request body. The BYOK LiteLLM process has no `OPENAI_API_KEY`; its configured model is `byok/openai/gpt-4.1-mini`, and its virtual keys cannot address the managed route.
 
 `DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
 
@@ -61,4 +64,4 @@ The provider result cannot create Member Direction or mutate a Document Arrival.
 
 Luna maps infrastructure failures to its own categories. Only `ProviderUnavailable`, `GatewayUnavailable` and `TimedOut` receive one bounded retry, using the byte-equivalent Luna request and the same provider/model. LiteLLM receives `num_retries: 0` and an empty fallback list.
 
-Exhausted, invalid, rejected, authentication or rate-limit failures leave Document Handling in `WaitingForCloudAssistance`. Keep local returns it to `NeedsMemberDirection` without a gateway call. Existing Filing Rules and duplicate/version handling never call this gateway and remain offline-capable.
+Exhausted, invalid, rejected, gateway-authentication, provider-credential or rate-limit failures leave Document Handling in `WaitingForCloudAssistance`. A missing BYOK provider key is rejected before transmission and before one-time consent is consumed. Keep local returns it to `NeedsMemberDirection` without a gateway call. Existing Filing Rules and duplicate/version handling never call this gateway and remain offline-capable.

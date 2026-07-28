@@ -343,7 +343,17 @@ describe("Luna Conversation desk", () => {
     const cloudOptions = $("section[aria-label='Cloud assistance']");
     await expect(cloudOptions).toHaveText(expect.stringContaining("Managed access ready"));
     await expect(cloudOptions).toHaveText(expect.stringContaining("never entered by a Household Member"));
-    expect(await cloudOptions.$$("input[type='password']").length).toBe(0);
+    const byokConnection = cloudOptions.$("section[aria-label='OpenAI bring-your-own-key connection']");
+    await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
+    const providerKey = byokConnection.$("input[type='password']");
+    await providerKey.setValue("sk-e2e-customer-provider-key");
+    await byokConnection.$("button=Test and connect").click();
+    await expect(byokConnection).toHaveText(expect.stringContaining("Connected"));
+    await providerKey.setValue("sk-e2e-replacement-provider-key");
+    await byokConnection.$("button=Test and replace").click();
+    await expect(byokConnection).toHaveText(expect.stringContaining("Connected"));
+    await byokConnection.$("button=Remove key").click();
+    await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
     const reusableGrant = $(".consent-scope-list li");
     await expect(reusableGrant).toHaveText(expect.stringContaining("Active"));
     await reusableGrant.$("button=Revoke").click();

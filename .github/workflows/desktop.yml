@@ -44,7 +44,7 @@ jobs:
           workspaces: "desktop/src-tauri -> target"
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
-      - run: node --test ops/litellm/canary.test.mjs
+      - run: node --test ops/litellm/canary.test.mjs ops/litellm/byok-canary.test.mjs
       - name: Validate pinned LiteLLM deployment
         env:
           OPENAI_API_KEY: sk-ci-placeholder
@@ -52,6 +52,13 @@ jobs:
           LITELLM_DATABASE_PASSWORD: ci-placeholder
           DATABASE_URL: postgresql://llmproxy:ci-placeholder@database:5432/litellm
         run: docker compose -f ops/litellm/compose.yaml config --quiet
+      - name: Prove rendered BYOK secret isolation
+        env:
+          OPENAI_API_KEY: sk-ci-placeholder
+          LITELLM_MASTER_KEY: sk-ci-master-placeholder
+          LITELLM_DATABASE_PASSWORD: ci-placeholder
+          DATABASE_URL: postgresql://llmproxy:ci-placeholder@database:5432/litellm
+        run: node --test ops/litellm/compose.test.mjs
       - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --all -- --check
       - run: pnpm --filter luna-desktop test
       - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings

@@ -1,0 +1,22 @@
+model_list:
+  - model_name: byok/openai/gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+
+router_settings:
+  num_retries: 0
+  fallbacks: []
+  context_window_fallbacks: []
+
+litellm_settings:
+  turn_off_message_logging: true
+  log_raw_request_response: false
+  telemetry: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: false
+  store_prompts_in_spend_logs: false
+  disable_error_logs: true
+  forward_llm_provider_auth_headers: true

@@ -4,7 +4,7 @@ The desktop does not run LiteLLM or Python. A separately operated Luna-managed s
 
 ## Server configuration
 
-`ops/litellm/config.yaml` is a non-secret baseline. Supply these values through the operator environment for the local prototype canary and through the server secret manager for remote deployment:
+`ops/litellm/config.yaml` and `ops/litellm/byok-config.yaml` are non-secret baselines. The managed service receives `OPENAI_API_KEY`; the separate BYOK service must never receive that variable or another Luna-funded provider credential. Supply operator values through the local prototype environment and production values through the server secret manager:
 
 - `OPENAI_API_KEY` — upstream credential, never exposed to a desktop;
 - `LITELLM_MASTER_KEY` — administrative bootstrap credential;
@@ -12,7 +12,7 @@ The desktop does not run LiteLLM or Python. A separately operated Luna-managed s
 
 Provision a separate narrow LiteLLM virtual key for each attributable Trusted Device or Household. The desktop stores that automatically provisioned key in the operating-system credential vault. Do not expose virtual-key entry as customer setup, and never distribute the master key to a desktop.
 
-The allowlisted LiteLLM model name is exactly `openai/gpt-4.1-mini`. Do not add an alias shared by multiple deployments, fallbacks, context-window fallbacks or load-balancing deployments under that name.
+The managed allowlisted model is exactly `openai/gpt-4.1-mini`; the BYOK-only model is exactly `byok/openai/gpt-4.1-mini`. Do not add an alias shared by multiple deployments, fallbacks, context-window fallbacks or load-balancing deployments under either name.
 
 ## Pinned gateway deployment
 
@@ -37,7 +37,7 @@ docker compose -f ops/litellm/compose.yaml up -d
 docker compose -f ops/litellm/compose.yaml ps
 ```
 
-The gateway binds only to `127.0.0.1` by default. Keep that binding for the operator-run prototype canary. A remote staging host must put an authenticated TLS ingress in front of it; the ingress must omit request bodies and authorisation headers from access and error logs. Do not publish port 4000 directly.
+The managed and BYOK gateways bind only to `127.0.0.1` ports 4000 and 4001 by default. Keep those bindings for the operator-run prototype canary. A remote staging host must put authenticated TLS ingress in front of them; ingress must omit request bodies and authorisation headers from access and error logs. Do not publish either port directly.
 
 ## Local and CI testing
 
@@ -47,7 +47,7 @@ For the opt-in prototype canary:
 
 1. place the OpenAI key in the user-local DPAPI handoff described below;
 2. run `ops/litellm/run-local-canary.ps1` from the repository root;
-3. let the wrapper generate disposable gateway/database secrets, deploy the pinned proxy on loopback and run `node ops/litellm/canary.mjs`;
+3. let the wrapper generate disposable gateway/database secrets, deploy both pinned proxies on loopback and run the managed plus BYOK canaries;
 4. inspect LiteLLM, error and spend logs for the fixed marker `LUNA_SYNTHETIC_CANARY_53` and prove it is absent;
 5. attach the runner's privacy-safe JSON result plus redacted log and deployment evidence to issue #13 and PR #33;
 6. confirm the wrapper removed the encrypted handoff, test credentials, containers, networks and volume.
@@ -69,14 +69,17 @@ Then run:
 
 On Windows, the handoff is encrypted for the current user. The wrapper refuses pre-existing `luna-litellm` Docker resources, binds the gateway to loopback, redacts failures, scans logs for the synthetic marker and all generated credentials, tears down the Compose project and deletes the encrypted handoff. It writes only privacy-safe evidence to `%LOCALAPPDATA%\Luna\litellm-canary-result.json`.
 
-The runner creates a 15-minute, USD 0.10 maximum disposable virtual key restricted to `openai/gpt-4.1-mini` and the `/v1/models` plus `/v1/chat/completions` routes, sends the same strict structured-output contract as the desktop adapter, checks the gateway-reported approved route identity and token usage metadata, revokes the key and proves the revoked key is rejected. It emits neither the master key, virtual key nor synthetic document text. On a failed completion it still attempts to revoke the disposable key.
+The managed runner creates a 15-minute, USD 0.10 maximum disposable virtual key restricted to `openai/gpt-4.1-mini` and the `/v1/models` plus `/v1/chat/completions` routes, sends the same strict structured-output contract as the desktop adapter, checks the gateway-reported approved route identity and token usage metadata, revokes the key and proves the revoked key is rejected. It emits neither the master key, virtual key nor synthetic document text. On a failed completion it still attempts to revoke the disposable key.
 
 Pinned LiteLLM v1.93.0 deliberately reports the requested proxy route in `response.model`, replacing OpenAI's downstream model string. The canary therefore accepts the exact `openai/gpt-4.1-mini` route as well as OpenAI's base or dated `gpt-4.1-mini` identities. Route proof is joint: the pinned configuration maps only that route, the disposable key exposes only that model, the request names it exactly, and retries/fallbacks remain disabled.
+
+The BYOK canary creates a separate disposable virtual key restricted to `byok/openai/gpt-4.1-mini`, sends gateway and customer-provider authentication in separate headers, proves a missing customer key fails, proves the same key receives HTTP 403 for the managed route, revokes the virtual key, and scans both container logs and a PostgreSQL dump for the customer key and synthetic marker. The rendered BYOK container environment has no managed provider secret.
 
 The runner accepts HTTP only for loopback. Every remote endpoint must use HTTPS. Its deterministic boundary tests run with:
 
 ```powershell
-node --test ops/litellm/canary.test.mjs
+node --test ops/litellm/canary.test.mjs ops/litellm/byok-canary.test.mjs
+node --test ops/litellm/compose.test.mjs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ops/litellm/run-local-canary.test.ps1
 ```
 

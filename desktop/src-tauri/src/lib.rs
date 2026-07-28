@@ -430,6 +430,33 @@ fn list_intelligence_provider_statuses(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn test_and_set_intelligence_provider_credential(
+    store: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    provider_id: String,
+    credential: String,
+) -> Result<(), String> {
+    current_household_actor(&sessions, &household_id)?;
+    store
+        .test_and_set_provider_credential(&household_id, &provider_id, credential.trim().as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_intelligence_provider_credential(
+    store: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    provider_id: String,
+) -> Result<(), String> {
+    current_household_actor(&sessions, &household_id)?;
+    store
+        .clear_provider_credential(&household_id, &provider_id)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CloudAssistanceCommand {
@@ -1160,7 +1187,7 @@ pub fn run() {
                     MANAGED_INTELLIGENCE_MODEL_ID,
                     std::collections::BTreeMap::from([("amount".to_owned(), "$184.72".to_owned())]),
                 ),
-                intelligence::managed_provider_catalog(),
+                intelligence::provider_catalog(),
             )?);
             app.manage(trusted_device);
         }
@@ -1192,6 +1219,8 @@ pub fn run() {
         list_duplicate_audit_events,
         list_intelligence_providers,
         list_intelligence_provider_statuses,
+        test_and_set_intelligence_provider_credential,
+        clear_intelligence_provider_credential,
         evaluate_document_with_cloud_assistance,
         list_cloud_consent_scopes,
         revoke_cloud_consent_scope,

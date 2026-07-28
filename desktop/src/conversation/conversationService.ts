@@ -367,6 +367,12 @@ export interface ConversationService {
   ): Promise<DocumentArrival>;
   listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
   listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
+  testAndSetIntelligenceProviderCredential(
+    householdId: string,
+    providerId: string,
+    credential: string,
+  ): Promise<void>;
+  clearIntelligenceProviderCredential(householdId: string, providerId: string): Promise<void>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
   evaluateDocumentWithCloudAssistance(
@@ -500,6 +506,16 @@ export const tauriConversationService: ConversationService = {
   },
   listIntelligenceProviderStatuses(householdId) {
     return invoke<IntelligenceProviderStatus[]>("list_intelligence_provider_statuses", { householdId });
+  },
+  testAndSetIntelligenceProviderCredential(householdId, providerId, credential) {
+    return invoke("test_and_set_intelligence_provider_credential", {
+      householdId,
+      providerId,
+      credential,
+    });
+  },
+  clearIntelligenceProviderCredential(householdId, providerId) {
+    return invoke("clear_intelligence_provider_credential", { householdId, providerId });
   },
   listCloudConsentScopes(householdId) {
     return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });

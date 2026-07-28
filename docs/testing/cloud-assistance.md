@@ -9,10 +9,15 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Local scope, model and disclosed-field changes invalidate consent | `reusable_consent_cannot_expand_to_new_local_scope_response_fields_or_models` |
 | Allow once is not reusable | `allow_once_consent_is_persisted_consumed_and_cannot_be_reused` |
 | Failed authentication does not consume allow-once | `missing_gateway_authentication_does_not_consume_one_time_consent` |
+| Missing BYOK credential fails before transmission or consent use | `missing_byok_provider_credential_fails_closed_before_transmission_or_consent_use` |
+| BYOK-only access does not imply managed entitlement | `a_byok_only_household_is_not_reported_as_having_managed_access` |
 | Reusable consent is inspectable/revocable | `reusable_consent_is_inspectable_and_revocable` |
 | Keep local sends nothing | `keep_local_records_the_choice_without_transmitting_document_information` and installed Conversation scenario |
 | Request minimisation | `allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_document` |
 | Secret exclusion | `gateway_credentials_remain_in_the_vault_and_out_of_public_history` through the credential-vault boundary |
+| BYOK vault-only retention | `byok_connection_is_tested_before_the_provider_key_is_kept_only_in_the_vault` |
+| Separate gateway/provider authentication | `byok_adapter_separates_gateway_and_provider_credentials_on_the_isolated_route` and `byok-canary.test.mjs` |
+| Installed BYOK setup | installed Conversation scenario tests connect, replace and remove in Options |
 | Deterministic contract | all `DeterministicIntelligenceGateway` application and boundary tests |
 | Invalid output rejection | `invalid_structured_identity_is_rejected_and_recorded_as_waiting` |
 | Untrusted Evidence bounds and provenance | `oversized_or_untraceable_provider_evidence_is_rejected_through_the_gateway_boundary` |
