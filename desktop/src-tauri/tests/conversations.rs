@@ -1510,6 +1510,25 @@ fn declining_a_provisional_filing_decision_is_durable_and_never_files() {
 
     assert_eq!(declined.status, ConversationTurnStatus::ActionRefused);
     assert!(declined.arrival.filing_decision_declined);
+    assert!(declined.arrival.review_card.filing_decision.is_none());
+    assert_eq!(
+        declined
+            .arrival
+            .review_card
+            .context
+            .document_type
+            .confidence_state,
+        ConfidenceState::LooksRight
+    );
+    assert_eq!(
+        declined
+            .arrival
+            .review_card
+            .context
+            .service_provider
+            .confidence_state,
+        ConfidenceState::LooksRight
+    );
     assert!(declined.arrival.filed_original.is_none());
     assert!(declined.next_prompt.is_none());
     assert!(store

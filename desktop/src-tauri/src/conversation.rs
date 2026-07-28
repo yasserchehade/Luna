@@ -2211,16 +2211,6 @@ impl<V: CredentialVault> ConversationStore<V> {
             }
             MemberDirectionCommand::Decline => match prompt.purpose {
                 ConversationPromptPurpose::ConfirmFilingDecision => {
-                    if arrival.review_card.filing_decision.is_none() {
-                        let direction = provisional_context_direction(&arrival)
-                            .ok_or(ConversationError::UnresolvedContext)?;
-                        self.record_member_direction(
-                            household_id,
-                            arrival_id,
-                            direction,
-                            cabinet_section,
-                        )?;
-                    }
                     self.decline_filing_decision(household_id, arrival_id)?
                 }
                 ConversationPromptPurpose::LearnFilingRule => {
@@ -2603,10 +2593,15 @@ impl<V: CredentialVault> ConversationStore<V> {
     ) -> Result<DocumentArrival, ConversationError> {
         let (conversation_id, mut payload) =
             self.load_document_arrival_payload(household_id, arrival_id)?;
-        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection
-            || payload.filing_decision.is_none()
-        {
+        if payload.processing_state != DocumentProcessingState::NeedsMemberDirection {
             return Err(ConversationError::InvalidMemberDirection);
+        }
+        if payload.filing_decision.is_none() {
+            let arrival =
+                self.document_arrival(household_id, arrival_id, conversation_id, payload.clone())?;
+            if provisional_context_direction(&arrival).is_none() {
+                return Err(ConversationError::InvalidMemberDirection);
+            }
         }
         payload.filing_decision_declined = true;
         self.save_document_arrival_payload(household_id, arrival_id, conversation_id, payload)
@@ -3599,11 +3594,11 @@ fn document_conversation_view(
         };
     }
 
-    if arrival.processing_state == DocumentProcessingState::NeedsMemberDirection {
-        if !arrival.filing_decision_declined {
-            if let Some(decision) = provisional_filing_decision(arrival, cabinet_section) {
-                return filing_confirmation_view(arrival, understanding, &decision);
-            }
+    if arrival.processing_state == DocumentProcessingState::NeedsMemberDirection
+        && !arrival.filing_decision_declined
+    {
+        if let Some(decision) = provisional_filing_decision(arrival, cabinet_section) {
+            return filing_confirmation_view(arrival, understanding, &decision);
         }
         if let Some(question) = next_material_question(arrival) {
             let value = context_field_value(&arrival.review_card.context, question.field);

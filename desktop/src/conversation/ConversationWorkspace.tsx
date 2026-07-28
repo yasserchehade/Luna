@@ -352,20 +352,46 @@ function DocumentReviewEditor({
     }
   };
 
-  return <details className="review-details">
-    <summary>Review details</summary>
-    <section className="review-card" aria-label={`Review details for ${arrival.originalName}`}>
-    <strong>{confidenceLabel(arrival)}</strong>
-    <dl className="review-transparency">
-      <div><dt>Authority</dt><dd>{authorityLabel(arrival)}</dd></div>
-      <div><dt>Relevant consent</dt><dd>{arrival.cloudAssistanceHistory.length > 0
-        ? <ul>{arrival.cloudAssistanceHistory.map((entry) => <li key={entry}>{entry}</li>)}</ul>
-        : "No Cloud Assistance consent recorded; inspection remained local."}</dd></div>
-      <div><dt>Execution history</dt><dd><ol>{arrival.executionHistory.map((entry) => <li key={entry}>{entry}</li>)}</ol></dd></div>
-    </dl>
-    <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
-      <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
-    </div>)}</dl>
+  const cloudAssistance = (
+    arrival.processingState === "needsCloudConsent"
+    || arrival.processingState === "waitingForCloudAssistance"
+    || (arrival.processingState === "needsMemberDirection" && arrival.reviewCard.questions.length > 0)
+  ) && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
+    <div className="cloud-assistance-inline-heading">
+      <div><strong>Local Evidence is not enough to interpret this Document safely.</strong><small>Cloud Assistance can suggest unresolved fields. It cannot create Member Direction, file the Original, or change a Filing Rule.</small></div>
+      {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>Review Cloud Assistance</button>}
+    </div>
+    {cloudOpen && <div className="cloud-assistance-inline-panel">
+      {cloudBusy && <p className="muted">Preparing provider consent…</p>}
+      {!cloudBusy && <>
+        <label>Intelligence Provider<select value={cloudProviderId} onChange={(event) => {
+          const providerId = event.target.value;
+          const provider = cloudProviders.find(({ descriptor }) => descriptor.id === providerId);
+          setCloudProviderId(providerId);
+          setCloudModelId(provider?.descriptor.models[0]?.id ?? "");
+        }}>
+          {cloudProviders.map(({ descriptor, configured }) => <option key={descriptor.id} value={descriptor.id}>{descriptor.name}{configured ? " · connected" : " · not connected"}</option>)}
+        </select></label>
+        <label>Model<select value={cloudModelId} onChange={(event) => setCloudModelId(event.target.value)}>
+          {selectedCloudProvider?.descriptor.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+        </select></label>
+        <p><strong>{selectedCloudProvider?.descriptor.name ?? "The selected Intelligence Provider"} {selectedCloudModel?.name ?? ""}</strong> would receive the media type, the names and currently displayed values of unresolved local fields, and at most 4,000 characters of locally extracted text. Cabinet paths, Household state, credentials, Filing Rules, and the Original file are not sent.</p>
+        <p><strong>Reusable scope:</strong> future difficult {arrival.mediaType} Documents with the same currently displayed local context values and disclosed fields. Reuse remains limited to Direction Interpretation by the selected provider and model.</p>
+        {!selectedCloudProvider?.configured && <p className="muted">Connect this Trusted Device to Luna&apos;s managed gateway in Options before allowing Cloud Assistance.</p>}
+        <div className="cloud-assistance-inline-actions">
+          {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing Consent Grant</button>}
+          <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowOnce")}>Allow once</button>
+          <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowForScope")}>Allow this scoped future use</button>
+          <button type="button" disabled={cloudBusy || !cloudProviderId || !cloudModelId} onClick={() => void askCloudProvider("keepLocal")}>Keep local</button>
+          <button type="button" onClick={() => setCloudOpen(false)}>Close</button>
+        </div>
+      </>}
+      {cloudMessage && <p className="cloud-assistance-inline-message">{cloudMessage}</p>}
+      {cloudError && <p role="alert" className="error">{cloudError}</p>}
+    </div>}
+  </section>;
+
+  const duplicateHandling = <>
     {arrival.duplicateReview && <section className="duplicate-review" aria-label={`Duplicate review for ${arrival.originalName}`}>
       <strong>{arrival.duplicateReview.candidates[0]?.kind === "exact" ? "Exact byte duplicate" : "Possible duplicate (changed bytes)"}</strong>
       <p>Luna found one or more Originals that may represent the same document. Choose what should happen to this new arrival in relation to each candidate.</p>
@@ -389,6 +415,22 @@ function DocumentReviewEditor({
       <p>{duplicateResolutionLabels[arrival.duplicateResolution.decision]}</p>
       <small>Related Original: {arrival.duplicateResolution.relatedOriginalName}</small>
     </aside>}
+  </>;
+
+  return <>{duplicateHandling}{cloudAssistance}<details className="review-details">
+    <summary>Review details</summary>
+    <section className="review-card" aria-label={`Review details for ${arrival.originalName}`}>
+    <strong>{confidenceLabel(arrival)}</strong>
+    <dl className="review-transparency">
+      <div><dt>Authority</dt><dd>{authorityLabel(arrival)}</dd></div>
+      <div><dt>Relevant consent</dt><dd>{arrival.cloudAssistanceHistory.length > 0
+        ? <ul>{arrival.cloudAssistanceHistory.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+        : "No Cloud Assistance consent recorded; inspection remained local."}</dd></div>
+      <div><dt>Execution history</dt><dd><ol>{arrival.executionHistory.map((entry) => <li key={entry}>{entry}</li>)}</ol></dd></div>
+    </dl>
+    <dl>{arrival.reviewCard.evidence.map((evidence) => <div key={evidence.label}>
+      <dt>{evidence.label}</dt><dd>{evidence.value}</dd>
+    </div>)}</dl>
     {(
       arrival.processingState === "needsMemberDirection"
       || arrival.processingState === "needsCloudConsent"
@@ -421,44 +463,6 @@ function DocumentReviewEditor({
       <label className="wide-field">Relevant dates<input aria-label="Relevant dates" value={datesDraft} onChange={(event) => setDatesDraft(event.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
       <button type="submit">Save Household Context</button>
     </form>}
-    {(
-      arrival.processingState === "needsCloudConsent"
-      || arrival.processingState === "waitingForCloudAssistance"
-      || (arrival.processingState === "needsMemberDirection" && arrival.reviewCard.questions.length > 0)
-    ) && <section className="cloud-assistance-inline" aria-label="Cloud assistance for this document">
-      <div className="cloud-assistance-inline-heading">
-        <div><strong>Local Evidence is not enough to interpret this Document safely.</strong><small>Cloud Assistance can suggest unresolved fields. It cannot create Member Direction, file the Original, or change a Filing Rule.</small></div>
-        {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>Review Cloud Assistance</button>}
-      </div>
-      {cloudOpen && <div className="cloud-assistance-inline-panel">
-        {cloudBusy && <p className="muted">Preparing provider consent…</p>}
-        {!cloudBusy && <>
-          <label>Intelligence Provider<select value={cloudProviderId} onChange={(event) => {
-            const providerId = event.target.value;
-            const provider = cloudProviders.find(({ descriptor }) => descriptor.id === providerId);
-            setCloudProviderId(providerId);
-            setCloudModelId(provider?.descriptor.models[0]?.id ?? "");
-          }}>
-            {cloudProviders.map(({ descriptor, configured }) => <option key={descriptor.id} value={descriptor.id}>{descriptor.name}{configured ? " · connected" : " · not connected"}</option>)}
-          </select></label>
-          <label>Model<select value={cloudModelId} onChange={(event) => setCloudModelId(event.target.value)}>
-            {selectedCloudProvider?.descriptor.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-          </select></label>
-          <p><strong>{selectedCloudProvider?.descriptor.name ?? "The selected Intelligence Provider"} {selectedCloudModel?.name ?? ""}</strong> would receive the media type, the names and currently displayed values of unresolved local fields, and at most 4,000 characters of locally extracted text. Cabinet paths, Household state, credentials, Filing Rules, and the Original file are not sent.</p>
-          <p><strong>Reusable scope:</strong> future difficult {arrival.mediaType} Documents with the same currently displayed local context values and disclosed fields. Reuse remains limited to Direction Interpretation by the selected provider and model.</p>
-          {!selectedCloudProvider?.configured && <p className="muted">Connect this Trusted Device to Luna&apos;s managed gateway in Options before allowing Cloud Assistance.</p>}
-          <div className="cloud-assistance-inline-actions">
-            {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing Consent Grant</button>}
-            <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowOnce")}>Allow once</button>
-            <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowForScope")}>Allow this scoped future use</button>
-            <button type="button" disabled={cloudBusy || !cloudProviderId || !cloudModelId} onClick={() => void askCloudProvider("keepLocal")}>Keep local</button>
-            <button type="button" onClick={() => setCloudOpen(false)}>Close</button>
-          </div>
-        </>}
-        {cloudMessage && <p className="cloud-assistance-inline-message">{cloudMessage}</p>}
-        {cloudError && <p role="alert" className="error">{cloudError}</p>}
-      </div>}
-    </section>}
     {clarificationQuestions.length > 0 && <div className="clarification-questions">
       <small>Luna still needs to know</small>
       {clarificationQuestions.map((question) => <p key={question.field}>{question.prompt}</p>)}
@@ -479,7 +483,7 @@ function DocumentReviewEditor({
       <p>For {arrival.reviewCard.learnedRule.documentType} from {arrival.reviewCard.learnedRule.serviceProvider} addressed to {arrival.reviewCard.learnedRule.addressee}{arrival.reviewCard.learnedRule.property ? ` at ${arrival.reviewCard.learnedRule.property}` : ""}{arrival.reviewCard.learnedRule.account ? ` on account ${arrival.reviewCard.learnedRule.account}` : ""}, Luna can file an exact match at {arrival.reviewCard.learnedRule.cabinetDestination}.</p>
     </aside>}
     </section>
-  </details>;
+  </details></>;
 }
 
 export function ConversationWorkspace({

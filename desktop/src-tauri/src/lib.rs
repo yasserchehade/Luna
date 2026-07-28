@@ -867,6 +867,8 @@ fn get_document_conversation(
 #[tauri::command]
 fn submit_member_utterance(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
     cabinet: State<'_, CabinetState>,
     household_id: String,
     arrival_id: i64,
@@ -880,7 +882,7 @@ fn submit_member_utterance(
         .sections
         .first()
         .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
-    store
+    let outcome = store
         .submit_member_utterance(
             &household_id,
             arrival_id,
@@ -889,7 +891,15 @@ fn submit_member_utterance(
             configuration.root,
             cabinet_section,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    Ok(outcome)
 }
 
 #[tauri::command]
