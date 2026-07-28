@@ -1267,7 +1267,7 @@ pub(crate) fn managed_provider_catalog() -> Vec<IntelligenceProviderDescriptor> 
     vec![IntelligenceProviderDescriptor {
         id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
         name: "OpenAI".to_owned(),
-        description: "Luna-managed Cloud Assistance through the provisional LiteLLM gateway."
+        description: "OpenAI Cloud Assistance provided by Luna for eligible Household Plans."
             .to_owned(),
         models: vec![IntelligenceModelDescriptor {
             id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
@@ -1465,8 +1465,7 @@ pub(crate) fn provider_catalog() -> Vec<IntelligenceProviderDescriptor> {
     providers.push(IntelligenceProviderDescriptor {
         id: BYOK_OPENAI_PROVIDER_ID.to_owned(),
         name: "OpenAI — bring your own key".to_owned(),
-        description: "Customer-funded OpenAI access through Luna's isolated BYOK gateway."
-            .to_owned(),
+        description: "OpenAI Cloud Assistance billed directly to your provider account.".to_owned(),
         models: vec![IntelligenceModelDescriptor {
             id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
             name: "GPT-4.1 mini".to_owned(),
@@ -2258,6 +2257,15 @@ mod tests {
                 .expect("BYOK status")
                 .configured
         );
+    }
+
+    #[test]
+    fn provider_catalog_uses_customer_language_instead_of_gateway_implementation_terms() {
+        for provider in provider_catalog() {
+            let description = provider.description.to_ascii_lowercase();
+            assert!(!description.contains("litellm"));
+            assert!(!description.contains("gateway"));
+        }
     }
 
     #[derive(Clone)]
