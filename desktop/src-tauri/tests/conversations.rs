@@ -1410,7 +1410,8 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
         ),
     )
     .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let database = directory.path().join("luna.db");
+    let (store, trusted_device) = open_conversation_store(&database);
     let conversation = store
         .create_conversation("rivera-household", "Electricity bill")
         .expect("create Conversation");
@@ -1487,9 +1488,23 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
     );
     assert_eq!(outcome.status, ConversationTurnStatus::ActionPrepared);
 
-    store
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway.clone(),
+        vec![],
+    )
+    .expect("open Intelligence store");
+    let resolution = DocumentIntelligenceService::new(store.clone(), intelligence)
         .keep_document_local("rivera-household", arrival.id)
-        .expect("apply the prepared local-only direction");
+        .expect("apply local-only direction without provider metadata");
+    assert_eq!(
+        resolution.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert!(resolution.result.is_none());
+    assert!(gateway.requests().is_empty());
     let stale = store
         .submit_member_utterance(
             "rivera-household",

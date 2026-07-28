@@ -917,6 +917,38 @@ fn submit_member_utterance(
         _ => None,
     };
     if let Some(consent) = prepared_consent {
+        if consent == CloudConsentDecision::KeepLocal && cloud_selection.is_none() {
+            current_household_actor(sessions.inner(), &household_id)?;
+            let resolution = DocumentIntelligenceService::new(
+                store.inner().clone(),
+                intelligence.inner().clone(),
+            )
+            .keep_document_local(&household_id, arrival_id)
+            .map_err(|error| error.to_string())?;
+            outcome.status = ConversationTurnStatus::AcceptedDirection;
+            outcome.message =
+                "Kept local. No document information was sent to an Intelligence Provider."
+                    .to_owned();
+            outcome.cloud_result = resolution.result;
+            outcome.arrival = store
+                .list_document_arrivals(&household_id)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|arrival| arrival.id == arrival_id)
+                .ok_or_else(|| "The Document Handling is no longer available.".to_owned())?;
+            outcome.next_prompt = store
+                .document_conversation_in_section(&household_id, arrival_id, cabinet_section)
+                .map_err(|error| error.to_string())?
+                .prompt;
+            capture_portable_state(
+                portable.inner(),
+                store.inner(),
+                intelligence.inner(),
+                cabinet.inner(),
+                &household_id,
+            )?;
+            return Ok(outcome);
+        }
         let Some(selection) = cloud_selection else {
             outcome.status = ConversationTurnStatus::ClarificationRequired;
             outcome.accepted_direction = None;

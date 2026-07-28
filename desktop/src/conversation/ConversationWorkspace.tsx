@@ -106,6 +106,7 @@ type DocumentReviewEditorProps = {
     result: IntelligenceResult | null;
     response: string;
   };
+  onConsumeCloudConversationOutcome(arrivalId: number): void;
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
   onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
@@ -183,6 +184,7 @@ function DocumentReviewEditor({
   conversationService,
   householdId,
   cloudConversationOutcome,
+  onConsumeCloudConversationOutcome,
   onConfirm,
   onRecord,
   onResolveDuplicate,
@@ -368,15 +370,28 @@ function DocumentReviewEditor({
     const { result, response } = cloudConversationOutcome;
     setCloudMessage(response);
     setCloudError("");
+    const consumeTimer = window.setTimeout(
+      () => onConsumeCloudConversationOutcome(arrival.id),
+      0,
+    );
     if (!result) {
       setCloudReadyForMemberDirection(response.startsWith("Kept local."));
-      return;
+      return () => window.clearTimeout(consumeTimer);
     }
     setCloudReadyForMemberDirection(true);
     setDirection((current) => applyCloudFields(current, result.fields));
     setCloudSuggestion({ requestId: result.requestId, fields: result.fields });
-    void conversationService.listCloudConsentScopes(householdId).then(setCloudScopes);
-  }, [cloudConversationOutcome, conversationService, householdId]);
+    void conversationService.listCloudConsentScopes(householdId)
+      .then(setCloudScopes)
+      .catch((reason: unknown) => setCloudError(String(reason)));
+    return () => window.clearTimeout(consumeTimer);
+  }, [
+    arrival.id,
+    cloudConversationOutcome,
+    conversationService,
+    householdId,
+    onConsumeCloudConversationOutcome,
+  ]);
 
   const setField = (
     field: "documentType" | "serviceProvider" | "addressee" | "property" | "account" | "amount",
@@ -615,6 +630,14 @@ export function ConversationWorkspace({
   const selectedArrivals = arrivals
     .filter(({ conversationId }) => conversationId === selectedConversationId)
     .sort((left, right) => left.id - right.id);
+  const consumeCloudTurnOutcome = useCallback((arrivalId: number) => {
+    setCloudTurnOutcomes((current) => {
+      if (!(arrivalId in current)) return current;
+      const next = { ...current };
+      delete next[arrivalId];
+      return next;
+    });
+  }, []);
 
   const loadDocumentConversations = useCallback(async (loadedArrivals: DocumentArrival[]) => {
     const entries = await Promise.all(loadedArrivals.map(async (arrival) => [
@@ -847,16 +870,16 @@ export function ConversationWorkspace({
           ? outcome.message
           : "",
       }));
+      setMessages(await conversationService.listMessages(householdId, selectedConversationId));
+      setFocusedArrivalId(arrivalId);
+      setError("");
+      await loadHouseholdWork();
       if (prompt.purpose === "chooseCloudAssistance") {
         setCloudTurnOutcomes((current) => ({
           ...current,
           [arrivalId]: { result: outcome.cloudResult, response: outcome.message },
         }));
       }
-      setMessages(await conversationService.listMessages(householdId, selectedConversationId));
-      setFocusedArrivalId(arrivalId);
-      setError("");
-      await loadHouseholdWork();
     } catch (utteranceError) {
       setError(String(utteranceError));
     }
@@ -1019,6 +1042,7 @@ export function ConversationWorkspace({
         conversationService={conversationService}
         householdId={householdId}
         cloudConversationOutcome={cloudTurnOutcomes[arrival.id]}
+        onConsumeCloudConversationOutcome={consumeCloudTurnOutcome}
         onConfirm={(direction) => confirmDecision(arrival.id, direction)}
         onRecord={(direction) => recordDirection(arrival.id, direction)}
         onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}

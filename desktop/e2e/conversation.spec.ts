@@ -431,6 +431,17 @@ describe("Luna Conversation desk", () => {
     );
     assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
+    const scopedArrivalId = await $(".document-arrival[data-focused='true']")
+      .getAttribute("data-arrival-id");
+    const scopedReview = $(".document-arrival[data-focused='true'] .review-details");
+    await scopedReview.$("summary").click();
+    await scopedReview.$("input[aria-label='Amount']").setValue("$99.00");
+    await scopedReview.$("button=Save Household Context").click();
+    await $("button[aria-label='Options']").click();
+    await $("button[aria-label='Luna']").click();
+    const persistedReview = $(`.document-arrival[data-arrival-id='${scopedArrivalId}'] .review-details`);
+    await persistedReview.$("summary").click();
+    await expect(persistedReview.$("input[aria-label='Amount']")).toHaveValue("$99.00");
 
     arrival = await attach("cloud-reuse");
     assistance = arrival.$("section[aria-label='Cloud assistance for this document']");

@@ -47,6 +47,25 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
         }
     }
 
+    pub fn keep_document_local(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<CloudAssistanceResolution, DocumentIntelligenceError> {
+        let arrival = self
+            .conversations
+            .keep_document_local(household_id, arrival_id)?;
+        self.conversations.record_cloud_assistance_event(
+            household_id,
+            arrival_id,
+            "Member chose Keep local; no document information was sent to an Intelligence Provider.",
+        )?;
+        Ok(CloudAssistanceResolution {
+            result: None,
+            processing_state: arrival.processing_state,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn evaluate_document(
         &self,
@@ -77,18 +96,7 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                 existing_consent_grant_id,
             ) {
                 Err(IntelligenceFailure::LocalOnlyPolicy) => {
-                    let arrival = self
-                        .conversations
-                        .keep_document_local(household_id, arrival_id)?;
-                    self.conversations.record_cloud_assistance_event(
-                        household_id,
-                        arrival_id,
-                        "Member chose Keep local; no document information was sent to an Intelligence Provider.",
-                    )?;
-                    return Ok(CloudAssistanceResolution {
-                        result: None,
-                        processing_state: arrival.processing_state,
-                    });
+                    return self.keep_document_local(household_id, arrival_id);
                 }
                 Err(failure) => return Err(failure.into()),
                 Ok(_) => return Err(IntelligenceFailure::InvalidStructuredResult.into()),
