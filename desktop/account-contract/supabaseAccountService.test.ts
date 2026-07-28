@@ -145,6 +145,21 @@ test("verified Paddle events are idempotent and older subscription state cannot 
   assert.equal(staleActive.error, null);
   assert.equal(staleActive.data, false);
   assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "paymentProblem");
+
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_request_limit: 100,
+    requested_valid_until: "2026-09-01T00:00:00.000Z",
+  })).error, null);
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "managed",
+    state: "provisioning",
+    entitlementSource: "complimentary",
+    requestLimit: 100,
+    requestsUsed: 0,
+    validUntil: "2026-09-01T00:00:00+00:00",
+  });
 });
 
 test("an entitled Trusted Device proves possession before managed access is provisioned", async () => {
