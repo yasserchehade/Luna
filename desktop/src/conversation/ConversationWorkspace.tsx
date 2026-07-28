@@ -24,6 +24,7 @@ type ConversationWorkspaceProps = {
   conversationSelectionRequest: { conversationId: number; request: number } | null;
   onRecentConversationsChange(conversations: Conversation[]): void;
   onActiveConversationChange(conversationId: number | null): void;
+  onCabinetUnavailable(): void;
   householdName: string;
   onOpenConversation(): void;
   onTodoCountChange(count: number): void;
@@ -466,6 +467,7 @@ export function ConversationWorkspace({
   conversationSelectionRequest,
   onRecentConversationsChange,
   onActiveConversationChange,
+  onCabinetUnavailable,
   householdName,
   onOpenConversation,
   onTodoCountChange,
@@ -719,7 +721,14 @@ export function ConversationWorkspace({
     direction: FilingDecisionDirection,
   ) => {
     try {
-      await conversationService.confirmFilingDecision(householdId, arrivalId, direction);
+      const confirmed = await conversationService.confirmFilingDecision(
+        householdId,
+        arrivalId,
+        direction,
+      );
+      if (confirmed.processingState === "cabinetUnavailable") {
+        onCabinetUnavailable();
+      }
       setError("");
       setFocusedArrivalId(null);
       await loadHouseholdWork();

@@ -9,11 +9,11 @@ use std::{
 use luna_core::{
     AuditAuthority, AuditEventKind, CandidateDirectionInterpretation, CloudConsentDecision,
     CloudIntelligenceStore, ConfidenceState, ContextField, ContextRelevanceDirection,
-    ConversationStore, CredentialVault, DeterministicIntelligenceGateway, DocumentContextDirection,
-    DocumentIntelligenceService, DocumentProcessingState, DuplicateDecision, DuplicateKind,
-    FilingDecisionDirection, FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
-    IntelligenceProviderDescriptor, IntelligenceSelection, LocalOcr, TrustedDeviceManager,
-    VaultError,
+    ConversationError, ConversationStore, CredentialVault, DeterministicIntelligenceGateway,
+    DocumentContextDirection, DocumentIntelligenceService, DocumentProcessingState,
+    DuplicateDecision, DuplicateKind, FilingDecisionDirection, FilingRuleSummary,
+    IntelligenceFailure, IntelligenceModelDescriptor, IntelligenceProviderDescriptor,
+    IntelligenceSelection, LocalOcr, TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -1809,6 +1809,47 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
     store
         .resume_document_filings("rivera-household", &cabinet)
         .expect("resume all filing work after Cabinet returns");
+}
+
+#[test]
+fn a_missing_staged_original_is_not_reported_as_a_cabinet_outage() {
+    let directory = tempfile::tempdir().expect("temporary missing Original directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("missing.png");
+    fs::write(&source, image_fixture(image::ImageFormat::Png)).expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Missing Original.png",
+    );
+    fs::remove_file(&ready.original_path).expect("simulate missing staged Original");
+
+    let error = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect_err("reject missing staged Original");
+    assert!(matches!(
+        error,
+        ConversationError::OriginalVerificationFailed
+    ));
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list missing Original")
+        .into_iter()
+        .find(|arrival| arrival.id == ready.id)
+        .expect("missing Original arrival");
+    assert_eq!(
+        unchanged.processing_state,
+        DocumentProcessingState::ReadyToFile
+    );
+    assert!(unchanged
+        .review_card
+        .evidence
+        .iter()
+        .all(|evidence| evidence.label != "Recovery status"));
 }
 
 #[test]

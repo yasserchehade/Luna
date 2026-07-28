@@ -1674,6 +1674,31 @@ impl<V: CredentialVault> ConversationStore<V> {
             .filter(|decision| decision.confirmed)
             .ok_or(ConversationError::UnresolvedContext)?;
         let cabinet_root = cabinet_root.as_ref();
+        if !cabinet_root.is_dir() {
+            payload.processing_state = DocumentProcessingState::CabinetUnavailable;
+            return self.save_document_arrival_payload(
+                household_id,
+                arrival_id,
+                conversation_id,
+                payload,
+            );
+        }
+        let staged = match fs::read(&payload.original_path) {
+            Ok(staged) => staged,
+            Err(_) if !cabinet_root.is_dir() => {
+                payload.processing_state = DocumentProcessingState::CabinetUnavailable;
+                return self.save_document_arrival_payload(
+                    household_id,
+                    arrival_id,
+                    conversation_id,
+                    payload,
+                );
+            }
+            Err(_) => return Err(ConversationError::OriginalVerificationFailed),
+        };
+        if sha256(&staged) != payload.checksum {
+            return Err(ConversationError::OriginalVerificationFailed);
+        }
         let filing_result = (|| -> Result<PathBuf, ConversationError> {
             if !cabinet_root.is_dir() {
                 return Err(ConversationError::DocumentUnavailable(io::Error::new(
@@ -1683,10 +1708,6 @@ impl<V: CredentialVault> ConversationStore<V> {
             }
             let destination =
                 safe_cabinet_destination(cabinet_root, &decision.cabinet_destination)?;
-            let staged = fs::read(&payload.original_path)?;
-            if sha256(&staged) != payload.checksum {
-                return Err(ConversationError::OriginalVerificationFailed);
-            }
 
             if destination.exists() && !resuming {
                 return Err(ConversationError::CabinetDestinationConflict);

@@ -461,6 +461,9 @@ export default function App({ accountService, cabinetService, conversationServic
           cabinetRecoveryRequest={cabinetRecoveryRequest}
           newConversationRequest={newConversationRequest}
           conversationSelectionRequest={conversationSelectionRequest}
+          onCabinetUnavailable={() => setCabinetValidation((current) => (
+            current ? { ...current, availability: "unavailable" } : current
+          ))}
           onRecentConversationsChange={setRecentConversations}
           onActiveConversationChange={setActiveConversationId}
           onOpenConversation={() => setActiveDestination("Luna")}
