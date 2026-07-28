@@ -476,6 +476,7 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
             provider: PortableConsentProvider::OpenAi,
             scope: PortableConsentScope {
                 document_type: Some(typed_reference("document-type", "electricity-bill")),
+                document_reference: Some(typed_reference("document", "arrival-42")),
                 future_scope: None,
                 future_scope_evidence: Vec::new(),
                 fields: vec![PortableConsentField::Amount],
@@ -1263,7 +1264,15 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
     };
     let request = |request_id: &str| IntelligenceRequest {
         request_id: request_id.to_owned(),
-        document_arrival_id: format!("arrival-{request_id}"),
+        document_arrival_id: format!(
+            "arrival-{}",
+            match request_id {
+                "denied" => 1,
+                "provider-failure" => 2,
+                "completed" => 3,
+                _ => 4,
+            }
+        ),
         capability: IntelligenceCapability::DirectionInterpretation,
         provider_id: "openai".to_owned(),
         model_id: "gpt-4.1-mini".to_owned(),
@@ -1332,10 +1341,20 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
             ..
         }
     )));
-    assert!(
-        projection.consent_grants.is_empty(),
-        "device-local one-time grants must not be rebound on another device",
-    );
+    assert!(projection.consent_grants.iter().all(|event| matches!(
+        event.fact,
+        PortableFact::ConsentGrant {
+            scope: PortableConsentScope {
+                document_reference: Some(_),
+                ..
+            },
+            details: PortableConsentDetails {
+                kind: PortableConsentGrantKind::OneTime,
+                ..
+            },
+            ..
+        }
+    )));
     assert!(projection.execution_outcomes.iter().any(|event| matches!(
         event.fact,
         PortableFact::ExecutionOutcome {

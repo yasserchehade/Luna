@@ -223,6 +223,8 @@ pub enum PortableAuditEventKind {
 pub struct PortableConsentScope {
     pub document_type: Option<PortableReference>,
     #[serde(default)]
+    pub document_reference: Option<PortableReference>,
+    #[serde(default)]
     pub future_scope: Option<String>,
     #[serde(default)]
     pub future_scope_evidence: Vec<PortableConsentScopeEvidence>,
@@ -1013,11 +1015,20 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
 
         for export in intelligence.portable_consent_exports(household_id)? {
             let consent = export.scope;
-            if consent.kind == ConsentGrantKind::OneTime {
-                continue;
-            }
             let grant_reference =
                 self.entity_reference(household_id, "consent", consent.id, "grant")?;
+            let document_reference = consent
+                .document_arrival_id
+                .as_deref()
+                .map(|arrival_id| {
+                    let local_id = arrival_id
+                        .strip_prefix("arrival-")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .filter(|value| *value > 0)
+                        .ok_or(PortableMemoryError::InvalidEvent)?;
+                    self.entity_reference(household_id, "document", local_id, "document")
+                })
+                .transpose()?;
             let fields = consent
                 .fields
                 .iter()
@@ -1033,6 +1044,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     provider: portable_provider(&consent.provider_id)?,
                     scope: PortableConsentScope {
                         document_type: None,
+                        document_reference,
                         future_scope: consent.future_scope,
                         future_scope_evidence: export
                             .future_scope_evidence
@@ -1752,6 +1764,9 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             if *state == PortableConsentState::Denied {
                 continue;
             }
+            if details.kind == PortableConsentGrantKind::OneTime {
+                continue;
+            }
             let local_id =
                 self.bound_local_id(household_id, "consent", grant_reference.as_str())?;
             let local_id = intelligence.apply_portable_consent(
@@ -2397,6 +2412,10 @@ fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
                     .document_type
                     .as_ref()
                     .is_none_or(|reference| reference.kind() == "document-type")
+                && scope
+                    .document_reference
+                    .as_ref()
+                    .is_none_or(|reference| reference.kind() == "document")
                 && scope
                     .future_scope
                     .as_deref()
