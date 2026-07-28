@@ -99,7 +99,7 @@ A Trusted Device must also be locally unlocked with its Device PIN for the curre
 11. **Duplicate identity is not assumed.** A Possible Duplicate remains distinct until a member or exact-byte match establishes its relationship.
 12. **Manual cabinet changes are authoritative.** Luna may ask whether a move teaches a rule but never silently reverses it.
 13. **Cloud assistance is provider-specific.** A Consent Grant for one Intelligence Provider cannot authorise another.
-14. **No silent fallback.** Provider unavailability creates a waiting state unless a member grants another provider.
+14. **No silent fallback.** Provider unavailability creates a waiting state unless a member grants another provider. Bring-your-own Intelligence can never fall back to a Luna-funded route.
 15. **Evidence is not authority.** Local or cloud interpretation can propose context but cannot replace Member Direction where direction is required.
 16. **Staging ends only after verification.** Luna removes a staged copy only after the cabinet copy is checksum-verified and the outcome is durably recorded.
 17. **Rules change prospectively.** Historical reorganisation requires a preview and explicit direction.

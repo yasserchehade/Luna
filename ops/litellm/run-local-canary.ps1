@@ -49,6 +49,7 @@ $composeStarted = $false
 $runFailure = $null
 $cleanupFailure = $null
 $canaryResult = $null
+$byokCanaryResult = $null
 $logEvidence = $null
 $originalLocation = (Get-Location).Path
 
@@ -127,6 +128,8 @@ try {
   $env:LITELLM_DATABASE_PASSWORD = $databasePassword
   $env:DATABASE_URL = "postgresql://llmproxy:${databasePassword}@database:5432/litellm"
   $env:LUNA_MANAGED_INTELLIGENCE_URL = 'http://127.0.0.1:4000/v1/chat/completions'
+  $env:LUNA_BYOK_INTELLIGENCE_URL = 'http://127.0.0.1:4001/v1/chat/completions'
+  $env:LUNA_BYOK_PROVIDER_KEY = $openAiKey
 
   Set-Location -LiteralPath $repositoryRoot
   $composeValidation = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
@@ -140,25 +143,32 @@ try {
   if ($composeStartup.ExitCode -ne 0) { throw 'Compose startup failed.' }
   $composeStarted = $true
 
-  $gatewayQuery = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
-    'compose', '-f', $composeFile, 'ps', '-q', 'gateway'
-  )
-  if ($gatewayQuery.ExitCode -ne 0) { throw 'Unable to inspect the gateway container.' }
-  $gatewayId = Get-LunaNativeOutputText -Result $gatewayQuery
-  if ([string]::IsNullOrWhiteSpace($gatewayId)) {
-    throw 'The gateway container was not created.'
+  $gatewayIds = @()
+  foreach ($service in @('gateway', 'byok-gateway')) {
+    $gatewayQuery = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
+      'compose', '-f', $composeFile, 'ps', '-q', $service
+    )
+    if ($gatewayQuery.ExitCode -ne 0) { throw "Unable to inspect the $service container." }
+    $gatewayId = Get-LunaNativeOutputText -Result $gatewayQuery
+    if ([string]::IsNullOrWhiteSpace($gatewayId)) {
+      throw "The $service container was not created."
+    }
+    $gatewayIds += $gatewayId
   }
 
   $deadline = [DateTime]::UtcNow.AddMinutes(3)
   do {
-    $healthQuery = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
-      'inspect', '--format', '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}', $gatewayId
-    )
-    if ($healthQuery.ExitCode -ne 0) { throw 'Unable to inspect gateway health.' }
-    $health = Get-LunaNativeOutputText -Result $healthQuery
-    if ($health -eq 'healthy') { break }
-    if ($health -eq 'unhealthy' -or [DateTime]::UtcNow -ge $deadline) {
-      throw "Gateway health check ended in state: $health"
+    $healthStates = @()
+    foreach ($gatewayId in $gatewayIds) {
+      $healthQuery = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
+        'inspect', '--format', '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}', $gatewayId
+      )
+      if ($healthQuery.ExitCode -ne 0) { throw 'Unable to inspect gateway health.' }
+      $healthStates += Get-LunaNativeOutputText -Result $healthQuery
+    }
+    if (($healthStates | Where-Object { $_ -ne 'healthy' }).Count -eq 0) { break }
+    if ($healthStates -contains 'unhealthy' -or [DateTime]::UtcNow -ge $deadline) {
+      throw "Gateway health check ended in state: $($healthStates -join ', ')"
     }
     Start-Sleep -Seconds 2
   } while ($true)
@@ -168,20 +178,37 @@ try {
   )
   $canaryOutput = Get-LunaNativeOutputText -Result $canary
   $canaryExitCode = $canary.ExitCode
+  $byokCanary = Invoke-LunaNativeCommand -FilePath 'node' -ArgumentList @(
+    (Join-Path $PSScriptRoot 'byok-canary.mjs')
+  )
+  $byokCanaryOutput = Get-LunaNativeOutputText -Result $byokCanary
+  $byokCanaryExitCode = $byokCanary.ExitCode
   $logQuery = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
-    'compose', '-f', $composeFile, 'logs', '--no-color', 'gateway', 'database'
+    'compose', '-f', $composeFile, 'logs', '--no-color', 'gateway', 'byok-gateway', 'database'
   )
   if ($logQuery.ExitCode -ne 0) { throw 'Unable to inspect gateway logs.' }
   $gatewayLogs = Get-LunaNativeOutputText -Result $logQuery
+  $databaseQuery = Invoke-LunaNativeCommand -FilePath 'docker' -ArgumentList @(
+    'compose', '-f', $composeFile, 'exec', '-T', 'database', 'pg_dump', '-U', 'llmproxy', 'litellm'
+  )
+  if ($databaseQuery.ExitCode -ne 0) { throw 'Unable to inspect BYOK database retention.' }
+  $databaseDump = Get-LunaNativeOutputText -Result $databaseQuery
   $logEvidence = [ordered]@{
     synthetic_marker_absent = -not $gatewayLogs.Contains('LUNA_SYNTHETIC_CANARY_53')
+    byok_synthetic_marker_absent = -not $gatewayLogs.Contains('LUNA_SYNTHETIC_BYOK_CANARY_55')
     upstream_key_absent = -not $gatewayLogs.Contains($openAiKey)
     master_key_absent = -not $gatewayLogs.Contains($masterKey)
     database_password_absent = -not $gatewayLogs.Contains($databasePassword)
+    database_provider_key_absent = -not $databaseDump.Contains($openAiKey)
+    database_synthetic_marker_absent = -not $databaseDump.Contains('LUNA_SYNTHETIC_BYOK_CANARY_55')
   }
 
   if ($canaryExitCode -ne 0) {
     throw ('Canary failed: ' + (Remove-LunaSecretsFromText -Text $canaryOutput))
+  }
+
+  if ($byokCanaryExitCode -ne 0) {
+    throw ('BYOK canary failed: ' + (Remove-LunaSecretsFromText -Text $byokCanaryOutput))
   }
 
   if ($logEvidence.Values -contains $false) {
@@ -189,6 +216,7 @@ try {
   }
 
   $canaryResult = $canaryOutput | ConvertFrom-Json
+  $byokCanaryResult = $byokCanaryOutput | ConvertFrom-Json
 }
 catch {
   $runFailure = Remove-LunaSecretsFromText -Text $_.Exception.Message
@@ -211,7 +239,7 @@ finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretPointer)
   }
 
-  foreach ($environmentName in @('OPENAI_API_KEY', 'LITELLM_MASTER_KEY', 'LITELLM_DATABASE_PASSWORD', 'DATABASE_URL', 'LUNA_MANAGED_INTELLIGENCE_URL')) {
+  foreach ($environmentName in @('OPENAI_API_KEY', 'LITELLM_MASTER_KEY', 'LITELLM_DATABASE_PASSWORD', 'DATABASE_URL', 'LUNA_MANAGED_INTELLIGENCE_URL', 'LUNA_BYOK_INTELLIGENCE_URL', 'LUNA_BYOK_PROVIDER_KEY')) {
     Remove-Item -LiteralPath "Env:$environmentName" -ErrorAction SilentlyContinue
   }
   $openAiKey = $null
@@ -238,6 +266,7 @@ if ($remainingContainers.Count -gt 0 -or $remainingNetworks.Count -gt 0 -or $rem
 
 $evidence = [ordered]@{
   canary = $canaryResult
+  byok_canary = $byokCanaryResult
   logs = $logEvidence
   cleanup = [ordered]@{
     encrypted_handoff_removed = -not (Test-Path -LiteralPath $encryptedKey)

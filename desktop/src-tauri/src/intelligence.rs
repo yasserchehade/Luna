@@ -25,6 +25,7 @@ use crate::{
 
 pub const MANAGED_INTELLIGENCE_PROVIDER_ID: &str = "openai";
 pub const MANAGED_INTELLIGENCE_MODEL_ID: &str = "gpt-4.1-mini";
+pub const BYOK_OPENAI_PROVIDER_ID: &str = "openai-byok";
 const MAX_SAFE_RETRY_ATTEMPTS: usize = 2;
 const MAX_FIELD_VALUE_CHARS: usize = 1_024;
 const MAX_EVIDENCE_ITEMS: usize = 32;
@@ -52,6 +53,7 @@ pub struct IntelligenceProviderDescriptor {
 #[serde(rename_all = "camelCase")]
 pub struct IntelligenceProviderStatus {
     pub descriptor: IntelligenceProviderDescriptor,
+    pub gateway_configured: bool,
     pub configured: bool,
 }
 
@@ -259,6 +261,8 @@ pub enum IntelligenceFailure {
     ProviderRejectedRequest,
     #[error("Luna's gateway authentication is unavailable")]
     AuthenticationUnavailable,
+    #[error("the selected Intelligence Provider credential is missing, invalid or revoked")]
+    ProviderAuthenticationUnavailable,
     #[error("the selected Intelligence Provider rate-limited the request")]
     RateLimited,
     #[error("the Intelligence Request timed out")]
@@ -284,6 +288,10 @@ pub enum IntelligenceFailure {
 pub trait IntelligenceGateway: Send + Sync {
     fn id(&self) -> &str;
 
+    fn access_credential_id(&self, _provider_id: &str) -> &str {
+        self.id()
+    }
+
     fn requires_access_credential(&self) -> bool {
         true
     }
@@ -292,7 +300,22 @@ pub trait IntelligenceGateway: Send + Sync {
         &self,
         request: &IntelligenceRequest,
         access_credential: Option<&[u8]>,
+        provider_credential: Option<&[u8]>,
     ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure>;
+
+    fn test_provider_connection(
+        &self,
+        request: &IntelligenceRequest,
+        access_credential: Option<&[u8]>,
+        provider_credential: &[u8],
+    ) -> Result<(), IntelligenceFailure> {
+        let result =
+            self.evaluate_document(request, access_credential, Some(provider_credential))?;
+        if result.provider_id != request.provider_id || result.model_id != request.model_id {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+        Ok(())
+    }
 }
 
 /// A deterministic implementation of the same Luna-owned contract used by
@@ -348,6 +371,7 @@ impl IntelligenceGateway for DeterministicIntelligenceGateway {
         &self,
         request: &IntelligenceRequest,
         _access_credential: Option<&[u8]>,
+        _provider_credential: Option<&[u8]>,
     ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure> {
         self.requests
             .lock()
@@ -371,6 +395,16 @@ impl IntelligenceGateway for DeterministicIntelligenceGateway {
             source_references: Vec::new(),
             usage: IntelligenceUsage::default(),
         })
+    }
+
+    fn test_provider_connection(
+        &self,
+        request: &IntelligenceRequest,
+        access_credential: Option<&[u8]>,
+        provider_credential: &[u8],
+    ) -> Result<(), IntelligenceFailure> {
+        self.evaluate_document(request, access_credential, Some(provider_credential))?;
+        Ok(())
     }
 }
 
@@ -428,7 +462,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             database,
             trusted_device,
             LiteLlmGateway::new(endpoint),
-            managed_provider_catalog(),
+            provider_catalog(),
         )
     }
 
@@ -474,26 +508,147 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         &self,
         household_id: &str,
     ) -> Result<Vec<IntelligenceProviderStatus>, IntelligenceFailure> {
-        let configured = !self.gateway.requires_access_credential()
-            || self
-                .trusted_device
-                .vault()
-                .get_secret(&gateway_credential_key(household_id, self.gateway.id()))
-                .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)?
-                .is_some();
         Ok(self
             .providers()
             .into_iter()
-            .map(|descriptor| IntelligenceProviderStatus {
-                descriptor,
-                configured,
+            .map(|descriptor| {
+                let gateway_configured = !self.gateway.requires_access_credential()
+                    || self
+                        .trusted_device
+                        .vault()
+                        .get_secret(&gateway_credential_key(
+                            household_id,
+                            self.gateway.access_credential_id(&descriptor.id),
+                        ))
+                        .ok()
+                        .flatten()
+                        .is_some();
+                let provider_configured = descriptor.managed_by_luna
+                    || self
+                        .trusted_device
+                        .vault()
+                        .get_secret(&provider_credential_key(household_id, &descriptor.id))
+                        .ok()
+                        .flatten()
+                        .is_some();
+                IntelligenceProviderStatus {
+                    descriptor,
+                    gateway_configured,
+                    configured: gateway_configured && provider_configured,
+                }
             })
             .collect())
+    }
+
+    pub fn set_provider_credential(
+        &self,
+        household_id: &str,
+        provider_id: &str,
+        credential: &[u8],
+    ) -> Result<(), IntelligenceFailure> {
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id && !provider.managed_by_luna)
+            .ok_or(IntelligenceFailure::UnsupportedSelection)?;
+        if credential.is_empty() {
+            return Err(IntelligenceFailure::ProviderAuthenticationUnavailable);
+        }
+        self.trusted_device
+            .vault()
+            .set_secret(
+                &provider_credential_key(household_id, &provider.id),
+                credential,
+            )
+            .map_err(|_| IntelligenceFailure::ProviderAuthenticationUnavailable)
+    }
+
+    pub fn test_and_set_provider_credential(
+        &self,
+        household_id: &str,
+        provider_id: &str,
+        credential: &[u8],
+    ) -> Result<(), IntelligenceFailure> {
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id && !provider.managed_by_luna)
+            .ok_or(IntelligenceFailure::UnsupportedSelection)?;
+        if credential.is_empty() {
+            return Err(IntelligenceFailure::ProviderAuthenticationUnavailable);
+        }
+        let model = provider
+            .models
+            .first()
+            .ok_or(IntelligenceFailure::UnsupportedSelection)?;
+        let access_credential = self
+            .trusted_device
+            .vault()
+            .get_secret(&gateway_credential_key(
+                household_id,
+                self.gateway.access_credential_id(provider_id),
+            ))
+            .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)?;
+        if self.gateway.requires_access_credential() && access_credential.is_none() {
+            return Err(IntelligenceFailure::AuthenticationUnavailable);
+        }
+        let request = IntelligenceRequest {
+            request_id: format!("luna-provider-test-{}", now()),
+            document_arrival_id: "synthetic-provider-connection-test".to_owned(),
+            capability: IntelligenceCapability::DirectionInterpretation,
+            provider_id: provider.id.clone(),
+            model_id: model.id.clone(),
+            evidence: Vec::new(),
+            content_excerpts: vec![DocumentContentExcerpt {
+                source: "synthetic connection test".to_owned(),
+                text: "LUNA_SYNTHETIC_PROVIDER_CONNECTION_TEST. No Household information."
+                    .to_owned(),
+            }],
+            expected_response: IntelligenceResponseSchema {
+                allowed_fields: Vec::new(),
+                allow_candidate_direction: false,
+            },
+            consent_grant_id: None,
+            constraints: IntelligenceExecutionConstraints {
+                timeout_ms: 30_000,
+                max_output_tokens: 128,
+            },
+        };
+        self.gateway.test_provider_connection(
+            &request,
+            access_credential.as_deref(),
+            credential,
+        )?;
+        self.set_provider_credential(household_id, provider_id, credential)
+    }
+
+    pub fn clear_provider_credential(
+        &self,
+        household_id: &str,
+        provider_id: &str,
+    ) -> Result<(), IntelligenceFailure> {
+        self.trusted_device
+            .vault()
+            .delete_secret(&provider_credential_key(household_id, provider_id))
+            .map_err(|_| IntelligenceFailure::ProviderAuthenticationUnavailable)
     }
 
     pub fn set_gateway_access_credential(
         &self,
         household_id: &str,
+        credential: &[u8],
+    ) -> Result<(), IntelligenceFailure> {
+        self.set_gateway_access_credential_for_provider(
+            household_id,
+            MANAGED_INTELLIGENCE_PROVIDER_ID,
+            credential,
+        )
+    }
+
+    pub fn set_gateway_access_credential_for_provider(
+        &self,
+        household_id: &str,
+        provider_id: &str,
         credential: &[u8],
     ) -> Result<(), IntelligenceFailure> {
         if credential.is_empty() {
@@ -502,7 +657,10 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         self.trusted_device
             .vault()
             .set_secret(
-                &gateway_credential_key(household_id, self.gateway.id()),
+                &gateway_credential_key(
+                    household_id,
+                    self.gateway.access_credential_id(provider_id),
+                ),
                 credential,
             )
             .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)
@@ -514,7 +672,11 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
     ) -> Result<(), IntelligenceFailure> {
         self.trusted_device
             .vault()
-            .delete_secret(&gateway_credential_key(household_id, self.gateway.id()))
+            .delete_secret(&gateway_credential_key(
+                household_id,
+                self.gateway
+                    .access_credential_id(MANAGED_INTELLIGENCE_PROVIDER_ID),
+            ))
             .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)
     }
 
@@ -659,7 +821,10 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         let credential = self
             .trusted_device
             .vault()
-            .get_secret(&gateway_credential_key(household_id, self.gateway.id()))
+            .get_secret(&gateway_credential_key(
+                household_id,
+                self.gateway.access_credential_id(&selection.provider_id),
+            ))
             .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)?;
         if self.gateway.requires_access_credential() && credential.is_none() {
             self.record_waiting_failure(
@@ -671,14 +836,40 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             )?;
             return Err(IntelligenceFailure::AuthenticationUnavailable);
         }
+        let provider_credential = if self
+            .providers
+            .iter()
+            .any(|provider| provider.id == selection.provider_id && !provider.managed_by_luna)
+        {
+            self.trusted_device
+                .vault()
+                .get_secret(&provider_credential_key(
+                    household_id,
+                    &selection.provider_id,
+                ))
+                .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)?
+        } else {
+            None
+        };
+        if selection.provider_id == BYOK_OPENAI_PROVIDER_ID && provider_credential.is_none() {
+            self.record_waiting_failure(
+                household_id,
+                &request,
+                consent,
+                &grant,
+                IntelligenceFailure::ProviderAuthenticationUnavailable,
+            )?;
+            return Err(IntelligenceFailure::ProviderAuthenticationUnavailable);
+        }
         self.consume_if_one_time(household_id, &grant)?;
 
         let mut last_failure = IntelligenceFailure::GatewayUnavailable;
         for attempt in 0..MAX_SAFE_RETRY_ATTEMPTS {
-            match self
-                .gateway
-                .evaluate_document(&request, credential.as_deref())
-            {
+            match self.gateway.evaluate_document(
+                &request,
+                credential.as_deref(),
+                provider_credential.as_deref(),
+            ) {
                 Ok(untrusted) => {
                     let result = match validate_result(&request, grant.id, untrusted) {
                         Ok(result) => result,
@@ -1053,6 +1244,9 @@ impl IntelligenceFailure {
             Self::AuthenticationUnavailable => {
                 "The Luna gateway access credential was unavailable; no upstream credential was exposed."
             }
+            Self::ProviderAuthenticationUnavailable => {
+                "The selected Intelligence Provider credential was unavailable or rejected; Luna did not use a managed route."
+            }
             Self::RateLimited => {
                 "The selected Intelligence Provider rate-limited the request; Luna did not switch providers."
             }
@@ -1075,7 +1269,7 @@ pub(crate) fn managed_provider_catalog() -> Vec<IntelligenceProviderDescriptor> 
     vec![IntelligenceProviderDescriptor {
         id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
         name: "OpenAI".to_owned(),
-        description: "Luna-managed Cloud Assistance through the provisional LiteLLM gateway."
+        description: "OpenAI Cloud Assistance provided by Luna for eligible Household Plans."
             .to_owned(),
         models: vec![IntelligenceModelDescriptor {
             id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
@@ -1266,6 +1460,26 @@ fn candidate_from_fields(fields: &BTreeMap<String, String>) -> CandidateDirectio
 
 fn gateway_credential_key(household_id: &str, gateway_id: &str) -> String {
     format!("luna.intelligence.gateway.{household_id}.{gateway_id}")
+}
+
+pub(crate) fn provider_catalog() -> Vec<IntelligenceProviderDescriptor> {
+    let mut providers = managed_provider_catalog();
+    providers.push(IntelligenceProviderDescriptor {
+        id: BYOK_OPENAI_PROVIDER_ID.to_owned(),
+        name: "OpenAI — bring your own key".to_owned(),
+        description: "OpenAI Cloud Assistance billed directly to your provider account.".to_owned(),
+        models: vec![IntelligenceModelDescriptor {
+            id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+            name: "GPT-4.1 mini".to_owned(),
+        }],
+        managed_by_luna: false,
+        auth_url: Some("https://platform.openai.com/api-keys".to_owned()),
+    });
+    providers
+}
+
+fn provider_credential_key(household_id: &str, provider_id: &str) -> String {
+    format!("luna.intelligence.provider.{household_id}.{provider_id}")
 }
 
 fn map_trusted_device_error(_: TrustedDeviceError) -> IntelligenceFailure {
@@ -1760,6 +1974,72 @@ mod tests {
     }
 
     #[test]
+    fn byok_connection_is_tested_before_the_provider_key_is_kept_only_in_the_vault() {
+        let gateway = DeterministicIntelligenceGateway::new(
+            BYOK_OPENAI_PROVIDER_ID,
+            MANAGED_INTELLIGENCE_MODEL_ID,
+            BTreeMap::new(),
+        );
+        let trusted_device = trusted_device();
+        let vault = trusted_device.vault().clone();
+        let database = std::env::temp_dir().join(format!(
+            "luna-byok-credential-boundary-{}-{}.db",
+            std::process::id(),
+            now()
+        ));
+        let store = CloudIntelligenceStore::open_with_gateway(
+            &database,
+            trusted_device,
+            gateway.clone(),
+            provider_catalog(),
+        )
+        .expect("open Intelligence store");
+        let secret = "customer-provider-secret-value";
+
+        store
+            .test_and_set_provider_credential(
+                "household",
+                BYOK_OPENAI_PROVIDER_ID,
+                secret.as_bytes(),
+            )
+            .expect("test and store provider credential");
+
+        assert_eq!(gateway.requests().len(), 1);
+        assert_eq!(gateway.requests()[0].provider_id, BYOK_OPENAI_PROVIDER_ID);
+        let status = store
+            .provider_statuses("household")
+            .expect("provider status")
+            .into_iter()
+            .find(|status| status.descriptor.id == BYOK_OPENAI_PROVIDER_ID)
+            .expect("BYOK provider status");
+        assert!(status.gateway_configured);
+        assert!(status.configured);
+        assert!(vault
+            .0
+            .lock()
+            .expect("test vault lock")
+            .values()
+            .any(|value| value == secret.as_bytes()));
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&database).expect("read database"))
+                .contains(secret)
+        );
+
+        store
+            .clear_provider_credential("household", BYOK_OPENAI_PROVIDER_ID)
+            .expect("remove provider credential");
+        assert!(
+            !store
+                .provider_statuses("household")
+                .expect("provider status after removal")
+                .into_iter()
+                .find(|status| status.descriptor.id == BYOK_OPENAI_PROVIDER_ID)
+                .expect("BYOK provider status after removal")
+                .configured
+        );
+    }
+
+    #[test]
     fn reusable_consent_cannot_expand_to_new_local_scope_response_fields_or_models() {
         let gateway =
             DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
@@ -1875,6 +2155,120 @@ mod tests {
         assert!(scopes[0].consumed_at.is_none());
     }
 
+    #[test]
+    fn missing_byok_provider_credential_fails_closed_before_transmission_or_consent_use() {
+        let gateway = DeterministicIntelligenceGateway::new(
+            BYOK_OPENAI_PROVIDER_ID,
+            MANAGED_INTELLIGENCE_MODEL_ID,
+            BTreeMap::new(),
+        );
+        let store = store_with_gateway_and_catalog(gateway.clone(), provider_catalog());
+        let mut request = authorised_request("arrival-byok-missing-key");
+        request.provider_id = BYOK_OPENAI_PROVIDER_ID.to_owned();
+
+        assert_eq!(
+            store.evaluate_document(
+                "household",
+                IntelligenceSelection {
+                    provider_id: BYOK_OPENAI_PROVIDER_ID.to_owned(),
+                    model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+                },
+                request,
+                CloudConsentDecision::AllowOnce,
+                "organiser-1",
+                None,
+            ),
+            Err(IntelligenceFailure::ProviderAuthenticationUnavailable)
+        );
+        assert!(gateway.requests().is_empty());
+        let scopes = store
+            .list_consent_scopes("household")
+            .expect("list BYOK consent");
+        assert_eq!(scopes.len(), 1);
+        assert!(scopes[0].consumed_at.is_none());
+    }
+
+    #[derive(Clone)]
+    struct ModeAwareGateway;
+
+    impl IntelligenceGateway for ModeAwareGateway {
+        fn id(&self) -> &str {
+            "mode-aware-test"
+        }
+
+        fn access_credential_id(&self, provider_id: &str) -> &str {
+            if provider_id == BYOK_OPENAI_PROVIDER_ID {
+                "byok-access"
+            } else {
+                "managed-access"
+            }
+        }
+
+        fn evaluate_document(
+            &self,
+            _request: &IntelligenceRequest,
+            _access_credential: Option<&[u8]>,
+            _provider_credential: Option<&[u8]>,
+        ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure> {
+            Err(IntelligenceFailure::GatewayUnavailable)
+        }
+    }
+
+    #[test]
+    fn a_byok_only_household_is_not_reported_as_having_managed_access() {
+        let database = std::env::temp_dir().join(format!(
+            "luna-mode-credential-boundary-{}-{}.db",
+            std::process::id(),
+            now()
+        ));
+        let store = CloudIntelligenceStore::open_with_gateway(
+            database,
+            trusted_device(),
+            ModeAwareGateway,
+            provider_catalog(),
+        )
+        .expect("open mode-aware Intelligence store");
+        store
+            .set_gateway_access_credential_for_provider(
+                "household",
+                BYOK_OPENAI_PROVIDER_ID,
+                b"byok-only-gateway-key",
+            )
+            .expect("store BYOK gateway access");
+        store
+            .set_provider_credential(
+                "household",
+                BYOK_OPENAI_PROVIDER_ID,
+                b"customer-provider-key",
+            )
+            .expect("store customer provider key");
+
+        let statuses = store
+            .provider_statuses("household")
+            .expect("list mode-aware provider statuses");
+        let managed = statuses
+            .iter()
+            .find(|status| status.descriptor.id == MANAGED_INTELLIGENCE_PROVIDER_ID)
+            .expect("managed status");
+        assert!(!managed.gateway_configured);
+        assert!(!managed.configured);
+        let byok = statuses
+            .iter()
+            .find(|status| status.descriptor.id == BYOK_OPENAI_PROVIDER_ID)
+            .expect("BYOK status");
+        assert!(byok.gateway_configured);
+        assert!(byok.configured);
+    }
+
+    #[test]
+    fn provider_catalog_uses_customer_language_instead_of_gateway_implementation_terms() {
+        for provider in provider_catalog() {
+            let description = provider.description.to_ascii_lowercase();
+            assert!(!description.contains("litellm"));
+            assert!(!description.contains("gateway"));
+        }
+    }
+
     #[derive(Clone)]
     struct OversizedEvidenceGateway;
 
@@ -1891,6 +2285,7 @@ mod tests {
             &self,
             request: &IntelligenceRequest,
             _access_credential: Option<&[u8]>,
+            _provider_credential: Option<&[u8]>,
         ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure> {
             Ok(UntrustedIntelligenceResult {
                 request_id: request.request_id.clone(),
