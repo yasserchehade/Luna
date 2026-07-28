@@ -1726,6 +1726,12 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         waiting.processing_state,
         DocumentProcessingState::CabinetUnavailable
     );
+    assert!(waiting.review_card.evidence.iter().any(|evidence| {
+        evidence.label == "Recovery status"
+            && evidence
+                .value
+                .contains("only the confirmed Cabinet Destination")
+    }));
     assert!(ready.original_path.is_file());
     assert_eq!(
         store
@@ -1746,6 +1752,34 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         .expect("retried arrival");
     assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
     assert!(!ready.original_path.exists());
+
+    let unrelated_source = directory.path().join("unrelated.pdf");
+    fs::write(
+        &unrelated_source,
+        digital_pdf_with_text("An unfamiliar document"),
+    )
+    .expect("write unrelated fixture");
+    let conversation = store
+        .create_conversation("rivera-household", "Unrelated work")
+        .expect("create unrelated Conversation");
+    let unrelated = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unrelated_source,
+            &cabinet,
+        )
+        .expect("attach unrelated document");
+    assert!(store
+        .file_document("rivera-household", unrelated.id, &unavailable)
+        .is_err());
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list unrelated document")
+        .into_iter()
+        .find(|arrival| arrival.id == unrelated.id)
+        .expect("unchanged unrelated document");
+    assert_eq!(unchanged.processing_state, unrelated.processing_state);
 }
 
 #[test]

@@ -1656,16 +1656,6 @@ impl<V: CredentialVault> ConversationStore<V> {
             )?;
             return self.document_arrival(household_id, arrival_id, conversation_id, payload);
         }
-        let cabinet_root = cabinet_root.as_ref();
-        if !cabinet_root.is_dir() {
-            payload.processing_state = DocumentProcessingState::CabinetUnavailable;
-            return self.save_document_arrival_payload(
-                household_id,
-                arrival_id,
-                conversation_id,
-                payload,
-            );
-        }
         let resuming = matches!(
             payload.processing_state,
             DocumentProcessingState::Filing | DocumentProcessingState::CabinetUnavailable
@@ -1683,6 +1673,16 @@ impl<V: CredentialVault> ConversationStore<V> {
             .clone()
             .filter(|decision| decision.confirmed)
             .ok_or(ConversationError::UnresolvedContext)?;
+        let cabinet_root = cabinet_root.as_ref();
+        if !cabinet_root.is_dir() {
+            payload.processing_state = DocumentProcessingState::CabinetUnavailable;
+            return self.save_document_arrival_payload(
+                household_id,
+                arrival_id,
+                conversation_id,
+                payload,
+            );
+        }
         let destination = safe_cabinet_destination(cabinet_root, &decision.cabinet_destination)?;
         let staged = fs::read(&payload.original_path)?;
         if sha256(&staged) != payload.checksum {
@@ -2628,6 +2628,12 @@ fn review_card(payload: &DocumentArrivalPayload) -> ReviewCard {
         evidence.push(ReviewEvidence {
             label: "Local inspection".to_owned(),
             value: "No text could be read locally.".to_owned(),
+        });
+    }
+    if payload.processing_state == DocumentProcessingState::CabinetUnavailable {
+        evidence.push(ReviewEvidence {
+            label: "Recovery status".to_owned(),
+            value: "The untouched Original remains staged with this checksum. Luna will retry only the confirmed Cabinet Destination.".to_owned(),
         });
     }
     let context = &payload.context_direction;
