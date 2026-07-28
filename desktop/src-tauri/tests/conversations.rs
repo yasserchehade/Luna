@@ -1434,6 +1434,31 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
     assert!(prompt
         .allowed_actions
         .contains(&ConversationAction::KeepLocal));
+    for (message, consent) in [
+        ("Allow once", CloudConsentDecision::AllowOnce),
+        (
+            "Allow this scoped future use",
+            CloudConsentDecision::AllowForScope,
+        ),
+        (
+            "Use existing Consent Grant",
+            CloudConsentDecision::UseExistingScope,
+        ),
+        ("Keep local", CloudConsentDecision::KeepLocal),
+    ] {
+        let interpretation = DeterministicMemberDirectionInterpreter.interpret(
+            &prompt,
+            &MemberUtterance {
+                conversation_id: conversation.id,
+                message: message.to_owned(),
+                linked_prompt: prompt.id.clone(),
+            },
+        );
+        assert_eq!(
+            interpretation.proposed_commands,
+            vec![MemberDirectionCommand::UseCloudAssistance { consent }]
+        );
+    }
 
     let outcome = store
         .submit_member_utterance(
@@ -1442,7 +1467,7 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
             MemberUtterance {
                 conversation_id: conversation.id,
                 message: "Please keep it local".to_owned(),
-                linked_prompt: prompt.id,
+                linked_prompt: prompt.id.clone(),
             },
             &DeterministicMemberDirectionInterpreter,
             &cabinet,
@@ -1452,13 +1477,40 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
 
     assert_eq!(
         outcome.accepted_direction,
-        Some(MemberDirectionCommand::KeepDocumentLocal)
+        Some(MemberDirectionCommand::UseCloudAssistance {
+            consent: CloudConsentDecision::KeepLocal,
+        })
     );
     assert_eq!(
         outcome.arrival.processing_state,
+        DocumentProcessingState::NeedsCloudConsent
+    );
+    assert_eq!(outcome.status, ConversationTurnStatus::ActionPrepared);
+
+    store
+        .keep_document_local("rivera-household", arrival.id)
+        .expect("apply the prepared local-only direction");
+    let stale = store
+        .submit_member_utterance(
+            "rivera-household",
+            arrival.id,
+            MemberUtterance {
+                conversation_id: conversation.id,
+                message: "Allow once".to_owned(),
+                linked_prompt: prompt.id,
+            },
+            &DeterministicMemberDirectionInterpreter,
+            &cabinet,
+            "Bills & Services",
+        )
+        .expect("refuse a stale Cloud Assistance prompt safely");
+    assert_eq!(stale.status, ConversationTurnStatus::ClarificationRequired);
+    assert_eq!(stale.accepted_direction, None);
+    assert!(stale.message.contains("earlier question"));
+    assert_eq!(
+        stale.arrival.processing_state,
         DocumentProcessingState::NeedsMemberDirection
     );
-    assert!(outcome.next_prompt.is_some());
 }
 
 #[test]

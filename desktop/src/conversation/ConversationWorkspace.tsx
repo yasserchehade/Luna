@@ -20,6 +20,8 @@ import type {
   DocumentProcessingState,
   DuplicateDecision,
   FilingDecisionDirection,
+  IntelligenceResult,
+  IntelligenceSelection,
   IntelligenceProviderStatus,
   TodoItem,
 } from "./conversationService";
@@ -100,12 +102,19 @@ type DocumentReviewEditorProps = {
   arrival: DocumentArrival;
   conversationService: ConversationService;
   householdId: string;
+  cloudConversationOutcome?: {
+    result: IntelligenceResult | null;
+    response: string;
+  };
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
   onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
   onRegisterCloudConversationHandler(
     arrivalId: number,
-    handler: ((message: string) => Promise<{ handled: boolean; response: string }>) | null,
+    binding: {
+      selection: IntelligenceSelection | null;
+      existingConsentGrantId: number | null;
+    } | null,
   ): void;
   onRefresh(): Promise<void>;
 };
@@ -173,6 +182,7 @@ function DocumentReviewEditor({
   arrival,
   conversationService,
   householdId,
+  cloudConversationOutcome,
   onConfirm,
   onRecord,
   onResolveDuplicate,
@@ -336,52 +346,37 @@ function DocumentReviewEditor({
   ]);
 
   useEffect(() => {
-    onRegisterCloudConversationHandler(arrival.id, async (message) => {
-      const normalized = message
-        .trim()
-        .replace(/[.!?]+$/u, "")
-        .toLowerCase();
-      let consent: CloudConsentDecision | null = null;
-      if (["allow once", "use cloud once", "one time"].includes(normalized)) {
-        consent = "allowOnce";
-      } else if ([
-        "allow this scoped future use",
-        "allow for this scope",
-        "remember this consent",
-      ].includes(normalized)) {
-        consent = "allowForScope";
-      } else if ([
-        "use existing consent grant",
-        "use the existing consent grant",
-        "use existing scope",
-      ].includes(normalized)) {
-        if (!existingCloudScope) {
-          return {
-            handled: true,
-            response: "There is no matching reusable Consent Grant for the selected provider and model. Choose another consent option.",
-          };
-        }
-        consent = "useExistingScope";
-      } else if (["keep local", "keep it local", "local only", "stay local"].includes(normalized)) {
-        consent = "keepLocal";
-      }
-      if (!consent) return { handled: false, response: "" };
-      if (consent !== "keepLocal" && !selectedCloudProvider?.configured) {
-        return {
-          handled: true,
-          response: "Connect this Trusted Device to Luna's managed gateway in Options before allowing Cloud Assistance.",
-        };
-      }
-      return { handled: true, response: await askCloudProvider(consent) };
+    onRegisterCloudConversationHandler(arrival.id, {
+      selection: cloudProviderId && cloudModelId
+        ? { providerId: cloudProviderId, modelId: cloudModelId }
+        : null,
+      existingConsentGrantId: existingCloudScope?.id ?? null,
     });
     return () => onRegisterCloudConversationHandler(arrival.id, null);
   }, [
     arrival.id,
-    askCloudProvider,
+    cloudModelId,
+    cloudProviderId,
+    conversationService,
     existingCloudScope,
+    householdId,
     onRegisterCloudConversationHandler,
-    selectedCloudProvider?.configured,
   ]);
+
+  useEffect(() => {
+    if (!cloudConversationOutcome) return;
+    const { result, response } = cloudConversationOutcome;
+    setCloudMessage(response);
+    setCloudError("");
+    if (!result) {
+      setCloudReadyForMemberDirection(response.startsWith("Kept local."));
+      return;
+    }
+    setCloudReadyForMemberDirection(true);
+    setDirection((current) => applyCloudFields(current, result.fields));
+    setCloudSuggestion({ requestId: result.requestId, fields: result.fields });
+    void conversationService.listCloudConsentScopes(householdId).then(setCloudScopes);
+  }, [cloudConversationOutcome, conversationService, householdId]);
 
   const setField = (
     field: "documentType" | "serviceProvider" | "addressee" | "property" | "account" | "amount",
@@ -591,6 +586,10 @@ export function ConversationWorkspace({
   const [arrivals, setArrivals] = useState<DocumentArrival[]>([]);
   const [documentConversations, setDocumentConversations] = useState<Record<number, DocumentConversationView>>({});
   const [turnMessages, setTurnMessages] = useState<Record<number, string>>({});
+  const [cloudTurnOutcomes, setCloudTurnOutcomes] = useState<Record<number, {
+    result: IntelligenceResult | null;
+    response: string;
+  }>>({});
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -606,7 +605,10 @@ export function ConversationWorkspace({
   const lastNewRequest = useRef(newConversationRequest);
   const cloudConversationHandlers = useRef(new Map<
     number,
-    (message: string) => Promise<{ handled: boolean; response: string }>
+    {
+      selection: IntelligenceSelection | null;
+      existingConsentGrantId: number | null;
+    }
   >());
 
   const selectedConversation = conversations.find(({ id }) => id === selectedConversationId) ?? null;
@@ -823,29 +825,9 @@ export function ConversationWorkspace({
     const prompt = documentConversations[arrivalId]?.prompt;
     if (!selectedConversationId || !prompt || !message.trim()) return;
     try {
-      if (prompt.purpose === "chooseCloudAssistance") {
-        const handler = cloudConversationHandlers.current.get(arrivalId);
-        const cloudOutcome = handler ? await handler(message) : null;
-        if (cloudOutcome?.handled) {
-          await conversationService.addMemberMessage(
-            householdId,
-            selectedConversationId,
-            message.trim(),
-          );
-          setTurnMessages((current) => ({
-            ...current,
-            [arrivalId]: cloudOutcome.response,
-          }));
-          setMessages(await conversationService.listMessages(
-            householdId,
-            selectedConversationId,
-          ));
-          setFocusedArrivalId(arrivalId);
-          setError("");
-          await loadHouseholdWork();
-          return;
-        }
-      }
+      const cloudBinding = prompt.purpose === "chooseCloudAssistance"
+        ? cloudConversationHandlers.current.get(arrivalId)
+        : undefined;
       const outcome = await conversationService.submitMemberUtterance(
         householdId,
         arrivalId,
@@ -854,13 +836,23 @@ export function ConversationWorkspace({
           message,
           linkedPrompt: prompt.id,
         },
+        cloudBinding?.selection,
+        cloudBinding?.existingConsentGrantId,
       );
       setTurnMessages((current) => ({
         ...current,
-        [arrivalId]: outcome.status === "clarificationRequired" || outcome.status === "actionRefused"
+        [arrivalId]: prompt.purpose === "chooseCloudAssistance"
+          || outcome.status === "clarificationRequired"
+          || outcome.status === "actionRefused"
           ? outcome.message
           : "",
       }));
+      if (prompt.purpose === "chooseCloudAssistance") {
+        setCloudTurnOutcomes((current) => ({
+          ...current,
+          [arrivalId]: { result: outcome.cloudResult, response: outcome.message },
+        }));
+      }
       setMessages(await conversationService.listMessages(householdId, selectedConversationId));
       setFocusedArrivalId(arrivalId);
       setError("");
@@ -1026,6 +1018,7 @@ export function ConversationWorkspace({
         arrival={arrival}
         conversationService={conversationService}
         householdId={householdId}
+        cloudConversationOutcome={cloudTurnOutcomes[arrival.id]}
         onConfirm={(direction) => confirmDecision(arrival.id, direction)}
         onRecord={(direction) => recordDirection(arrival.id, direction)}
         onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}

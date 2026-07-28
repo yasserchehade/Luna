@@ -426,6 +426,10 @@ describe("Luna Conversation desk", () => {
     ));
     await $("#message-composer").setValue("Allow this scoped future use");
     await $("button[aria-label='Send message']").click();
+    await expect($(".document-arrival[data-focused='true'] .turn-message")).toHaveText(
+      expect.stringContaining("suggested amount"),
+    );
+    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     arrival = await attach("cloud-reuse");
@@ -433,6 +437,7 @@ describe("Luna Conversation desk", () => {
     await expect(assistance.$("button=Use existing Consent Grant")).toBeDisplayed();
     await $("#message-composer").setValue("Use existing Consent Grant");
     await $("button[aria-label='Send message']").click();
+    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     await browser.execute(() => {
@@ -495,14 +500,18 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Luna']").click();
     arrival = await attach("cloud-once");
     assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await expect(assistance).toBeDisplayed();
     await $("#message-composer").setValue("Allow once");
     await $("button[aria-label='Send message']").click();
+    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     arrival = await attach("cloud-local");
     assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await expect(assistance).toBeDisplayed();
     await $("#message-composer").setValue("Keep local");
     await $("button[aria-label='Send message']").click();
+    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
     await expect(assistance).toHaveText(expect.stringContaining("Kept local"));
   });
 });

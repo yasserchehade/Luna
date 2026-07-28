@@ -109,7 +109,7 @@ export type MemberDirectionCommand =
   | { type: "rejectContextField"; field: ClarificationQuestion["field"] }
   | { type: "setContextField"; field: ClarificationQuestion["field"]; value: string | null }
   | { type: "confirmFilingDecision" }
-  | { type: "keepDocumentLocal" }
+  | { type: "useCloudAssistance"; consent: CloudConsentDecision }
   | { type: "resolveDuplicate"; decision: DuplicateDecision; relatedArrivalId: number }
   | { type: "learnFilingRule" }
   | { type: "decline" };
@@ -121,11 +121,17 @@ export type DocumentConversationView = {
 };
 
 export type ConversationTurnOutcome = {
-  status: "acceptedDirection" | "clarificationRequired" | "actionCompleted" | "actionRefused";
+  status:
+    | "acceptedDirection"
+    | "actionPrepared"
+    | "clarificationRequired"
+    | "actionCompleted"
+    | "actionRefused";
   acceptedDirection: MemberDirectionCommand | null;
   message: string;
   nextPrompt: ConversationPrompt | null;
   arrival: DocumentArrival;
+  cloudResult: IntelligenceResult | null;
 };
 
 export type FilingDecisionReview = {
@@ -443,6 +449,8 @@ export interface ConversationService {
     householdId: string,
     arrivalId: number,
     utterance: MemberUtterance,
+    cloudSelection?: IntelligenceSelection | null,
+    existingConsentGrantId?: number | null,
   ): Promise<ConversationTurnOutcome>;
   resumeDocumentFilings(householdId: string): Promise<void>;
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
@@ -547,11 +555,21 @@ export const tauriConversationService: ConversationService = {
       arrivalId,
     });
   },
-  submitMemberUtterance(householdId, arrivalId, utterance) {
+  submitMemberUtterance(
+    householdId,
+    arrivalId,
+    utterance,
+    cloudSelection = null,
+    existingConsentGrantId = null,
+  ) {
     return invoke<ConversationTurnOutcome>("submit_member_utterance", {
-      householdId,
-      arrivalId,
-      utterance,
+      request: {
+        householdId,
+        arrivalId,
+        utterance,
+        cloudSelection,
+        existingConsentGrantId,
+      },
     });
   },
   resumeDocumentFilings(householdId) {

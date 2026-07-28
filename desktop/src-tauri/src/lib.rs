@@ -62,7 +62,7 @@ pub use trusted_device::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 #[cfg(not(feature = "e2e"))]
 use tauri_plugin_dialog::DialogExt;
@@ -864,16 +864,32 @@ fn get_document_conversation(
         .map_err(|error| error.to_string())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitMemberUtteranceRequest {
+    household_id: String,
+    arrival_id: i64,
+    utterance: MemberUtterance,
+    cloud_selection: Option<IntelligenceSelection>,
+    existing_consent_grant_id: Option<i64>,
+}
+
 #[tauri::command]
 fn submit_member_utterance(
     store: State<'_, ConversationState>,
     intelligence: State<'_, IntelligenceState>,
     portable: State<'_, PortableState>,
     cabinet: State<'_, CabinetState>,
-    household_id: String,
-    arrival_id: i64,
-    utterance: MemberUtterance,
+    sessions: State<'_, AccountSessionManager>,
+    request: SubmitMemberUtteranceRequest,
 ) -> Result<ConversationTurnOutcome, String> {
+    let SubmitMemberUtteranceRequest {
+        household_id,
+        arrival_id,
+        utterance,
+        cloud_selection,
+        existing_consent_grant_id,
+    } = request;
     let configuration = cabinet
         .load(&household_id)
         .map_err(|error| error.to_string())?
@@ -882,16 +898,86 @@ fn submit_member_utterance(
         .sections
         .first()
         .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
-    let outcome = store
+    let mut outcome = store
         .submit_member_utterance(
             &household_id,
             arrival_id,
             utterance,
             &DeterministicMemberDirectionInterpreter,
-            configuration.root,
+            &configuration.root,
             cabinet_section,
         )
         .map_err(|error| error.to_string())?;
+    let prepared_consent = match outcome.accepted_direction.as_ref() {
+        Some(MemberDirectionCommand::UseCloudAssistance { consent })
+            if outcome.status == ConversationTurnStatus::ActionPrepared =>
+        {
+            Some(*consent)
+        }
+        _ => None,
+    };
+    if let Some(consent) = prepared_consent {
+        let Some(selection) = cloud_selection else {
+            outcome.status = ConversationTurnStatus::ClarificationRequired;
+            outcome.accepted_direction = None;
+            outcome.message =
+                "Choose the disclosed Intelligence Provider and model before allowing Cloud Assistance."
+                    .to_owned();
+            return Ok(outcome);
+        };
+        if consent == CloudConsentDecision::UseExistingScope && existing_consent_grant_id.is_none()
+        {
+            outcome.status = ConversationTurnStatus::ClarificationRequired;
+            outcome.accepted_direction = None;
+            outcome.message = "There is no matching reusable Consent Grant for the selected provider and model. Choose another consent option.".to_owned();
+            return Ok(outcome);
+        }
+        let provider_name = selection.provider_id.clone();
+        let model_name = selection.model_id.clone();
+        let granted_by = current_household_actor(sessions.inner(), &household_id)?;
+        let resolution =
+            DocumentIntelligenceService::new(store.inner().clone(), intelligence.inner().clone())
+                .evaluate_document(
+                    &household_id,
+                    arrival_id,
+                    selection,
+                    consent,
+                    &granted_by,
+                    existing_consent_grant_id,
+                );
+        let updated_arrival = store
+            .list_document_arrivals(&household_id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|arrival| arrival.id == arrival_id)
+            .ok_or_else(|| "The Document Handling is no longer available.".to_owned())?;
+        let next = store
+            .document_conversation_in_section(&household_id, arrival_id, cabinet_section)
+            .map_err(|error| error.to_string())?;
+        outcome.arrival = updated_arrival;
+        outcome.next_prompt = next.prompt;
+        match resolution {
+            Ok(resolution) => {
+                outcome.status = ConversationTurnStatus::AcceptedDirection;
+                outcome.message = match resolution.result.as_ref() {
+                    None => "Kept local. No document information was sent to an Intelligence Provider."
+                        .to_owned(),
+                    Some(result) if result.fields.is_empty() => format!(
+                        "{provider_name} returned no usable suggestions. Luna kept this review ready for your direction."
+                    ),
+                    Some(result) => format!(
+                        "{provider_name} {model_name} suggested {}. This is untrusted Evidence; review it before saving Household Context.",
+                        result.fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                };
+                outcome.cloud_result = resolution.result;
+            }
+            Err(error) => {
+                outcome.status = ConversationTurnStatus::ClarificationRequired;
+                outcome.message = error.to_string();
+            }
+        }
+    }
     capture_portable_state(
         portable.inner(),
         store.inner(),

@@ -16,7 +16,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cabinet::ensure_incoming_folder;
-use crate::intelligence::CandidateDirectionInterpretation;
+use crate::intelligence::{
+    CandidateDirectionInterpretation, CloudConsentDecision, IntelligenceResult,
+};
 use crate::portable_memory::{
     PortableDocumentRelationshipKind, PortableHistoryEvent, PortableReference,
 };
@@ -255,7 +257,9 @@ pub enum MemberDirectionCommand {
         value: Option<String>,
     },
     ConfirmFilingDecision,
-    KeepDocumentLocal,
+    UseCloudAssistance {
+        consent: CloudConsentDecision,
+    },
     ResolveDuplicate {
         decision: DuplicateDecision,
         related_arrival_id: i64,
@@ -370,7 +374,34 @@ impl MemberDirectionInterpreter for DeterministicMemberDirectionInterpreter {
                     || normalized.contains("don't use cloud")
                     || normalized.contains("do not use cloud")
                 {
-                    confident(MemberDirectionCommand::KeepDocumentLocal)
+                    confident(MemberDirectionCommand::UseCloudAssistance {
+                        consent: CloudConsentDecision::KeepLocal,
+                    })
+                } else if matches!(
+                    normalized.as_str(),
+                    "allow once" | "use cloud once" | "one time"
+                ) {
+                    confident(MemberDirectionCommand::UseCloudAssistance {
+                        consent: CloudConsentDecision::AllowOnce,
+                    })
+                } else if matches!(
+                    normalized.as_str(),
+                    "allow this scoped future use"
+                        | "allow for this scope"
+                        | "remember this consent"
+                ) {
+                    confident(MemberDirectionCommand::UseCloudAssistance {
+                        consent: CloudConsentDecision::AllowForScope,
+                    })
+                } else if matches!(
+                    normalized.as_str(),
+                    "use existing consent grant"
+                        | "use the existing consent grant"
+                        | "use existing scope"
+                ) {
+                    confident(MemberDirectionCommand::UseCloudAssistance {
+                        consent: CloudConsentDecision::UseExistingScope,
+                    })
                 } else {
                     ambiguous(
                         "Choose a disclosed provider and consent option below, or say “Keep local”.",
@@ -475,6 +506,7 @@ fn conversational_value(message: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub enum ConversationTurnStatus {
     AcceptedDirection,
+    ActionPrepared,
     ClarificationRequired,
     ActionCompleted,
     ActionRefused,
@@ -488,7 +520,7 @@ pub struct DocumentConversationView {
     pub completion_message: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationTurnOutcome {
     pub status: ConversationTurnStatus,
@@ -496,6 +528,7 @@ pub struct ConversationTurnOutcome {
     pub message: String,
     pub next_prompt: Option<ConversationPrompt>,
     pub arrival: DocumentArrival,
+    pub cloud_result: Option<IntelligenceResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2219,6 +2252,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                 }),
                 next_prompt: Some(prompt),
                 arrival,
+                cloud_result: None,
             });
         }
         let mut valid_commands = interpretation
@@ -2235,6 +2269,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                         .to_owned(),
                 next_prompt: Some(prompt),
                 arrival,
+                cloud_result: None,
             });
         }
         let Some(command) = valid_commands.pop() else {
@@ -2244,6 +2279,19 @@ impl<V: CredentialVault> ConversationStore<V> {
                 "I could not safely apply that answer to the current question. Please answer it another way.",
             ));
         };
+
+        if matches!(command, MemberDirectionCommand::UseCloudAssistance { .. }) {
+            return Ok(ConversationTurnOutcome {
+                status: ConversationTurnStatus::ActionPrepared,
+                accepted_direction: Some(command),
+                message:
+                    "The Cloud Assistance direction is ready for the validated application service."
+                        .to_owned(),
+                next_prompt: Some(prompt),
+                arrival,
+                cloud_result: None,
+            });
+        }
 
         let updated = match &command {
             MemberDirectionCommand::ConfirmContextField { .. }
@@ -2280,8 +2328,8 @@ impl<V: CredentialVault> ConversationStore<V> {
                 )?;
                 self.file_document(household_id, arrival_id, cabinet_root)?
             }
-            MemberDirectionCommand::KeepDocumentLocal => {
-                self.keep_document_local(household_id, arrival_id)?
+            MemberDirectionCommand::UseCloudAssistance { .. } => {
+                unreachable!("Cloud Assistance commands are prepared for the application service")
             }
             MemberDirectionCommand::ResolveDuplicate {
                 decision,
@@ -2334,6 +2382,9 @@ impl<V: CredentialVault> ConversationStore<V> {
                 .clone()
                 .or_else(|| next.prompt.as_ref().map(|prompt| prompt.message.clone()))
                 .unwrap_or_else(|| "Done.".to_owned()),
+            ConversationTurnStatus::ActionPrepared => {
+                "The action is ready for the validated application service.".to_owned()
+            }
             _ => next
                 .prompt
                 .as_ref()
@@ -2346,6 +2397,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             message,
             next_prompt: next.prompt,
             arrival: updated,
+            cloud_result: None,
         })
     }
 
@@ -3375,6 +3427,7 @@ fn safe_conversation_response(
         message: message.to_owned(),
         next_prompt: current_prompt,
         arrival,
+        cloud_result: None,
     }
 }
 
@@ -4091,7 +4144,7 @@ fn validate_direction_for_prompt(
         MemberDirectionCommand::ConfirmFilingDecision => {
             prompt.purpose == ConversationPromptPurpose::ConfirmFilingDecision
         }
-        MemberDirectionCommand::KeepDocumentLocal => {
+        MemberDirectionCommand::UseCloudAssistance { .. } => {
             prompt.purpose == ConversationPromptPurpose::ChooseCloudAssistance
         }
         MemberDirectionCommand::ResolveDuplicate {
