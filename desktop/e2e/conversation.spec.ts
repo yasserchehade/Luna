@@ -342,7 +342,7 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Cloud assistance options']").click();
     const cloudOptions = $("section[aria-label='Cloud assistance']");
     await expect(cloudOptions).toHaveText(expect.stringContaining("Managed access ready"));
-    await expect(cloudOptions).toHaveText(expect.stringContaining("never entered by a Household Member"));
+    await expect(cloudOptions).toHaveText(expect.stringContaining("You never need to enter a Luna access key"));
     const byokConnection = cloudOptions.$("section[aria-label='OpenAI bring-your-own-key connection']");
     await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
     const providerKey = byokConnection.$("input[type='password']");
