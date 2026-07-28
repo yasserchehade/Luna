@@ -374,7 +374,10 @@ export default function App({ accountService, cabinetService, conversationServic
   if (cabinetValidation === null) {
     return <CabinetSetup
       cabinetService={cabinetService}
-      onConfigured={handleCabinetConfigured}
+      onConfigured={(configuration) => {
+        handleCabinetConfigured(configuration);
+        void synchronizeAfterUnlock(session);
+      }}
       session={session}
     />;
   }
@@ -439,7 +442,10 @@ export default function App({ accountService, cabinetService, conversationServic
         trustedDeviceService={trustedDeviceService}
       /> : activeDestination === "Cabinet" && cabinetUnavailable ? <CabinetSetup
         cabinetService={cabinetService}
-        onConfigured={handleCabinetConfigured}
+        onConfigured={(configuration) => {
+          handleCabinetConfigured(configuration);
+          void synchronizeAfterUnlock(session);
+        }}
         session={session}
         unavailableRoot={cabinetValidation.configuration.root}
       /> : activeDestination === "Cabinet" ? <main className="conversation cabinet-view">
