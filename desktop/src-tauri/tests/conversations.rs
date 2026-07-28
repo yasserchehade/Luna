@@ -243,6 +243,11 @@ fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_
         DocumentProcessingState::NeedsMemberDirection
     );
     assert!(after.filed_original.is_none());
+    assert!(after.cloud_assistance_history.iter().any(|entry| {
+        entry.contains("openai gpt-4.1-mini")
+            && entry.contains("one-time consent")
+            && entry.contains("untrusted candidate Evidence")
+    }));
 }
 
 #[test]

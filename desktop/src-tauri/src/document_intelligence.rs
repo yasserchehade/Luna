@@ -64,6 +64,8 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
             .find(|arrival| arrival.id == arrival_id)
             .ok_or(ConversationError::NotFound)?;
         let request = authorised_request(&arrival, &selection)?;
+        let provider_id = selection.provider_id.clone();
+        let model_id = selection.model_id.clone();
 
         if consent == CloudConsentDecision::KeepLocal {
             match self.intelligence.evaluate_document(
@@ -78,6 +80,11 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                     let arrival = self
                         .conversations
                         .keep_document_local(household_id, arrival_id)?;
+                    self.conversations.record_cloud_assistance_event(
+                        household_id,
+                        arrival_id,
+                        "Member chose Keep local; no document information was sent to an Intelligence Provider.",
+                    )?;
                     return Ok(CloudAssistanceResolution {
                         result: None,
                         processing_state: arrival.processing_state,
@@ -113,6 +120,13 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                             )?;
                             self.conversations
                                 .wait_for_cloud_assistance(household_id, arrival_id)?;
+                            self.conversations.record_cloud_assistance_event(
+                                household_id,
+                                arrival_id,
+                                &format!(
+                                    "{provider_id} {model_id} returned candidate Evidence that failed Luna validation; the Document remains waiting for retry."
+                                ),
+                            )?;
                             return Err(error.into());
                         }
                     }
@@ -120,6 +134,14 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                 let arrival = self
                     .conversations
                     .complete_cloud_assistance(household_id, arrival_id)?;
+                self.conversations.record_cloud_assistance_event(
+                    household_id,
+                    arrival_id,
+                    &format!(
+                        "{provider_id} {model_id} returned untrusted candidate Evidence under {} consent; Member Direction is still required.",
+                        consent_label(consent),
+                    ),
+                )?;
                 Ok(CloudAssistanceResolution {
                     result: Some(result),
                     processing_state: arrival.processing_state,
@@ -128,9 +150,25 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
             Err(failure) => {
                 self.conversations
                     .wait_for_cloud_assistance(household_id, arrival_id)?;
+                self.conversations.record_cloud_assistance_event(
+                    household_id,
+                    arrival_id,
+                    &format!(
+                        "{provider_id} {model_id} Cloud Assistance failed; the Document remains waiting for the same route."
+                    ),
+                )?;
                 Err(failure.into())
             }
         }
+    }
+}
+
+fn consent_label(consent: CloudConsentDecision) -> &'static str {
+    match consent {
+        CloudConsentDecision::AllowOnce => "one-time",
+        CloudConsentDecision::AllowForScope => "reusable scoped",
+        CloudConsentDecision::UseExistingScope => "existing scoped",
+        CloudConsentDecision::KeepLocal => "local-only",
     }
 }
 

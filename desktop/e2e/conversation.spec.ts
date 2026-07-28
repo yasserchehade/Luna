@@ -367,6 +367,10 @@ describe("Luna Conversation desk", () => {
       if (await keepBoth.isExisting()) {
         await keepBoth.click();
       }
+      const reviewDetails = arrival.$(".review-details");
+      if (!(await reviewDetails.getAttribute("open"))) {
+        await reviewDetails.$("summary").click();
+      }
       const reviewCloudAssistance = arrival.$("button=Review Cloud Assistance");
       if (await reviewCloudAssistance.isExisting()) {
         await reviewCloudAssistance.click();
