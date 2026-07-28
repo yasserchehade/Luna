@@ -131,6 +131,7 @@ export type DuplicateResolution = {
   decision: DuplicateDecision;
   relatedArrivalId: number;
   relatedOriginalName: string;
+  duplicateKind?: DuplicateKind;
 };
 
 export type DuplicateAuditEvent = {
@@ -300,10 +301,14 @@ export type PortableHistoryEvent = {
   subjectReference: string;
   outcome:
     | "filedAndVerified"
+    | "filingRuleChanged"
+    | "cloudAssistanceCompleted"
+    | "keptLocal"
     | "waitingForCloudAssistance"
     | "cabinetUnavailable"
     | "providerUnavailable"
     | "failed";
+  candidateDisposition?: "pending" | "accepted" | "corrected" | "rejected";
 };
 
 export type PortableTrustedDeviceAuthorization = {

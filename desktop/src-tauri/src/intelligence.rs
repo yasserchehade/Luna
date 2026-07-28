@@ -110,6 +110,12 @@ pub struct CloudConsentScope {
     pub revoked: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PortableConsentExport {
+    pub scope: CloudConsentScope,
+    pub future_scope_evidence: Vec<IntelligenceEvidence>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntelligenceEvidence {
@@ -710,6 +716,35 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             .collect()
     }
 
+    pub(crate) fn portable_consent_exports(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<PortableConsentExport>, IntelligenceFailure> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, protected_payload FROM cloud_consents
+                 WHERE household_id = ?1 ORDER BY id DESC",
+            )
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        let rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        rows.into_iter()
+            .map(|(id, protected)| {
+                let payload: ConsentPayload = self.open_protected(household_id, &protected)?;
+                Ok(PortableConsentExport {
+                    scope: consent_scope(household_id, id, payload.clone()),
+                    future_scope_evidence: payload.future_scope_evidence,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn apply_portable_consent(
         &self,
         household_id: &str,
@@ -728,9 +763,17 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             model_id: details.model_id.clone(),
             capability: IntelligenceCapability::DirectionInterpretation,
             purpose: capability_purpose(IntelligenceCapability::DirectionInterpretation).to_owned(),
-            document_arrival_id: None,
-            future_scope: None,
-            future_scope_evidence: Vec::new(),
+            document_arrival_id: scope.document_arrival_id.clone(),
+            future_scope: scope.future_scope.clone(),
+            future_scope_evidence: scope
+                .future_scope_evidence
+                .iter()
+                .map(|evidence| IntelligenceEvidence {
+                    field: evidence.field.clone(),
+                    value: evidence.value.clone(),
+                    source: String::new(),
+                })
+                .collect(),
             fields: scope
                 .fields
                 .iter()
@@ -742,6 +785,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                     PortableConsentField::Account => "account",
                     PortableConsentField::Amount => "amount",
                     PortableConsentField::RelevantDates => "relevantDates",
+                    PortableConsentField::Additional(field) => field.as_str(),
                 })
                 .map(str::to_owned)
                 .collect(),

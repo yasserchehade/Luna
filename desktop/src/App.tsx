@@ -491,7 +491,7 @@ export default function App({ accountService, cabinetService, conversationServic
             </article>)}{portableHistoryEvents.map((event) => <article className="history-event portable-history-event" key={`portable-${event.eventId}`}>
               <strong>{event.eventKind === "documentFiled" ? "Portable document history" : event.eventKind === "exactMatchHandledAutomatically" ? "Portable learned-rule history" : event.eventKind === "filingRuleChanged" ? "Portable Filing Rule history" : event.eventKind === "consentChanged" ? "Portable Consent history" : "Portable execution history"}</strong>
               <p>{event.subjectReference}</p>
-              <small>{event.outcome} · {event.authority} · {event.occurredAt}</small>
+              <small>{event.outcome}{event.candidateDisposition ? ` · candidate ${event.candidateDisposition}` : ""} · {event.authority} · {event.occurredAt}</small>
             </article>)}</>}
         </section>
       </main> : <>

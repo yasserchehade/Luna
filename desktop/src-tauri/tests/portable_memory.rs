@@ -7,15 +7,15 @@ use std::{
 };
 
 use luna_core::{
-    CloudConsentDecision, CloudIntelligenceStore, ContextRelevanceDirection, ConversationStore,
-    CredentialVault, DeterministicIntelligenceGateway, DocumentContextDirection,
-    DocumentProcessingState, FilingDecisionDirection, IntelligenceCapability,
+    CandidateDisposition, CloudConsentDecision, CloudIntelligenceStore, ContextRelevanceDirection,
+    ConversationStore, CredentialVault, DeterministicIntelligenceGateway, DocumentContextDirection,
+    DocumentProcessingState, FilingDecisionDirection, IntelligenceCapability, IntelligenceEvidence,
     IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceModelDescriptor,
     IntelligenceProviderDescriptor, IntelligenceRequest, IntelligenceResponseSchema,
     IntelligenceSelection, LocalOcr, PortableAuditEventKind, PortableAuthority,
-    PortableAuthorizationCutoff, PortableConflictResolutionDraft, PortableConsentDetails,
-    PortableConsentField, PortableConsentGrantKind, PortableConsentProvider,
-    PortableConsentPurpose, PortableConsentScope, PortableConsentState,
+    PortableAuthorizationCutoff, PortableCandidateDisposition, PortableConflictResolutionDraft,
+    PortableConsentDetails, PortableConsentField, PortableConsentGrantKind,
+    PortableConsentProvider, PortableConsentPurpose, PortableConsentScope, PortableConsentState,
     PortableConversationReference, PortableDocumentRelationshipKind, PortableEvent,
     PortableEventDraft, PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
     PortableFilingRuleState, PortableIntelligenceCapability, PortableMemberDirectionKind,
@@ -291,6 +291,7 @@ fn a_recovered_trusted_device_imports_a_signed_encrypted_audit_event() {
                     authority: PortableAuthority::MemberDirection,
                     subject_reference: reference("document-arrival-23"),
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
             },
         )
@@ -475,6 +476,9 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
             provider: PortableConsentProvider::OpenAi,
             scope: PortableConsentScope {
                 document_type: Some(typed_reference("document-type", "electricity-bill")),
+                document_arrival_id: Some("arrival-42".to_owned()),
+                future_scope: None,
+                future_scope_evidence: Vec::new(),
                 fields: vec![PortableConsentField::Amount],
             },
             state: PortableConsentState::Denied,
@@ -526,6 +530,7 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
             authority: PortableAuthority::MemberDirection,
             subject_reference: grant,
             outcome: PortableExecutionOutcomeKind::Failed,
+            candidate_disposition: None,
         },
     );
 
@@ -590,6 +595,7 @@ fn retry_repairs_a_missing_cabinet_record_without_duplicating_local_projection()
             authority: PortableAuthority::MemberDirection,
             subject_reference: reference("document-arrival-repair"),
             outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+            candidate_disposition: None,
         },
     };
     let appended = store
@@ -960,6 +966,272 @@ fn synchronization_rebuilds_an_owning_filing_rule_that_handles_a_new_document() 
 }
 
 #[test]
+fn synchronization_rebuilds_a_reusable_consent_grant_that_authorizes_matching_evidence() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create the user-owned Cabinet");
+    let first_local = tempfile::tempdir().expect("create the first local database");
+    let second_local = tempfile::tempdir().expect("create the recovered local database");
+    let (first_device, second_device, first_authorization, _) = enrol_two_devices(household_id);
+    let provider = IntelligenceProviderDescriptor {
+        id: "openai".to_owned(),
+        name: "OpenAI".to_owned(),
+        description: "Managed Cloud Assistance".to_owned(),
+        models: vec![IntelligenceModelDescriptor {
+            id: "gpt-4.1-mini".to_owned(),
+            name: "GPT-4.1 mini".to_owned(),
+        }],
+        managed_by_luna: true,
+        auth_url: None,
+    };
+    let selection = IntelligenceSelection {
+        provider_id: "openai".to_owned(),
+        model_id: "gpt-4.1-mini".to_owned(),
+    };
+    let scope_evidence = vec![IntelligenceEvidence {
+        field: "mediaType".to_owned(),
+        value: "image/png".to_owned(),
+        source: "local-document-metadata".to_owned(),
+    }];
+
+    let first_database = first_local.path().join("luna.db");
+    let first_conversations = ConversationStore::open(&first_database, first_device.clone())
+        .expect("open the first Conversation owner");
+    let first_intelligence = CloudIntelligenceStore::open_with_gateway(
+        &first_database,
+        first_device.clone(),
+        DeterministicIntelligenceGateway::new(
+            "openai",
+            "gpt-4.1-mini",
+            BTreeMap::from([("documentType".to_owned(), "Electricity bill".to_owned())]),
+        ),
+        vec![provider.clone()],
+    )
+    .expect("open the first Consent owner");
+    first_intelligence
+        .grant_scope(
+            household_id,
+            &selection,
+            IntelligenceCapability::DirectionInterpretation,
+            "Evaluate a difficult document",
+            vec!["documentType".to_owned(), "mediaType".to_owned()],
+            scope_evidence.clone(),
+            "account-sam",
+        )
+        .expect("grant reusable consent");
+    let first_memory = PortableMemoryStore::open(&first_database, first_device)
+        .expect("open portable memory on the first device");
+    first_memory
+        .capture_owned_state(
+            household_id,
+            cabinet.path(),
+            &first_conversations,
+            &first_intelligence,
+        )
+        .expect("capture the reusable Consent Grant");
+
+    let second_database = second_local.path().join("luna.db");
+    let second_conversations = ConversationStore::open(&second_database, second_device.clone())
+        .expect("open the recovered Conversation owner");
+    let second_intelligence = CloudIntelligenceStore::open_with_gateway(
+        &second_database,
+        second_device.clone(),
+        DeterministicIntelligenceGateway::new(
+            "openai",
+            "gpt-4.1-mini",
+            BTreeMap::from([("documentType".to_owned(), "Electricity bill".to_owned())]),
+        ),
+        vec![provider],
+    )
+    .expect("open the recovered Consent owner");
+    let second_memory = PortableMemoryStore::open(&second_database, second_device)
+        .expect("open portable memory on the recovered device");
+    second_memory
+        .synchronize_owned_state(
+            household_id,
+            cabinet.path(),
+            &[first_authorization],
+            &second_conversations,
+            &second_intelligence,
+        )
+        .expect("rebuild reusable Consent on the recovered device");
+
+    let recovered_scope = second_intelligence
+        .list_consent_scopes(household_id)
+        .expect("list recovered Consent Grants")
+        .into_iter()
+        .next()
+        .expect("recover the reusable Consent Grant");
+    assert_eq!(recovered_scope.kind, luna_core::ConsentGrantKind::Reusable);
+    assert_eq!(recovered_scope.fields, vec!["documentType", "mediaType"]);
+    assert!(recovered_scope.future_scope.is_some());
+
+    let result = second_intelligence
+        .evaluate_document(
+            household_id,
+            selection,
+            IntelligenceRequest {
+                request_id: "recovered-consent-request".to_owned(),
+                document_arrival_id: "arrival-recovered".to_owned(),
+                capability: IntelligenceCapability::DirectionInterpretation,
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+                evidence: scope_evidence,
+                content_excerpts: Vec::new(),
+                expected_response: IntelligenceResponseSchema {
+                    allowed_fields: vec!["documentType".to_owned()],
+                    allow_candidate_direction: true,
+                },
+                consent_grant_id: Some(recovered_scope.id),
+                constraints: IntelligenceExecutionConstraints {
+                    timeout_ms: 1_000,
+                    max_output_tokens: 64,
+                },
+            },
+            CloudConsentDecision::UseExistingScope,
+            "account-sam",
+            Some(recovered_scope.id),
+        )
+        .expect("use the recovered reusable Consent Grant");
+    assert_eq!(
+        result.fields.get("documentType").map(String::as_str),
+        Some("Electricity bill"),
+    );
+}
+
+#[test]
+fn owning_filing_records_cabinet_unavailability_locally_and_captures_the_resumed_result() {
+    let household_id = "rivera-household";
+    let cabinet = tempfile::tempdir().expect("create the user-owned Cabinet");
+    fs::create_dir_all(cabinet.path().join("Household records"))
+        .expect("create the filing section");
+    let local = tempfile::tempdir().expect("create the local database");
+    let (device, _, _, _) = enrol_two_devices(household_id);
+    let database = local.path().join("luna.db");
+    let conversations = ConversationStore::open_with_ocr(
+        &database,
+        device.clone(),
+        FixedLocalOcr(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; \
+             Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; \
+             Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("open Conversation behavior");
+    let intelligence = CloudIntelligenceStore::open(&database, device.clone())
+        .expect("open Cloud Assistance behavior");
+    let conversation = conversations
+        .create_conversation(household_id, "Unavailable Cabinet")
+        .expect("create a Conversation");
+    let source = local.path().join("unavailable-cabinet.png");
+    fs::write(&source, png_fixture()).expect("write the document");
+    let arrival = conversations
+        .attach_document(household_id, conversation.id, &source, cabinet.path())
+        .expect("attach the document");
+    conversations
+        .record_member_direction(
+            household_id,
+            arrival.id,
+            DocumentContextDirection {
+                document_type: Some("Electricity bill".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("AGL Energy".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property: Some("12 Seabreeze Avenue".to_owned()),
+                property_resolved: true,
+                account: Some("12345678".to_owned()),
+                account_resolved: true,
+                amount: None,
+                amount_resolved: true,
+                relevant_dates: vec!["2026-07-15".to_owned()],
+                relevant_dates_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL Energy".to_owned(),
+                    explanation: "Supplies electricity to the Household".to_owned(),
+                }),
+                property_relevance: Some(ContextRelevanceDirection {
+                    subject: "12 Seabreeze Avenue".to_owned(),
+                    explanation: "The Household's primary residence".to_owned(),
+                }),
+            },
+            "Household records",
+        )
+        .expect("record Member Direction");
+    conversations
+        .confirm_filing_decision(
+            household_id,
+            arrival.id,
+            FilingDecisionDirection {
+                file_name: "AGL bill unavailable.png".to_owned(),
+                cabinet_destination: "Household records/AGL bill unavailable.png".to_owned(),
+            },
+        )
+        .expect("confirm the Filing Decision");
+    let unavailable_root = local.path().join("missing-cabinet");
+    fs::write(
+        &unavailable_root,
+        b"this path is deliberately not a directory",
+    )
+    .expect("create an unavailable Cabinet path");
+    let unavailable = conversations
+        .file_document(household_id, arrival.id, &unavailable_root)
+        .expect("stage the filing retry without redirecting the Cabinet");
+    assert_eq!(
+        unavailable.processing_state,
+        DocumentProcessingState::CabinetUnavailable,
+    );
+
+    let memory =
+        PortableMemoryStore::open(&database, device).expect("open portable memory locally");
+    assert!(matches!(
+        memory.capture_owned_state(
+            household_id,
+            &unavailable_root,
+            &conversations,
+            &intelligence,
+        ),
+        Err(PortableMemoryError::CabinetUnavailable)
+    ));
+    assert!(memory
+        .list_events(household_id)
+        .expect("read local-first portable events")
+        .iter()
+        .any(|event| matches!(
+            event.fact,
+            PortableFact::ExecutionOutcome {
+                outcome: PortableExecutionOutcomeKind::CabinetUnavailable,
+                ..
+            }
+        )));
+
+    conversations
+        .resume_document_filings(household_id, cabinet.path())
+        .expect("resume filing when the Cabinet returns");
+    memory
+        .capture_owned_state(household_id, cabinet.path(), &conversations, &intelligence)
+        .expect("capture the resumed filing result");
+    let projection = memory
+        .household_projection(household_id)
+        .expect("project the resumed filing result");
+    assert!(projection.execution_outcomes.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::ExecutionOutcome {
+            outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+            ..
+        }
+    )));
+    assert!(projection.audit_events.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::AuditEvent {
+            event_kind: PortableAuditEventKind::DocumentFiled,
+            outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history() {
     let household_id = "rivera-household";
     let cabinet = tempfile::tempdir().expect("create the user-owned Cabinet");
@@ -1025,7 +1297,7 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
     assert_eq!(
         intelligence.evaluate_document(
             household_id,
-            selection,
+            selection.clone(),
             request("provider-failure"),
             CloudConsentDecision::AllowOnce,
             "account-sam",
@@ -1033,6 +1305,19 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
         ),
         Err(IntelligenceFailure::ProviderUnavailable),
     );
+    intelligence
+        .evaluate_document(
+            household_id,
+            selection,
+            request("completed"),
+            CloudConsentDecision::AllowOnce,
+            "account-sam",
+            None,
+        )
+        .expect("complete a deterministic Cloud Assistance request");
+    intelligence
+        .record_candidate_disposition(household_id, "completed", CandidateDisposition::Accepted)
+        .expect("record the member-accepted candidate");
 
     let memory = PortableMemoryStore::open(&database, device).expect("open portable memory");
     memory
@@ -1052,6 +1337,27 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
         event.fact,
         PortableFact::ExecutionOutcome {
             outcome: PortableExecutionOutcomeKind::ProviderUnavailable,
+            ..
+        }
+    )));
+    assert!(projection.execution_outcomes.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::ExecutionOutcome {
+            outcome: PortableExecutionOutcomeKind::KeptLocal,
+            ..
+        }
+    )));
+    assert!(projection.execution_outcomes.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::ExecutionOutcome {
+            outcome: PortableExecutionOutcomeKind::CloudAssistanceCompleted,
+            ..
+        }
+    )));
+    assert!(projection.audit_events.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::AuditEvent {
+            candidate_disposition: Some(PortableCandidateDisposition::Accepted),
             ..
         }
     )));
@@ -1394,6 +1700,7 @@ fn a_portable_event_with_a_substituted_device_predecessor_is_rejected() {
                     authority: PortableAuthority::MemberDirection,
                     subject_reference: reference("document-arrival-55"),
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
             },
         )
@@ -1415,6 +1722,7 @@ fn a_portable_event_with_a_substituted_device_predecessor_is_rejected() {
                     authority: PortableAuthority::MemberDirection,
                     subject_reference: reference("document-arrival-56"),
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
             },
         )
@@ -1476,6 +1784,7 @@ fn revoked_device_authorization_accepts_history_only_through_its_signed_cutoff()
                     authority: PortableAuthority::MemberDirection,
                     subject_reference: reference("document-before-revocation"),
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
             },
         )
@@ -1511,6 +1820,7 @@ fn revoked_device_authorization_accepts_history_only_through_its_signed_cutoff()
                     authority: PortableAuthority::MemberDirection,
                     subject_reference: reference("document-after-revocation"),
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
             },
         )
@@ -1550,6 +1860,7 @@ fn a_modified_portable_record_is_rejected_before_local_import() {
                     authority: PortableAuthority::MemberDirection,
                     subject_reference: reference("document-arrival-60"),
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
             },
         )

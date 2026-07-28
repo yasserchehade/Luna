@@ -87,6 +87,8 @@ pub struct DuplicateResolution {
     pub decision: DuplicateDecision,
     pub related_arrival_id: i64,
     pub related_original_name: String,
+    #[serde(default)]
+    pub duplicate_kind: Option<DuplicateKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2267,6 +2269,7 @@ impl<V: CredentialVault> ConversationStore<V> {
             decision,
             related_arrival_id,
             related_original_name: candidate.original_name.clone(),
+            duplicate_kind: Some(candidate.kind),
         });
         payload.processing_state = match decision {
             DuplicateDecision::DiscardNew | DuplicateDecision::LinkCopies => {

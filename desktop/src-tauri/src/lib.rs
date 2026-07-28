@@ -39,10 +39,11 @@ pub use intelligence::{
     MANAGED_INTELLIGENCE_PROVIDER_ID,
 };
 pub use portable_memory::{
-    PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff, PortableConflict,
-    PortableConflictResolutionDraft, PortableConsentDetails, PortableConsentField,
-    PortableConsentGrantKind, PortableConsentProvider, PortableConsentPurpose,
-    PortableConsentScope, PortableConsentState, PortableConversationReference,
+    PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
+    PortableCandidateDisposition, PortableConflict, PortableConflictResolutionDraft,
+    PortableConsentDetails, PortableConsentField, PortableConsentGrantKind,
+    PortableConsentProvider, PortableConsentPurpose, PortableConsentScope,
+    PortableConsentScopeEvidence, PortableConsentState, PortableConversationReference,
     PortableDocumentRelationshipKind, PortableEvent, PortableEventDraft,
     PortableExecutionOutcomeKind, PortableFact, PortableFilingRuleDefinition,
     PortableFilingRuleState, PortableHistoryEvent, PortableHouseholdProjection,
@@ -385,6 +386,8 @@ fn list_document_arrivals(
 #[tauri::command]
 fn resume_document_filings(
     store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
     cabinet: State<'_, CabinetState>,
     household_id: String,
 ) -> Result<(), String> {
@@ -396,7 +399,14 @@ fn resume_document_filings(
         })?;
     store
         .resume_document_filings(&household_id, configuration.root)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )
 }
 
 #[tauri::command]
@@ -693,9 +703,12 @@ fn list_cloud_assistance_audit_events(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn record_cloud_candidate_disposition(
     store: State<'_, IntelligenceState>,
     conversations: State<'_, ConversationState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
     sessions: State<'_, AccountSessionManager>,
     household_id: String,
     arrival_id: i64,
@@ -736,7 +749,14 @@ fn record_cloud_candidate_disposition(
     }
     store
         .record_candidate_disposition(&household_id, &request_id, disposition)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        conversations.inner(),
+        store.inner(),
+        cabinet.inner(),
+        &household_id,
+    )
 }
 
 #[tauri::command]

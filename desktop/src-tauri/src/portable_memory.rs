@@ -16,11 +16,11 @@ use crate::{
     conversation::{
         AuditAuthority as ConversationAuditAuthority, AuditEventKind, ConversationError,
         ConversationStore, DocumentArrival, DocumentProcessingState, DuplicateDecision,
-        RebuiltDocumentRelationship,
+        DuplicateKind, RebuiltDocumentRelationship,
     },
     intelligence::{
-        CloudAssistanceOutcome, CloudConsentDecision, CloudIntelligenceStore, ConsentGrantKind,
-        IntelligenceFailure,
+        CandidateDisposition, CloudAssistanceOutcome, CloudConsentDecision, CloudIntelligenceStore,
+        ConsentGrantKind, IntelligenceFailure,
     },
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -198,6 +198,9 @@ pub enum PortableConsentState {
 #[serde(rename_all = "camelCase")]
 pub enum PortableExecutionOutcomeKind {
     FiledAndVerified,
+    FilingRuleChanged,
+    CloudAssistanceCompleted,
+    KeptLocal,
     WaitingForCloudAssistance,
     CabinetUnavailable,
     ProviderUnavailable,
@@ -218,10 +221,23 @@ pub enum PortableAuditEventKind {
 #[serde(rename_all = "camelCase")]
 pub struct PortableConsentScope {
     pub document_type: Option<PortableReference>,
+    #[serde(default)]
+    pub document_arrival_id: Option<String>,
+    #[serde(default)]
+    pub future_scope: Option<String>,
+    #[serde(default)]
+    pub future_scope_evidence: Vec<PortableConsentScopeEvidence>,
     pub fields: Vec<PortableConsentField>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableConsentScopeEvidence {
+    pub field: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PortableConsentField {
     DocumentType,
@@ -231,6 +247,16 @@ pub enum PortableConsentField {
     Account,
     Amount,
     RelevantDates,
+    Additional(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortableCandidateDisposition {
+    Pending,
+    Accepted,
+    Corrected,
+    Rejected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +310,8 @@ pub enum PortableFact {
         authority: PortableAuthority,
         subject_reference: PortableReference,
         outcome: PortableExecutionOutcomeKind,
+        #[serde(default)]
+        candidate_disposition: Option<PortableCandidateDisposition>,
     },
     ConflictResolution {
         existing_event_id: PortableReference,
@@ -383,6 +411,8 @@ pub struct PortableHistoryEvent {
     pub authority: PortableAuthority,
     pub subject_reference: PortableReference,
     pub outcome: PortableExecutionOutcomeKind,
+    #[serde(default)]
+    pub candidate_disposition: Option<PortableCandidateDisposition>,
 }
 
 #[derive(Debug, Error)]
@@ -821,32 +851,6 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 None,
                 true,
             )?;
-
-            let grant_reference =
-                self.entity_reference(household_id, "rule-authority", rule.id, "grant")?;
-            let scope = [
-                "document-type",
-                "service-provider",
-                "addressee",
-                "property",
-                "account",
-            ]
-            .into_iter()
-            .map(|field| deterministic_reference("field", household_id, "rule-field", field))
-            .collect::<Result<Vec<_>, _>>()?;
-            cabinet_unavailable |= self.capture_fact(
-                household_id,
-                cabinet_root,
-                "rule-authority",
-                &rule.id.to_string(),
-                PortableFact::AuthorityGrant {
-                    grant_reference,
-                    subject_reference: taught_by,
-                    scope,
-                },
-                None,
-                true,
-            )?;
         }
 
         for arrival in conversations.list_document_arrivals(household_id)? {
@@ -895,26 +899,31 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 )?;
                 let relationship = match resolution.decision {
                     DuplicateDecision::UpdatedVersion => {
-                        PortableDocumentRelationshipKind::UpdatedVersion
+                        Some(PortableDocumentRelationshipKind::UpdatedVersion)
                     }
-                    DuplicateDecision::LinkCopies => PortableDocumentRelationshipKind::LinkedCopy,
+                    DuplicateDecision::LinkCopies => {
+                        Some(PortableDocumentRelationshipKind::LinkedCopy)
+                    }
                     DuplicateDecision::KeepBoth | DuplicateDecision::DiscardNew => {
-                        PortableDocumentRelationshipKind::ExactDuplicate
+                        (resolution.duplicate_kind == Some(DuplicateKind::Exact))
+                            .then_some(PortableDocumentRelationshipKind::ExactDuplicate)
                     }
                 };
-                cabinet_unavailable |= self.capture_fact(
-                    household_id,
-                    cabinet_root,
-                    "document-relationship",
-                    &arrival.id.to_string(),
-                    PortableFact::DocumentRelationship {
-                        document_reference: document_reference.clone(),
-                        related_document_reference,
-                        relationship,
-                    },
-                    conversation_reference.clone(),
-                    true,
-                )?;
+                if let Some(relationship) = relationship {
+                    cabinet_unavailable |= self.capture_fact(
+                        household_id,
+                        cabinet_root,
+                        "document-relationship",
+                        &arrival.id.to_string(),
+                        PortableFact::DocumentRelationship {
+                            document_reference: document_reference.clone(),
+                            related_document_reference,
+                            relationship,
+                        },
+                        conversation_reference.clone(),
+                        true,
+                    )?;
+                }
             }
             let outcome = match arrival.processing_state {
                 DocumentProcessingState::Filed => {
@@ -976,6 +985,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     },
                     subject_reference,
                     outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    candidate_disposition: None,
                 },
                 None,
                 false,
@@ -994,21 +1004,23 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     event_kind: PortableAuditEventKind::FilingRuleChanged,
                     authority: PortableAuthority::MemberDirection,
                     subject_reference,
-                    outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                    outcome: PortableExecutionOutcomeKind::FilingRuleChanged,
+                    candidate_disposition: None,
                 },
                 None,
                 false,
             )?;
         }
 
-        for consent in intelligence.list_consent_scopes(household_id)? {
+        for export in intelligence.portable_consent_exports(household_id)? {
+            let consent = export.scope;
             let grant_reference =
                 self.entity_reference(household_id, "consent", consent.id, "grant")?;
             let fields = consent
                 .fields
                 .iter()
-                .filter_map(|field| portable_consent_field(field))
-                .collect();
+                .map(|field| portable_consent_field(field))
+                .collect::<Result<Vec<_>, _>>()?;
             cabinet_unavailable |= self.capture_fact(
                 household_id,
                 cabinet_root,
@@ -1019,6 +1031,16 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     provider: portable_provider(&consent.provider_id)?,
                     scope: PortableConsentScope {
                         document_type: None,
+                        document_arrival_id: consent.document_arrival_id,
+                        future_scope: consent.future_scope,
+                        future_scope_evidence: export
+                            .future_scope_evidence
+                            .into_iter()
+                            .map(|evidence| PortableConsentScopeEvidence {
+                                field: evidence.field,
+                                value: evidence.value,
+                            })
+                            .collect(),
                         fields,
                     },
                     state: if consent.revoked {
@@ -1060,10 +1082,10 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 &event.request_id,
             )?;
             let outcome = match event.outcome {
-                CloudAssistanceOutcome::Completed => PortableExecutionOutcomeKind::FiledAndVerified,
-                CloudAssistanceOutcome::Denied => {
-                    PortableExecutionOutcomeKind::WaitingForCloudAssistance
+                CloudAssistanceOutcome::Completed => {
+                    PortableExecutionOutcomeKind::CloudAssistanceCompleted
                 }
+                CloudAssistanceOutcome::Denied => PortableExecutionOutcomeKind::KeptLocal,
                 CloudAssistanceOutcome::WaitingForRetry => {
                     PortableExecutionOutcomeKind::ProviderUnavailable
                 }
@@ -1091,6 +1113,12 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     authority: PortableAuthority::MemberDirection,
                     subject_reference,
                     outcome,
+                    candidate_disposition: Some(match event.candidate_disposition {
+                        CandidateDisposition::Pending => PortableCandidateDisposition::Pending,
+                        CandidateDisposition::Accepted => PortableCandidateDisposition::Accepted,
+                        CandidateDisposition::Corrected => PortableCandidateDisposition::Corrected,
+                        CandidateDisposition::Rejected => PortableCandidateDisposition::Rejected,
+                    }),
                 },
                 None,
                 false,
@@ -1112,6 +1140,9 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                         provider: portable_provider(&event.provider_id)?,
                         scope: PortableConsentScope {
                             document_type: None,
+                            document_arrival_id: Some(event.document_arrival_id),
+                            future_scope: None,
+                            future_scope_evidence: Vec::new(),
                             fields: Vec::new(),
                         },
                         state: PortableConsentState::Denied,
@@ -1175,6 +1206,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     authority,
                     subject_reference,
                     outcome,
+                    candidate_disposition,
                 } => Some(PortableHistoryEvent {
                     event_id: event.event_id,
                     occurred_at: event.occurred_at,
@@ -1182,6 +1214,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     authority,
                     subject_reference,
                     outcome,
+                    candidate_disposition,
                 }),
                 _ => None,
             })
@@ -1671,6 +1704,17 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 local_id,
                 rule_reference.as_str(),
             )?;
+            let fingerprint = sha256_hex(&serde_json::to_vec(&(
+                &event.fact,
+                &Option::<PortableConversationReference>::None,
+            ))?);
+            self.save_export(
+                household_id,
+                "filing-rule",
+                &local_id.to_string(),
+                &fingerprint,
+                event,
+            )?;
             visible_rule_ids.push(local_id);
         }
         let all_bound_rule_ids = self.bound_local_ids(household_id, "filing-rule")?;
@@ -1709,6 +1753,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     authority,
                     subject_reference,
                     outcome,
+                    candidate_disposition,
                 } = &event.fact
                 else {
                     return None;
@@ -1720,6 +1765,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     authority: authority.clone(),
                     subject_reference: subject_reference.clone(),
                     outcome: outcome.clone(),
+                    candidate_disposition: *candidate_disposition,
                 })
             })
             .collect::<Vec<_>>();
@@ -1749,6 +1795,17 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 details,
             )?;
             self.bind_imported_entity(household_id, "consent", local_id, grant_reference.as_str())?;
+            let fingerprint = sha256_hex(&serde_json::to_vec(&(
+                &event.fact,
+                &Option::<PortableConversationReference>::None,
+            ))?);
+            self.save_export(
+                household_id,
+                "consent",
+                &local_id.to_string(),
+                &fingerprint,
+                event,
+            )?;
         }
         Ok(())
     }
@@ -1939,22 +1996,24 @@ fn portable_provider(provider_id: &str) -> Result<PortableConsentProvider, Porta
     }
 }
 
-fn portable_consent_field(field: &str) -> Option<PortableConsentField> {
-    match field
+fn portable_consent_field(field: &str) -> Result<PortableConsentField, PortableMemoryError> {
+    let normalized = match field
         .trim()
         .to_ascii_lowercase()
         .replace(['_', '-', ' '], "")
         .as_str()
     {
-        "documenttype" => Some(PortableConsentField::DocumentType),
-        "serviceprovider" => Some(PortableConsentField::ServiceProvider),
-        "addressee" => Some(PortableConsentField::Addressee),
-        "property" => Some(PortableConsentField::Property),
-        "account" => Some(PortableConsentField::Account),
-        "amount" => Some(PortableConsentField::Amount),
-        "relevantdates" => Some(PortableConsentField::RelevantDates),
-        _ => None,
-    }
+        "documenttype" => PortableConsentField::DocumentType,
+        "serviceprovider" => PortableConsentField::ServiceProvider,
+        "addressee" => PortableConsentField::Addressee,
+        "property" => PortableConsentField::Property,
+        "account" => PortableConsentField::Account,
+        "amount" => PortableConsentField::Amount,
+        "relevantdates" => PortableConsentField::RelevantDates,
+        _ if portable_text(field, 256) => PortableConsentField::Additional(field.trim().to_owned()),
+        _ => return Err(PortableMemoryError::SensitiveMaterial),
+    };
+    Ok(normalized)
 }
 
 fn portable_column_exists(
@@ -2370,6 +2429,23 @@ fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
                     .document_type
                     .as_ref()
                     .is_none_or(|reference| reference.kind() == "document-type")
+                && scope
+                    .document_arrival_id
+                    .as_deref()
+                    .is_none_or(valid_portable_identifier)
+                && scope
+                    .future_scope
+                    .as_deref()
+                    .is_none_or(|value| portable_text(value, 512))
+                && scope.future_scope_evidence.len() <= 32
+                && scope.future_scope_evidence.iter().all(|evidence| {
+                    valid_portable_identifier(&evidence.field)
+                        && portable_text(&evidence.value, 1024)
+                })
+                && scope.fields.iter().all(|field| match field {
+                    PortableConsentField::Additional(field) => portable_text(field, 256),
+                    _ => true,
+                })
         }
         PortableFact::ExecutionOutcome {
             subject_reference, ..
@@ -2880,6 +2956,7 @@ mod tests {
                 authority: PortableAuthority::MemberDirection,
                 subject_reference: reference("document", 1),
                 outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+                candidate_disposition: None,
             },
             digest: digest.to_owned(),
         }
@@ -2958,19 +3035,22 @@ mod tests {
             event_kind: PortableAuditEventKind::FilingRuleChanged,
             authority: PortableAuthority::MemberDirection,
             subject_reference: reference("filing-rule", 3),
-            outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+            outcome: PortableExecutionOutcomeKind::FilingRuleChanged,
+            candidate_disposition: None,
         }));
         assert!(valid_fact_reference_kinds(&PortableFact::AuditEvent {
             event_kind: PortableAuditEventKind::ConsentChanged,
             authority: PortableAuthority::AuthorityGrant,
             subject_reference: reference("grant", 4),
             outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+            candidate_disposition: None,
         }));
         assert!(!valid_fact_reference_kinds(&PortableFact::AuditEvent {
             event_kind: PortableAuditEventKind::ConsentChanged,
             authority: PortableAuthority::AuthorityGrant,
             subject_reference: reference("document", 4),
             outcome: PortableExecutionOutcomeKind::FiledAndVerified,
+            candidate_disposition: None,
         }));
     }
 }
