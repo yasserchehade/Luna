@@ -5,7 +5,7 @@ alter table public.trusted_devices
   add column if not exists revoked_after_event_digest text;
 
 update public.trusted_devices
-set activated_key_epoch = 1
+set activated_key_epoch = key_epoch
 where activated_key_epoch is null;
 
 alter table public.trusted_devices
