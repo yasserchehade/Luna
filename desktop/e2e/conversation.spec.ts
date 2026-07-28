@@ -358,10 +358,28 @@ describe("Luna Conversation desk", () => {
     await assistance.$("button=Use existing Consent Grant").click();
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "free" | "ready"): void };
+      }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState("free");
+    });
     await $("button[aria-label='Options']").click();
     await $("button[aria-label='Cloud assistance options']").click();
-    const cloudOptions = $("section[aria-label='Cloud assistance']");
+    let cloudOptions = $("section[aria-label='Cloud assistance']");
+    await expect(cloudOptions).toHaveText(expect.stringContaining("Managed access not included"));
+    await cloudOptions.$("button=Start Paddle sandbox checkout").click();
+    await expect(cloudOptions.$("a=Continue to Paddle sandbox")).toBeDisplayed();
+    await expect(cloudOptions).toHaveText(expect.stringContaining("No real charge"));
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "free" | "ready"): void };
+      }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState("ready");
+    });
+    await $("button[aria-label='Learned Filing Rules options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    cloudOptions = $("section[aria-label='Cloud assistance']");
     await expect(cloudOptions).toHaveText(expect.stringContaining("Managed access ready"));
+    await expect(cloudOptions).toHaveText(expect.stringContaining("Complimentary beta"));
     await expect(cloudOptions).toHaveText(expect.stringContaining("You never need to enter a Luna access key"));
     const byokConnection = cloudOptions.$("section[aria-label='OpenAI bring-your-own-key connection']");
     await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));

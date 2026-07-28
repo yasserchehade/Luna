@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import type { AccountService, HouseholdSession } from "./account/accountService";
+import { synchronizeManagedIntelligenceAccess } from "./account/managedIntelligenceCoordinator";
 import { AccountFlow } from "./account/AccountFlow";
 import { TrustedDeviceFlow, TrustedDeviceUnlock } from "./trusted-device/TrustedDeviceFlow";
 import type { TrustedDeviceService } from "./trusted-device/trustedDeviceService";
@@ -136,6 +137,12 @@ export default function App({ accountService, cabinetService, conversationServic
           trustedDevices,
         );
       }
+      await synchronizeManagedIntelligenceAccess(
+        accountService,
+        conversationService,
+        trustedDeviceService,
+        unlockedSession,
+      );
       setCoordinationNotice("");
     } catch {
       setCoordinationNotice(

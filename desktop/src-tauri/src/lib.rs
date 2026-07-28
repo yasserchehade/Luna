@@ -197,6 +197,18 @@ fn remove_account_session_item(
 }
 
 #[tauri::command]
+fn sign_managed_intelligence_device_provisioning(
+    manager: State<'_, DeviceManager>,
+    household_id: String,
+    nonce: String,
+) -> Result<String, String> {
+    manager
+        .sign_managed_intelligence_device_provisioning(&household_id, &nonce)
+        .map(|signature| BASE64.encode(signature))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_setting(store: State<'_, SettingsStore>, key: String) -> Result<Option<String>, String> {
     store.get(&key).map_err(|error| error.to_string())
 }
@@ -491,6 +503,31 @@ fn clear_intelligence_provider_credential(
     current_household_actor(&sessions, &household_id)?;
     store
         .clear_provider_credential(&household_id, &provider_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_managed_intelligence_gateway_credential(
+    store: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    credential: String,
+) -> Result<(), String> {
+    current_household_actor(&sessions, &household_id)?;
+    store
+        .set_gateway_access_credential(&household_id, credential.trim().as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_managed_intelligence_gateway_credential(
+    store: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+) -> Result<(), String> {
+    current_household_actor(&sessions, &household_id)?;
+    store
+        .clear_gateway_access_credential(&household_id)
         .map_err(|error| error.to_string())
 }
 
@@ -1491,6 +1528,8 @@ pub fn run() {
         list_intelligence_provider_statuses,
         test_and_set_intelligence_provider_credential,
         clear_intelligence_provider_credential,
+        set_managed_intelligence_gateway_credential,
+        clear_managed_intelligence_gateway_credential,
         evaluate_document_with_cloud_assistance,
         list_cloud_consent_scopes,
         revoke_cloud_consent_scope,
@@ -1519,6 +1558,7 @@ pub fn run() {
         get_account_session_item,
         set_account_session_item,
         remove_account_session_item,
+        sign_managed_intelligence_device_provisioning,
         is_current_device_trusted,
         is_current_device_unlocked,
         current_device_public_key,

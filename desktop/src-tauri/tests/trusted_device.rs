@@ -102,6 +102,49 @@ fn a_confirmed_recovery_key_makes_the_first_device_trusted() {
 }
 
 #[test]
+fn an_unlocked_trusted_device_authorizes_its_managed_intelligence_challenge() {
+    let household_id = "13131313-1313-4313-8313-131313131313";
+    let manager = TrustedDeviceManager::new(MemoryCredentialVault::default());
+    let enrollment = manager
+        .enrol_first_device(household_id)
+        .expect("first device enrolment should succeed");
+    manager
+        .confirm_recovery_key(
+            household_id,
+            &enrollment.recovery_key,
+            &enrollment.recovery_envelope,
+        )
+        .expect("the Recovery Key should confirm");
+    manager
+        .set_current_key_epoch(household_id, 1)
+        .expect("the first key epoch should be recorded");
+    manager
+        .configure_device_pin(household_id, "246810")
+        .expect("PIN setup should complete trust");
+    manager
+        .unlock_device(household_id, "246810")
+        .expect("the Trusted Device should unlock");
+    let nonce = "d916a996-710d-4a43-84ac-b28427151a7f";
+
+    let signature = manager
+        .sign_managed_intelligence_device_provisioning(household_id, nonce)
+        .expect("the unlocked Trusted Device should sign the provisioning challenge");
+    let verifier = VerifyingKey::from_bytes(&enrollment.device_authorization_public_key)
+        .expect("the device authorization verifier should be valid");
+    let authorization = canonical_authorization(
+        "luna:managed-intelligence-device:v1:",
+        [
+            household_id.to_owned(),
+            enrollment.device_public_key.clone(),
+            nonce.to_owned(),
+        ],
+    );
+    verifier
+        .verify(&authorization, &Signature::from_bytes(&signature))
+        .expect("the signature should bind the Household, Trusted Device and one-time nonce");
+}
+
+#[test]
 fn an_unlocked_trusted_device_prepares_and_confirms_recovery_key_replacement() {
     let household_id = "12121212-1212-4212-8212-121212121212";
     let manager = TrustedDeviceManager::new(MemoryCredentialVault::default());

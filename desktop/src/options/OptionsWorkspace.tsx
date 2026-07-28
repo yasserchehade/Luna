@@ -58,6 +58,10 @@ export function OptionsWorkspace({
       : section === "rules" ? <FilingRulesOptions
         conversationService={conversationService}
         householdId={session.householdId}
-      /> : <CloudAssistanceOptions conversationService={conversationService} householdId={session.householdId} />}
+      /> : <CloudAssistanceOptions
+        accountService={accountService}
+        conversationService={conversationService}
+        householdId={session.householdId}
+      />}
   </main>;
 }

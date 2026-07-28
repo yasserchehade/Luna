@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "desktop/**"
+      - "supabase/functions/**"
       - "ops/litellm/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"

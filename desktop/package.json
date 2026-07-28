@@ -14,10 +14,11 @@
     "supabase:start": "supabase start --workdir ..",
     "supabase:stop": "supabase stop --workdir ..",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm test:rust && pnpm test:ui",
+    "test": "pnpm test:rust && pnpm test:ui && pnpm test:server-contract",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:ui": "node --import tsx --test src/options/CloudAssistanceOptions.test.ts",
     "test:account-contract": "node --import tsx --test account-contract/supabaseAccountService.test.ts",
+    "test:server-contract": "node --import tsx --test server-contract/*.test.ts",
     "test:e2e": "pnpm build:e2e && wdio run wdio.conf.ts --spec e2e/account.spec.ts && wdio run wdio.conf.ts --spec e2e/conversation.spec.ts",
     "tauri": "tauri"
   },

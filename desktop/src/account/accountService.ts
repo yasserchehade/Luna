@@ -98,6 +98,29 @@ export type HouseholdSession = {
   householdName: string;
 };
 
+export type HouseholdIntelligenceAccess = {
+  householdId: HouseholdId;
+  plan: "free" | "managed";
+  state: "free" | "checkoutPending" | "provisioning" | "ready" | "paymentProblem" | "ended";
+  entitlementSource: "complimentary" | "billing" | null;
+  requestLimit: number | null;
+  requestsUsed: number;
+  validUntil: string | null;
+};
+
+export type ManagedIntelligenceProvisioningChallenge = {
+  id: string;
+  nonce: string;
+  expiresAt: string;
+};
+
+export type AuthorizeManagedIntelligenceDeviceProvisioningRequest = {
+  devicePublicKey: string;
+  challengeId: string;
+  nonce: string;
+  authorizationSignature: string;
+};
+
 export type AccountSessionStorage = {
   getItem(key: string): string | null | Promise<string | null>;
   setItem(key: string, value: string): void | Promise<void>;
@@ -125,6 +148,18 @@ export interface AccountService {
   getTrustedDeviceKeyCoordination(publicKey: string): Promise<TrustedDeviceKeyCoordination>;
   replaceRecoveryKey(request: ReplaceRecoveryKeyRequest): Promise<void>;
   revokeTrustedDevice(request: RevokeTrustedDeviceRequest): Promise<TrustedDeviceRecord[]>;
+  getHouseholdIntelligenceAccess(): Promise<HouseholdIntelligenceAccess>;
+  createManagedIntelligenceCheckoutSession(): Promise<{ url: string }>;
+  createManagedIntelligenceCustomerPortalSession(): Promise<{ url: string }>;
+  beginManagedIntelligenceDeviceProvisioning(
+    devicePublicKey: string,
+  ): Promise<ManagedIntelligenceProvisioningChallenge>;
+  authorizeManagedIntelligenceDeviceProvisioning(
+    request: AuthorizeManagedIntelligenceDeviceProvisioningRequest,
+  ): Promise<{ householdId: HouseholdId; deviceId: string }>;
+  provisionManagedIntelligenceDeviceAccess(
+    request: AuthorizeManagedIntelligenceDeviceProvisioningRequest,
+  ): Promise<{ state: "ready"; credential: string }>;
   restoreSession(): Promise<HouseholdSession | null>;
   signIn(email: string, password: string): Promise<HouseholdSession>;
   signOut(): Promise<void>;
@@ -178,6 +213,24 @@ export const unavailableAccountService: AccountService = {
   },
   async revokeTrustedDevice() {
     throw new Error("Trusted Device revocation is not configured.");
+  },
+  async getHouseholdIntelligenceAccess() {
+    throw new Error("Household Intelligence access is not configured.");
+  },
+  async createManagedIntelligenceCheckoutSession() {
+    throw new Error("Managed Intelligence checkout is not configured.");
+  },
+  async createManagedIntelligenceCustomerPortalSession() {
+    throw new Error("Managed Intelligence subscription management is not configured.");
+  },
+  async beginManagedIntelligenceDeviceProvisioning() {
+    throw new Error("Managed Intelligence device provisioning is not configured.");
+  },
+  async authorizeManagedIntelligenceDeviceProvisioning() {
+    throw new Error("Managed Intelligence device provisioning is not configured.");
+  },
+  async provisionManagedIntelligenceDeviceAccess() {
+    throw new Error("Managed Intelligence device provisioning is not configured.");
   },
   async restoreSession() {
     return null;

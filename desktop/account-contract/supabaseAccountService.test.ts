@@ -11,8 +11,236 @@ import { SupabaseAccountService } from "../src/account/supabaseAccountService";
 const localConfig = readLocalSupabaseConfig();
 const supabaseUrl = process.env.SUPABASE_URL ?? localConfig.API_URL;
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? localConfig.PUBLISHABLE_KEY;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? localConfig.SERVICE_ROLE_KEY;
 const jwtSecret = process.env.SUPABASE_JWT_SECRET ?? localConfig.JWT_SECRET;
 const databaseUrl = process.env.SUPABASE_DB_URL ?? localConfig.DB_URL;
+
+test("complimentary Managed Intelligence is granted by an operator at the Household boundary", async () => {
+  assert.ok(supabaseUrl, "SUPABASE_URL is required");
+  assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
+  assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+
+  const email = `entitlement.${crypto.randomUUID()}@example.com`;
+  const password = "correct-horse-battery-staple-7";
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  await accountService.register({ organiserName: "Alex Morgan", email, password });
+  await accountService.verifyEmail(email, await readLatestEmailCode(email));
+  const household = await accountService.createHousehold("Morgan Household");
+
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "free",
+    state: "free",
+    entitlementSource: null,
+    requestLimit: null,
+    requestsUsed: 0,
+    validUntil: null,
+  });
+
+  const memberClient = createClient(supabaseUrl, publishableKey, {
+    auth: { persistSession: false },
+  });
+  assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
+  const forbiddenGrant = await memberClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_request_limit: 500,
+    requested_valid_until: "2026-09-01T00:00:00.000Z",
+  });
+  assert.ok(forbiddenGrant.error, "a Household Member must not grant its own entitlement");
+
+  const operatorClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  const grant = await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_request_limit: 500,
+    requested_valid_until: "2026-09-01T00:00:00.000Z",
+  });
+  assert.equal(grant.error, null);
+
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "managed",
+    state: "provisioning",
+    entitlementSource: "complimentary",
+    requestLimit: 500,
+    requestsUsed: 0,
+    validUntil: "2026-09-01T00:00:00+00:00",
+  });
+});
+
+test("verified Paddle events are idempotent and older subscription state cannot win", async () => {
+  assert.ok(supabaseUrl, "SUPABASE_URL is required");
+  assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
+  assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+
+  const email = `billing.${crypto.randomUUID()}@example.com`;
+  const password = "correct-horse-battery-staple-7";
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  await accountService.register({ organiserName: "Taylor Morgan", email, password });
+  await accountService.verifyEmail(email, await readLatestEmailCode(email));
+  const household = await accountService.createHousehold("Taylor Household");
+  const operatorClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  const memberClient = createClient(supabaseUrl, publishableKey, {
+    auth: { persistSession: false },
+  });
+  assert.equal((await memberClient.auth.signInWithPassword({ email, password })).error, null);
+  const billingContext = await memberClient.rpc("current_household_billing_context");
+  assert.equal(billingContext.error, null);
+  assert.deepEqual(Array.isArray(billingContext.data) ? billingContext.data[0] : billingContext.data, {
+    household_id: household.householdId,
+    organiser_email: email,
+    external_customer_id: null,
+    external_subscription_id: null,
+  });
+  const billingRunId = crypto.randomUUID();
+  const checkout = await operatorClient.rpc("record_paddle_checkout_pending", {
+    requested_household_id: household.householdId,
+    requested_transaction_id: `txn_${billingRunId}`,
+  });
+  assert.equal(checkout.error, null);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "checkoutPending");
+  const activeEvent = {
+    requested_event_id: `evt_active_${billingRunId}`,
+    requested_event_type: "subscription.updated",
+    requested_occurred_at: "2026-07-28T14:00:00.000Z",
+    requested_household_id: household.householdId,
+    requested_customer_id: `ctm_${billingRunId}`,
+    requested_subscription_id: `sub_${billingRunId}`,
+    requested_status: "active",
+    requested_valid_until: "2026-08-28T14:00:00.000Z",
+    requested_request_limit: 1_000,
+  };
+
+  const first = await operatorClient.rpc("apply_paddle_subscription_event", activeEvent);
+  assert.equal(first.error, null);
+  assert.equal(first.data, true);
+  assert.equal((await operatorClient.rpc("apply_paddle_subscription_event", activeEvent)).data, false);
+  assert.deepEqual(await accountService.getHouseholdIntelligenceAccess(), {
+    householdId: household.householdId,
+    plan: "managed",
+    state: "provisioning",
+    entitlementSource: "billing",
+    requestLimit: 1_000,
+    requestsUsed: 0,
+    validUntil: "2026-08-28T14:00:00+00:00",
+  });
+
+  const paymentProblem = await operatorClient.rpc("apply_paddle_subscription_event", {
+    ...activeEvent,
+    requested_event_id: `evt_past_due_${billingRunId}`,
+    requested_occurred_at: "2026-07-28T14:05:00.000Z",
+    requested_status: "past_due",
+  });
+  assert.equal(paymentProblem.error, null);
+  assert.equal(paymentProblem.data, true);
+
+  const staleActive = await operatorClient.rpc("apply_paddle_subscription_event", {
+    ...activeEvent,
+    requested_event_id: `evt_stale_active_${billingRunId}`,
+    requested_occurred_at: "2026-07-28T14:02:00.000Z",
+  });
+  assert.equal(staleActive.error, null);
+  assert.equal(staleActive.data, false);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "paymentProblem");
+});
+
+test("an entitled Trusted Device proves possession before managed access is provisioned", async () => {
+  assert.ok(supabaseUrl, "SUPABASE_URL is required");
+  assert.ok(publishableKey, "SUPABASE_PUBLISHABLE_KEY is required");
+  assert.ok(serviceRoleKey, "SUPABASE_SERVICE_ROLE_KEY is required");
+
+  const email = `provisioning.${crypto.randomUUID()}@example.com`;
+  const password = "correct-horse-battery-staple-7";
+  const accountService = new SupabaseAccountService(supabaseUrl, publishableKey);
+  await accountService.register({ organiserName: "Jordan Lee", email, password });
+  await accountService.verifyEmail(email, await readLatestEmailCode(email));
+  const household = await accountService.createHousehold("Lee Household");
+  const authenticator = await accountService.beginAuthenticatorEnrollment();
+  const totp = new OTPAuth.TOTP({
+    issuer: "Luna",
+    label: email,
+    algorithm: "SHA1",
+    digits: 6,
+    period: 30,
+    secret: OTPAuth.Secret.fromBase32(authenticator.secret),
+  });
+  await accountService.verifyAuthenticatorEnrollment(authenticator.factorId, totp.generate());
+  const deviceAuthority = createSigningAuthority();
+  const recoveryAuthority = createSigningAuthority();
+  const device = await accountService.registerFirstTrustedDevice({
+    label: "Jordan's PC",
+    publicKey: `age1${crypto.randomUUID()}`,
+    authorizationPublicKey: deviceAuthority.verificationKey,
+    keyEnvelope: "encrypted-device-envelope",
+    recoveryEnvelope: "encrypted-recovery-envelope",
+    recoveryVerificationKey: recoveryAuthority.verificationKey,
+  });
+  const operatorClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_request_limit: 500,
+    requested_valid_until: "2026-09-01T00:00:00.000Z",
+  })).error, null);
+
+  const challenge = await accountService.beginManagedIntelligenceDeviceProvisioning(device.publicKey);
+  const authorization = deviceAuthority.authorize(canonicalAuthorization(
+    "luna:managed-intelligence-device:v1:",
+    [household.householdId, device.publicKey, challenge.nonce],
+  ));
+  assert.deepEqual(await accountService.authorizeManagedIntelligenceDeviceProvisioning({
+    devicePublicKey: device.publicKey,
+    challengeId: challenge.id,
+    nonce: challenge.nonce,
+    authorizationSignature: authorization,
+  }), {
+    householdId: household.householdId,
+    deviceId: device.id,
+  });
+  assert.equal((await operatorClient.rpc("record_managed_intelligence_device_access", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+    requested_status: "ready",
+    requested_gateway_key_alias: `luna-managed-${device.id}`,
+  })).error, null);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "ready");
+  await assert.rejects(() => accountService.authorizeManagedIntelligenceDeviceProvisioning({
+    devicePublicKey: device.publicKey,
+    challengeId: challenge.id,
+    nonce: challenge.nonce,
+    authorizationSignature: authorization,
+  }));
+  assert.equal((await operatorClient.rpc("revoke_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+  })).error, null);
+  assert.equal((await accountService.getHouseholdIntelligenceAccess()).state, "ended");
+  const pendingRevocations = await operatorClient.rpc("pending_managed_intelligence_revocations");
+  assert.equal(pendingRevocations.error, null);
+  assert.deepEqual(pendingRevocations.data, [{
+    household_id: household.householdId,
+    device_id: device.id,
+    gateway_key_alias: `luna-managed-${device.id}`,
+  }]);
+  assert.equal((await operatorClient.rpc("record_managed_intelligence_gateway_revoked", {
+    requested_household_id: household.householdId,
+    requested_device_id: device.id,
+  })).error, null);
+  assert.deepEqual((await operatorClient.rpc("pending_managed_intelligence_revocations")).data, []);
+
+  assert.equal((await operatorClient.rpc("grant_complimentary_managed_intelligence", {
+    requested_household_id: household.householdId,
+    requested_request_limit: 250,
+    requested_valid_until: "2026-10-01T00:00:00.000Z",
+  })).error, null);
+  const replacementChallenge = await accountService.beginManagedIntelligenceDeviceProvisioning(
+    device.publicKey,
+  );
+  assert.ok(replacementChallenge.id, "a re-granted Household must be able to provision again");
+});
 
 test("a verified Luna Account returns to the same Household after signing in again", async () => {
   assert.ok(supabaseUrl, "SUPABASE_URL is required");
@@ -476,6 +704,7 @@ function readLocalSupabaseConfig(): {
   DB_URL?: string;
   JWT_SECRET?: string;
   PUBLISHABLE_KEY?: string;
+  SERVICE_ROLE_KEY?: string;
 } {
   if (process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY) return {};
 
@@ -491,6 +720,7 @@ function readLocalSupabaseConfig(): {
     DB_URL?: string;
     JWT_SECRET?: string;
     PUBLISHABLE_KEY?: string;
+    SERVICE_ROLE_KEY?: string;
   };
 }
 

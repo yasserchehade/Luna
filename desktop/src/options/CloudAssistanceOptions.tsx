@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import type {
+  AccountService,
+  HouseholdIntelligenceAccess,
+} from "../account/accountService";
+import type {
   CloudConsentScope,
   ConversationService,
   IntelligenceProviderStatus,
@@ -10,22 +14,35 @@ type CloudAssistanceDataService = Pick<
   "listIntelligenceProviderStatuses" | "listCloudConsentScopes"
 >;
 
+type CloudAssistanceAccountService = Pick<
+  AccountService,
+  | "getHouseholdIntelligenceAccess"
+  | "createManagedIntelligenceCheckoutSession"
+  | "createManagedIntelligenceCustomerPortalSession"
+>;
+
 export async function loadCloudAssistanceOptionsData(
   conversationService: CloudAssistanceDataService,
+  accountService: CloudAssistanceAccountService,
   householdId: string,
 ): Promise<{
+  access: HouseholdIntelligenceAccess | null;
   providers: IntelligenceProviderStatus[];
   scopes: CloudConsentScope[];
+  accessError: string;
   providerError: string;
   consentError: string;
 }> {
-  const [providersResult, scopesResult] = await Promise.allSettled([
+  const [accessResult, providersResult, scopesResult] = await Promise.allSettled([
+    accountService.getHouseholdIntelligenceAccess(),
     conversationService.listIntelligenceProviderStatuses(householdId),
     conversationService.listCloudConsentScopes(householdId),
   ]);
   return {
+    access: accessResult.status === "fulfilled" ? accessResult.value : null,
     providers: providersResult.status === "fulfilled" ? providersResult.value : [],
     scopes: scopesResult.status === "fulfilled" ? scopesResult.value : [],
+    accessError: accessResult.status === "rejected" ? String(accessResult.reason) : "",
     providerError: providersResult.status === "rejected" ? String(providersResult.reason) : "",
     consentError: scopesResult.status === "rejected" ? String(scopesResult.reason) : "",
   };
@@ -58,7 +75,31 @@ export function providerSetupAvailability(
   };
 }
 
-export function CloudAssistanceOptions({ conversationService, householdId }: { conversationService: ConversationService; householdId: string }) {
+function managedAccessStatus(
+  access: HouseholdIntelligenceAccess | null,
+  providerConfigured: boolean,
+): string {
+  if (!access) return "Managed access unavailable";
+  switch (access.state) {
+    case "checkoutPending": return "Checkout pending";
+    case "provisioning": return "Preparing managed access";
+    case "ready": return providerConfigured ? "Managed access ready" : "Preparing this Trusted Device";
+    case "paymentProblem": return "Payment needs attention";
+    case "ended": return "Managed access ended";
+    default: return "Managed access not included";
+  }
+}
+
+export function CloudAssistanceOptions({
+  accountService,
+  conversationService,
+  householdId,
+}: {
+  accountService: CloudAssistanceAccountService;
+  conversationService: ConversationService;
+  householdId: string;
+}) {
+  const [access, setAccess] = useState<HouseholdIntelligenceAccess | null>(null);
   const [providers, setProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [scopes, setScopes] = useState<CloudConsentScope[]>([]);
   const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
@@ -66,16 +107,21 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
   const [providerError, setProviderError] = useState("");
   const [consentError, setConsentError] = useState("");
   const [actionError, setActionError] = useState("");
+  const [accessError, setAccessError] = useState("");
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingSession, setBillingSession] = useState<{ url: string; kind: "checkout" | "portal" } | null>(null);
 
   const refresh = async () => {
-    const data = await loadCloudAssistanceOptionsData(conversationService, householdId);
+    const data = await loadCloudAssistanceOptionsData(conversationService, accountService, householdId);
+    setAccess(data.access);
     setProviders(data.providers);
     setScopes(data.scopes);
     setProviderError(data.providerError);
     setConsentError(data.consentError);
+    setAccessError(data.accessError);
   };
 
-  useEffect(() => { void refresh(); }, [conversationService, householdId]);
+  useEffect(() => { void refresh(); }, [accountService, conversationService, householdId]);
 
   const revoke = async (scopeId: number) => {
     try {
@@ -121,19 +167,53 @@ export function CloudAssistanceOptions({ conversationService, householdId }: { c
     }
   };
 
+  const createBillingSession = async (kind: "checkout" | "portal") => {
+    setBillingBusy(true);
+    try {
+      const session = kind === "checkout"
+        ? await accountService.createManagedIntelligenceCheckoutSession()
+        : await accountService.createManagedIntelligenceCustomerPortalSession();
+      setBillingSession({ url: session.url, kind });
+      setActionError("");
+    } catch {
+      setActionError("Luna couldn't open Paddle billing. Check the connection, then try again.");
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
   return <section className="cloud-assistance-options" aria-label="Cloud assistance">
     <h2>Cloud assistance</h2>
-    <p className="muted">Luna stays local by default. An eligible paid Household receives Luna-managed Intelligence automatically. A free or paid Household can connect its own supported provider here, or remain local-only.</p>
+    <p className="muted">Luna stays local by default. An eligible paid or complimentary beta Household receives Luna-managed Intelligence automatically. Any Household can connect its own supported provider here, or remain local-only.</p>
     <p className="muted">For eligible Household Plans, Luna enables managed access automatically on Trusted Devices. You never need to enter a Luna access key.</p>
+    {accessError && <p role="alert" className="error">Luna couldn&apos;t check this Household&apos;s managed access. Bring-your-own provider setup remains available.</p>}
     {providerError && <p role="alert" className="error">{cloudAssistanceLoadErrorMessage("providers", providerError)}</p>}
     <div className="cloud-provider-list">
       {providers.filter(({ descriptor }) => descriptor.managedByLuna).map(({ descriptor, configured }) => <article className="cloud-provider-card" key={descriptor.id}>
         <div className="cloud-provider-heading">
           <div><strong>{descriptor.name}</strong><span>{descriptor.description}</span></div>
-          <small>{configured ? "Managed access ready" : "Managed access unavailable"}</small>
+          <small>{managedAccessStatus(access, configured)}</small>
         </div>
+        {access?.entitlementSource === "complimentary" && access.state !== "ended" && <p>
+          <strong>Complimentary beta</strong>
+          {access.requestLimit !== null && <> · managed usage is capped for this prototype</>}
+        </p>}
         <p>Approved models: {descriptor.models.map(({ name }) => name).join(", ")}</p>
-        {!configured && <p className="muted">There is nothing to paste here. Luna will enable this automatically when the Household Plan and Trusted Device are eligible.</p>}
+        {(access?.state !== "ready" || !configured) && <p className="muted">There is nothing to paste here. Luna will enable this automatically when the Household Plan and Trusted Device are eligible.</p>}
+        {access?.state === "free" && <div className="default-intelligence-actions">
+          <button type="button" disabled={billingBusy} onClick={() => void createBillingSession("checkout")}>Start Paddle sandbox checkout</button>
+          <span className="muted">No real charge will be made in this prototype.</span>
+        </div>}
+        {access?.entitlementSource === "billing" && ["ready", "paymentProblem", "ended"].includes(access.state) && <button
+          type="button"
+          disabled={billingBusy}
+          onClick={() => void createBillingSession("portal")}
+        >Manage subscription in Paddle</button>}
+        {billingSession && <p>
+          <a href={billingSession.url} target="_blank" rel="noreferrer">
+            {billingSession.kind === "checkout" ? "Continue to Paddle sandbox" : "Continue to Paddle billing"}
+          </a>
+        </p>}
       </article>)}
     </div>
     <h3>Bring your own provider</h3>

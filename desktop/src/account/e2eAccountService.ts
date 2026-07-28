@@ -25,6 +25,7 @@ let recoveryEnvelope = "";
 let recoveryVerificationKey = "";
 let trustedDevices: TrustedDeviceRecord[] = [];
 const trustedDeviceEnvelopes = new Map<string, string>();
+let managedIntelligenceState: "free" | "ready" = "ready";
 
 type E2eRemoteRotation = {
   currentKeyEpoch: number;
@@ -33,6 +34,9 @@ type E2eRemoteRotation = {
 };
 
 export const e2eAccountTestControl = {
+  setManagedIntelligenceState(state: "free" | "ready") {
+    managedIntelligenceState = state;
+  },
   setCoordinationAvailable(available: boolean) {
     coordinationAvailable = available;
   },
@@ -250,6 +254,49 @@ export const e2eAccountService: AccountService = {
       return { ...device, keyEpoch: nextEpoch };
     });
     return trustedDevices.map((device) => ({ ...device }));
+  },
+  async getHouseholdIntelligenceAccess() {
+    if (!householdSession) throw new Error("Household membership is required.");
+    if (managedIntelligenceState === "free") {
+      return {
+        householdId: householdSession.householdId,
+        plan: "free",
+        state: "free",
+        entitlementSource: null,
+        requestLimit: null,
+        requestsUsed: 0,
+        validUntil: null,
+      };
+    }
+    return {
+      householdId: householdSession.householdId,
+      plan: "managed",
+      state: "ready",
+      entitlementSource: "complimentary",
+      requestLimit: 500,
+      requestsUsed: 0,
+      validUntil: "2026-09-01T00:00:00+00:00",
+    };
+  },
+  async createManagedIntelligenceCheckoutSession() {
+    return { url: "https://pay.paddle.io/checkout/e2e-sandbox-session" };
+  },
+  async createManagedIntelligenceCustomerPortalSession() {
+    return { url: "https://customer-portal.paddle.com/e2e-sandbox-session" };
+  },
+  async beginManagedIntelligenceDeviceProvisioning() {
+    return {
+      id: "e2e-managed-challenge",
+      nonce: "e2e-managed-nonce",
+      expiresAt: "2026-09-01T00:00:00+00:00",
+    };
+  },
+  async authorizeManagedIntelligenceDeviceProvisioning() {
+    if (!householdSession) throw new Error("Household membership is required.");
+    return { householdId: householdSession.householdId, deviceId: "device-sam-rivera" };
+  },
+  async provisionManagedIntelligenceDeviceAccess() {
+    return { state: "ready", credential: "sk-e2e-managed-device-key" };
   },
   async restoreSession() {
     return authenticatorVerified ? householdSession ?? null : null;
