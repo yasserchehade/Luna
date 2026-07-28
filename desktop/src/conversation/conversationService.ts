@@ -22,6 +22,7 @@ export type DocumentProcessingState =
   | "possibleDuplicate"
   | "readyToFile"
   | "filing"
+  | "cabinetUnavailable"
   | "filed"
   | "dismissed";
 

@@ -9,11 +9,11 @@ use std::{
 use luna_core::{
     AuditAuthority, AuditEventKind, CandidateDirectionInterpretation, CloudConsentDecision,
     CloudIntelligenceStore, ConfidenceState, ContextField, ContextRelevanceDirection,
-    ConversationStore, CredentialVault, DeterministicIntelligenceGateway, DocumentContextDirection,
-    DocumentIntelligenceService, DocumentProcessingState, DuplicateDecision, DuplicateKind,
-    FilingDecisionDirection, FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
-    IntelligenceProviderDescriptor, IntelligenceSelection, LocalOcr, TrustedDeviceManager,
-    VaultError,
+    ConversationError, ConversationStore, CredentialVault, DeterministicIntelligenceGateway,
+    DocumentContextDirection, DocumentIntelligenceService, DocumentProcessingState,
+    DuplicateDecision, DuplicateKind, FilingDecisionDirection, FilingRuleSummary,
+    IntelligenceFailure, IntelligenceModelDescriptor, IntelligenceProviderDescriptor,
+    IntelligenceSelection, LocalOcr, TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -1701,6 +1701,158 @@ fn filing_never_overwrites_an_existing_destination_and_keeps_staging_for_recover
 }
 
 #[test]
+fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
+    let directory = tempfile::tempdir().expect("temporary unavailable cabinet directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("rates.png");
+    let original = image_fixture(image::ImageFormat::Png);
+    fs::write(&source, &original).expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Council rates.png",
+    );
+    let unavailable = directory.path().join("Cabinet temporarily unavailable");
+
+    let waiting = store
+        .file_document("rivera-household", ready.id, &unavailable)
+        .expect("keep filing work waiting");
+
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
+    assert!(waiting.review_card.evidence.iter().any(|evidence| {
+        evidence.label == "Recovery status"
+            && evidence
+                .value
+                .contains("only the confirmed Cabinet Destination")
+    }));
+    assert!(ready.original_path.is_file());
+    assert_eq!(
+        store
+            .list_todo_items("rivera-household")
+            .expect("list waiting To-do item")
+            .len(),
+        1
+    );
+
+    store
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("retry after Cabinet returns");
+    let filed = store
+        .list_document_arrivals("rivera-household")
+        .expect("list retried filing")
+        .into_iter()
+        .find(|arrival| arrival.id == ready.id)
+        .expect("retried arrival");
+    assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
+    assert!(!ready.original_path.exists());
+
+    let unrelated_source = directory.path().join("unrelated.pdf");
+    fs::write(
+        &unrelated_source,
+        digital_pdf_with_text("An unfamiliar document"),
+    )
+    .expect("write unrelated fixture");
+    let conversation = store
+        .create_conversation("rivera-household", "Unrelated work")
+        .expect("create unrelated Conversation");
+    let unrelated = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unrelated_source,
+            &cabinet,
+        )
+        .expect("attach unrelated document");
+    assert!(store
+        .file_document("rivera-household", unrelated.id, &unavailable)
+        .is_err());
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list unrelated document")
+        .into_iter()
+        .find(|arrival| arrival.id == unrelated.id)
+        .expect("unchanged unrelated document");
+    assert_eq!(unchanged.processing_state, unrelated.processing_state);
+
+    let queued_source = directory.path().join("queued.jpg");
+    fs::write(&queued_source, image_fixture(image::ImageFormat::Jpeg))
+        .expect("write queued fixture");
+    let queued = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &queued_source,
+        "Queued rates.jpg",
+    );
+    fs::rename(&cabinet, &unavailable).expect("disconnect Cabinet");
+    assert!(store
+        .resume_document_filings("rivera-household", &cabinet)
+        .is_err());
+    let queued_waiting = store
+        .list_document_arrivals("rivera-household")
+        .expect("list queued work after batch retry")
+        .into_iter()
+        .find(|arrival| arrival.id == queued.id)
+        .expect("queued waiting document");
+    assert_eq!(
+        queued_waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
+    fs::rename(&unavailable, &cabinet).expect("restore Cabinet");
+    store
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("resume all filing work after Cabinet returns");
+}
+
+#[test]
+fn a_missing_staged_original_is_not_reported_as_a_cabinet_outage() {
+    let directory = tempfile::tempdir().expect("temporary missing Original directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("missing.png");
+    fs::write(&source, image_fixture(image::ImageFormat::Png)).expect("write source fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Missing Original.png",
+    );
+    fs::remove_file(&ready.original_path).expect("simulate missing staged Original");
+
+    let error = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect_err("reject missing staged Original");
+    assert!(matches!(
+        error,
+        ConversationError::OriginalVerificationFailed
+    ));
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list missing Original")
+        .into_iter()
+        .find(|arrival| arrival.id == ready.id)
+        .expect("missing Original arrival");
+    assert_eq!(
+        unchanged.processing_state,
+        DocumentProcessingState::ReadyToFile
+    );
+    assert!(unchanged
+        .review_card
+        .evidence
+        .iter()
+        .all(|evidence| evidence.label != "Recovery status"));
+}
+
+#[test]
 fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_remain_scoped() {
     let directory = tempfile::tempdir().expect("temporary duplicate directory");
     let cabinet = directory.path().join("Cabinet");
@@ -2213,15 +2365,19 @@ fn filing_recovers_after_the_verified_destination_was_written_before_event_recor
     let interrupted_temporary =
         section.join(format!(".luna-filing-{}-{}.tmp", ready.id, ready.checksum));
     fs::create_dir(&interrupted_temporary).expect("block temporary filing write");
-    store
+    let waiting = store
         .file_document("rivera-household", ready.id, &cabinet)
-        .expect_err("simulate interruption after durable Filing state");
+        .expect("keep interrupted filing waiting");
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
     assert_eq!(
         store
             .list_document_arrivals("rivera-household")
             .expect("list interrupted filing")[0]
             .processing_state,
-        DocumentProcessingState::Filing
+        DocumentProcessingState::CabinetUnavailable
     );
     fs::remove_dir(interrupted_temporary).expect("clear interrupted temporary write");
     fs::write(&destination, &original).expect("simulate verified write before durable event");

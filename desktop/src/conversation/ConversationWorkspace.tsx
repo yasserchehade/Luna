@@ -8,6 +8,7 @@ import type {
   CloudConsentScope,
   DocumentContextDirection,
   DocumentArrival,
+  DocumentProcessingState,
   DuplicateDecision,
   FilingDecisionDirection,
   IntelligenceProviderStatus,
@@ -18,10 +19,12 @@ type ConversationWorkspaceProps = {
   conversationService: ConversationService;
   destination: "Luna" | "To do";
   householdId: string;
+  cabinetRecoveryRequest: number;
   newConversationRequest: number;
   conversationSelectionRequest: { conversationId: number; request: number } | null;
   onRecentConversationsChange(conversations: Conversation[]): void;
   onActiveConversationChange(conversationId: number | null): void;
+  onCabinetUnavailable(): void;
   householdName: string;
   onOpenConversation(): void;
   onTodoCountChange(count: number): void;
@@ -35,9 +38,16 @@ const stateLabel = (arrival: DocumentArrival) => ({
   possibleDuplicate: "Needs duplicate decision",
   readyToFile: "Ready to file",
   filing: "Filing",
+  cabinetUnavailable: "Waiting for Cabinet",
   filed: "Filed",
   dismissed: "Dismissed",
 })[arrival.processingState];
+
+const canDismiss = (processingState: DocumentProcessingState) => (
+  processingState === "needsCloudConsent"
+  || processingState === "waitingForCloudAssistance"
+  || processingState === "needsMemberDirection"
+);
 
 const confidenceLabel = (arrival: DocumentArrival) => ({
   confirmed: "Confirmed",
@@ -67,6 +77,7 @@ type DocumentReviewEditorProps = {
   onConfirm(direction: FilingDecisionDirection): Promise<void>;
   onRecord(direction: DocumentContextDirection): Promise<void>;
   onResolveDuplicate(relatedArrivalId: number, decision: DuplicateDecision, rememberPreference: boolean): Promise<void>;
+  onRefresh(): Promise<void>;
 };
 
 const applyCloudFields = (
@@ -135,6 +146,7 @@ function DocumentReviewEditor({
   onConfirm,
   onRecord,
   onResolveDuplicate,
+  onRefresh,
 }: DocumentReviewEditorProps) {
   const context = arrival.reviewCard.context;
   const [direction, setDirection] = useState<DocumentContextDirection>(
@@ -243,6 +255,7 @@ function DocumentReviewEditor({
         consent,
         consent === "useExistingScope" ? existingCloudScope?.id ?? null : null,
       );
+      await onRefresh();
       if (!outcome.result) {
         setCloudReadyForMemberDirection(true);
         setCloudMessage("Kept local. No document information was sent to an Intelligence Provider.");
@@ -264,6 +277,7 @@ function DocumentReviewEditor({
       }
     } catch (reason) {
       setCloudError(String(reason));
+      await onRefresh();
     } finally {
       setCloudBusy(false);
     }
@@ -448,10 +462,12 @@ export function ConversationWorkspace({
   conversationService,
   destination,
   householdId,
+  cabinetRecoveryRequest,
   newConversationRequest,
   conversationSelectionRequest,
   onRecentConversationsChange,
   onActiveConversationChange,
+  onCabinetUnavailable,
   householdName,
   onOpenConversation,
   onTodoCountChange,
@@ -551,6 +567,9 @@ export function ConversationWorkspace({
     if (initialized.current) return;
     initialized.current = true;
     void conversationService.resumeDocumentFilings(householdId)
+      .catch(() => {
+        setError("Some Cabinet recovery work is still waiting.");
+      })
       .then(() => conversationService.listConversations(householdId, undefined, false))
       .then(async (loaded) => {
         if (loaded.length === 0) await createConversation();
@@ -589,6 +608,16 @@ export function ConversationWorkspace({
   }, [includeArchived, loadHouseholdWork, search]);
 
   useEffect(() => {
+    if (!initialized.current || cabinetRecoveryRequest === 0) return;
+    void conversationService.resumeDocumentFilings(householdId)
+      .catch(() => {
+        setError("Some Cabinet recovery work is still waiting.");
+      })
+      .then(() => loadHouseholdWork())
+      .catch(() => setError("Luna could not refresh staged Cabinet work."));
+  }, [cabinetRecoveryRequest, conversationService, householdId, loadHouseholdWork]);
+
+  useEffect(() => {
     if (newConversationRequest === lastNewRequest.current) return;
     lastNewRequest.current = newConversationRequest;
     void createConversation().catch(() => setError("Luna could not create a Conversation."));
@@ -608,7 +637,14 @@ export function ConversationWorkspace({
     if (!selectedConversationId) return;
     try {
       for (const path of paths) {
-        await conversationService.attachDocument(householdId, selectedConversationId, path);
+        const attached = await conversationService.attachDocument(
+          householdId,
+          selectedConversationId,
+          path,
+        );
+        if (attached.processingState === "cabinetUnavailable") {
+          onCabinetUnavailable();
+        }
       }
       setError("");
       const loadedArrivals = await loadHouseholdWork();
@@ -620,7 +656,13 @@ export function ConversationWorkspace({
     } catch (attachmentError) {
       setError(String(attachmentError));
     }
-  }, [conversationService, householdId, loadHouseholdWork, selectedConversationId]);
+  }, [
+    conversationService,
+    householdId,
+    loadHouseholdWork,
+    onCabinetUnavailable,
+    selectedConversationId,
+  ]);
 
   useEffect(() => {
     let disposed = false;
@@ -692,7 +734,14 @@ export function ConversationWorkspace({
     direction: FilingDecisionDirection,
   ) => {
     try {
-      await conversationService.confirmFilingDecision(householdId, arrivalId, direction);
+      const confirmed = await conversationService.confirmFilingDecision(
+        householdId,
+        arrivalId,
+        direction,
+      );
+      if (confirmed.processingState === "cabinetUnavailable") {
+        onCabinetUnavailable();
+      }
       setError("");
       setFocusedArrivalId(null);
       await loadHouseholdWork();
@@ -743,15 +792,15 @@ export function ConversationWorkspace({
 
   if (destination === "To do") {
     return <main className="conversation todo-view">
-      <header><div><small>Attention</small><h1>To do</h1></div><span>{todos.length} requiring direction</span></header>
+      <header><div><small>Attention</small><h1>To do</h1></div><span>{todos.length} requiring attention</span></header>
       {error && <p role="alert" className="session-notice">{error}</p>}
       <section className="todo-list" aria-label="To-do Items">
         {todos.length === 0 && <p className="empty-state">Nothing needs your attention.</p>}
         {todos.map((todo) => <article key={todo.arrivalId} data-arrival-id={todo.arrivalId}>
-          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : "Needs your direction"}</p></div>
+          <div><small>{todo.conversationTitle}</small><h2>{todo.documentName}</h2><p>{todo.processingState === "possibleDuplicate" ? "Needs duplicate decision" : todo.processingState === "cabinetUnavailable" ? "Waiting for Cabinet" : "Needs your direction"}</p></div>
           <div>
             <button type="button" onClick={() => void openTodo(todo)}>Open Conversation item</button>
-            <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>
+            {canDismiss(todo.processingState) && <button type="button" onClick={() => void dismissArrival(todo.arrivalId)}>Dismiss</button>}
           </div>
         </article>)}
       </section>
@@ -834,6 +883,7 @@ export function ConversationWorkspace({
       >
         <div>
           <small>Document Arrival</small><h2>{arrival.originalName}</h2><p>{stateLabel(arrival)}</p>
+          {arrival.processingState === "cabinetUnavailable" && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna kept this Original staged and will retry when the Cabinet returns.</p>}
           <DocumentReviewEditor
             arrival={arrival}
             conversationService={conversationService}
@@ -841,13 +891,10 @@ export function ConversationWorkspace({
             onConfirm={(direction) => confirmDecision(arrival.id, direction)}
             onRecord={(direction) => recordDirection(arrival.id, direction)}
             onResolveDuplicate={(relatedArrivalId, decision, rememberPreference) => resolveDuplicate(arrival.id, relatedArrivalId, decision, rememberPreference)}
+            onRefresh={async () => { await loadHouseholdWork(); }}
           />
         </div>
-        {(
-          arrival.processingState === "needsMemberDirection"
-          || arrival.processingState === "needsCloudConsent"
-          || arrival.processingState === "waitingForCloudAssistance"
-        ) && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
+        {canDismiss(arrival.processingState) && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
       </article>)}
     </section>
     <div className="attachment-zone">

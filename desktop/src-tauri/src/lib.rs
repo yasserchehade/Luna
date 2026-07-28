@@ -818,6 +818,31 @@ fn select_e2e_context_document_file(kind: String) -> Result<String, String> {
     Ok(document.to_string_lossy().into_owned())
 }
 
+#[cfg(feature = "e2e")]
+#[tauri::command]
+fn set_e2e_cabinet_availability(
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    available: bool,
+) -> Result<(), String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The E2E Household has no configured Cabinet.".to_owned())?;
+    let unavailable = configuration.root.with_extension("luna-e2e-unavailable");
+    if available {
+        if configuration.root.exists() {
+            return Ok(());
+        }
+        std::fs::rename(&unavailable, &configuration.root).map_err(|error| error.to_string())
+    } else {
+        if unavailable.exists() {
+            return Err("The E2E Cabinet is already unavailable.".to_owned());
+        }
+        std::fs::rename(&configuration.root, unavailable).map_err(|error| error.to_string())
+    }
+}
+
 #[tauri::command]
 fn select_document_files(_app: tauri::AppHandle) -> Result<Vec<String>, String> {
     #[cfg(feature = "e2e")]
@@ -1241,6 +1266,8 @@ pub fn run() {
         select_document_files,
         #[cfg(feature = "e2e")]
         select_e2e_context_document_file,
+        #[cfg(feature = "e2e")]
+        set_e2e_cabinet_availability,
         get_account_session_item,
         set_account_session_item,
         remove_account_session_item,

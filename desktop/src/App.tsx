@@ -39,6 +39,7 @@ export default function App({ accountService, cabinetService, conversationServic
   const [cabinetValidation, setCabinetValidation] = useState<CabinetValidation | null>();
   const [cabinetCheckFailed, setCabinetCheckFailed] = useState(false);
   const [cabinetCheckAttempt, setCabinetCheckAttempt] = useState(0);
+  const [cabinetRecoveryRequest, setCabinetRecoveryRequest] = useState(0);
   const [pendingTrustedSession, setPendingTrustedSession] = useState<{
     session: HouseholdSession;
     mode: TrustedDeviceMode;
@@ -62,6 +63,17 @@ export default function App({ accountService, cabinetService, conversationServic
   const [cloudAssistanceAuditEvents, setCloudAssistanceAuditEvents] = useState<CloudAssistanceAuditEvent[]>([]);
   const [filingRuleAuditEvents, setFilingRuleAuditEvents] = useState<FilingRuleAuditEvent[]>([]);
   const [documentSurfaceError, setDocumentSurfaceError] = useState("");
+
+  const handleCabinetConfigured = (configuration: NonNullable<CabinetValidation>["configuration"]) => {
+    setCabinetValidation({ configuration, availability: "ready" });
+    setCabinetRecoveryRequest((request) => request + 1);
+  };
+
+  const handleCabinetUnavailable = useCallback(() => {
+    setCabinetValidation((current) => (
+      current ? { ...current, availability: "unavailable" } : current
+    ));
+  }, []);
 
   const lockLuna = async () => {
     if (!session) return;
@@ -193,6 +205,42 @@ export default function App({ accountService, cabinetService, conversationServic
   }, [cabinetCheckAttempt, cabinetService, session?.householdId]);
 
   useEffect(() => {
+    if (!session || !cabinetValidation) return;
+    let active = true;
+    let checking = false;
+    const recheckCabinet = () => {
+      if (checking) return;
+      checking = true;
+      void cabinetService.validate(session.householdId)
+        .then(async (validation) => {
+          if (!active || !validation) return;
+          const cabinetReturned = (
+            cabinetValidation.availability === "unavailable"
+            && validation.availability === "ready"
+          );
+          const hasWaitingFiling = validation.availability === "ready"
+            && (await conversationService.listTodoItems(session.householdId))
+              .some(({ processingState }) => processingState === "cabinetUnavailable");
+          if (cabinetReturned || hasWaitingFiling) {
+            setCabinetRecoveryRequest((request) => request + 1);
+          }
+          setCabinetValidation(validation);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          checking = false;
+        });
+    };
+    const retryTimer = window.setInterval(recheckCabinet, 30_000);
+    window.addEventListener("online", recheckCabinet);
+    return () => {
+      active = false;
+      window.clearInterval(retryTimer);
+      window.removeEventListener("online", recheckCabinet);
+    };
+  }, [cabinetService, cabinetValidation, conversationService, session]);
+
+  useEffect(() => {
     if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
     const request = activeDestination === "Cabinet"
       ? conversationService.listFiledOriginals(session.householdId).then(setFiledOriginals)
@@ -299,14 +347,15 @@ export default function App({ accountService, cabinetService, conversationServic
     </section></main>;
   }
 
-  if (!cabinetValidation || cabinetValidation.availability === "unavailable") {
+  if (cabinetValidation === null) {
     return <CabinetSetup
       cabinetService={cabinetService}
-      onConfigured={(configuration) => setCabinetValidation({ configuration, availability: "ready" })}
+      onConfigured={handleCabinetConfigured}
       session={session}
-      unavailableRoot={cabinetValidation?.configuration.root}
     />;
   }
+
+  const cabinetUnavailable = cabinetValidation.availability === "unavailable";
 
   const initials = session.organiserName
     .split(/\s+/)
@@ -364,6 +413,11 @@ export default function App({ accountService, cabinetService, conversationServic
         onSignOut={() => signOut(session)}
         session={session}
         trustedDeviceService={trustedDeviceService}
+      /> : activeDestination === "Cabinet" && cabinetUnavailable ? <CabinetSetup
+        cabinetService={cabinetService}
+        onConfigured={handleCabinetConfigured}
+        session={session}
+        unavailableRoot={cabinetValidation.configuration.root}
       /> : activeDestination === "Cabinet" ? <main className="conversation cabinet-view">
         <header><div><small>Household cabinet</small><h1>Cabinet</h1></div><span>User-selected folder</span></header>
         <section className="cabinet-summary">
@@ -408,13 +462,16 @@ export default function App({ accountService, cabinetService, conversationServic
         </section>
       </main> : <>
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
+        {cabinetUnavailable && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna will keep local work staged and will not redirect it. Open Cabinet to choose the remembered location again.</p>}
         <ConversationWorkspace
           conversationService={conversationService}
           destination={activeDestination}
           householdId={session.householdId}
           householdName={session.householdName}
+          cabinetRecoveryRequest={cabinetRecoveryRequest}
           newConversationRequest={newConversationRequest}
           conversationSelectionRequest={conversationSelectionRequest}
+          onCabinetUnavailable={handleCabinetUnavailable}
           onRecentConversationsChange={setRecentConversations}
           onActiveConversationChange={setActiveConversationId}
           onOpenConversation={() => setActiveDestination("Luna")}
