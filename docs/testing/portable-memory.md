@@ -17,6 +17,7 @@ The suite demonstrates:
 - complete Filing Rule, relationship, reusable Consent Grant and History reconstruction into the recovered device's owning local stores, while explicit Authority Grant facts remain available to a future owning authority source rather than being inferred from rules;
 - actual use of a rebuilt Filing Rule to file a later matching Document automatically;
 - actual use of a rebuilt reusable Consent Grant for the same provider, model, disclosed fields and local scope evidence;
+- exclusion of device-local one-time grants from cross-device rebinding while their truthful execution and Audit History remain portable;
 - History presentation through the desktop History surface;
 - truthful filing-rule, cloud completion, keep-local and provider-unavailable outcomes, including later candidate acceptance;
 - local-first recording through a real unavailable-Cabinet filing and exact delivery plus outcome capture after Cabinet recovery;

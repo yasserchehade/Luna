@@ -297,7 +297,7 @@ export type PortableHistoryEvent = {
     | "filingRuleChanged"
     | "consentChanged"
     | "executionCompleted";
-  authority: "memberDirection" | "filingRule" | "authorityGrant";
+  authority: "memberDirection" | "filingRule" | "authorityGrant" | "consentGrant";
   subjectReference: string;
   outcome:
     | "filedAndVerified"

@@ -754,6 +754,9 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         state: &PortableConsentState,
         details: &PortableConsentDetails,
     ) -> Result<i64, IntelligenceFailure> {
+        if details.kind == PortableConsentGrantKind::OneTime {
+            return Err(IntelligenceFailure::ConsentRequired);
+        }
         let payload = ConsentPayload {
             provider_id: match provider {
                 PortableConsentProvider::LunaManaged => MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
@@ -763,7 +766,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             model_id: details.model_id.clone(),
             capability: IntelligenceCapability::DirectionInterpretation,
             purpose: capability_purpose(IntelligenceCapability::DirectionInterpretation).to_owned(),
-            document_arrival_id: scope.document_arrival_id.clone(),
+            document_arrival_id: None,
             future_scope: scope.future_scope.clone(),
             future_scope_evidence: scope
                 .future_scope_evidence

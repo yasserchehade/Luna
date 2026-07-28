@@ -397,16 +397,17 @@ fn resume_document_filings(
         .ok_or_else(|| {
             "A Cabinet must be configured before resuming document filing.".to_owned()
         })?;
-    store
+    let resume_result = store
         .resume_document_filings(&household_id, configuration.root)
-        .map_err(|error| error.to_string())?;
-    capture_portable_state(
+        .map_err(|error| error.to_string());
+    let capture_result = capture_portable_state(
         portable.inner(),
         store.inner(),
         intelligence.inner(),
         cabinet.inner(),
         &household_id,
-    )
+    );
+    resume_result.and(capture_result)
 }
 
 #[tauri::command]

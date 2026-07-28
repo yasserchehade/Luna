@@ -476,7 +476,6 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
             provider: PortableConsentProvider::OpenAi,
             scope: PortableConsentScope {
                 document_type: Some(typed_reference("document-type", "electricity-bill")),
-                document_arrival_id: Some("arrival-42".to_owned()),
                 future_scope: None,
                 future_scope_evidence: Vec::new(),
                 fields: vec![PortableConsentField::Amount],
@@ -1326,13 +1325,17 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
     let projection = memory
         .household_projection(household_id)
         .expect("project portable resilience history");
-    assert!(projection.consent_grants.iter().any(|event| matches!(
+    assert!(!projection.consent_grants.iter().any(|event| matches!(
         event.fact,
         PortableFact::ConsentGrant {
             state: PortableConsentState::Denied,
             ..
         }
     )));
+    assert!(
+        projection.consent_grants.is_empty(),
+        "device-local one-time grants must not be rebound on another device",
+    );
     assert!(projection.execution_outcomes.iter().any(|event| matches!(
         event.fact,
         PortableFact::ExecutionOutcome {
@@ -1358,6 +1361,23 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
         event.fact,
         PortableFact::AuditEvent {
             candidate_disposition: Some(PortableCandidateDisposition::Accepted),
+            authority: PortableAuthority::MemberDirection,
+            ..
+        }
+    )));
+    assert!(projection.audit_events.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::AuditEvent {
+            outcome: PortableExecutionOutcomeKind::ProviderUnavailable,
+            authority: PortableAuthority::ConsentGrant,
+            ..
+        }
+    )));
+    assert!(projection.audit_events.iter().any(|event| matches!(
+        event.fact,
+        PortableFact::AuditEvent {
+            outcome: PortableExecutionOutcomeKind::KeptLocal,
+            authority: PortableAuthority::MemberDirection,
             ..
         }
     )));

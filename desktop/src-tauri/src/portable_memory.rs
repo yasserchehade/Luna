@@ -19,8 +19,8 @@ use crate::{
         DuplicateKind, RebuiltDocumentRelationship,
     },
     intelligence::{
-        CandidateDisposition, CloudAssistanceOutcome, CloudConsentDecision, CloudIntelligenceStore,
-        ConsentGrantKind, IntelligenceFailure,
+        CandidateDisposition, CloudAssistanceOutcome, CloudIntelligenceStore, ConsentGrantKind,
+        IntelligenceFailure,
     },
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -156,6 +156,7 @@ pub enum PortableAuthority {
     MemberDirection,
     FilingRule,
     AuthorityGrant,
+    ConsentGrant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,8 +222,6 @@ pub enum PortableAuditEventKind {
 #[serde(rename_all = "camelCase")]
 pub struct PortableConsentScope {
     pub document_type: Option<PortableReference>,
-    #[serde(default)]
-    pub document_arrival_id: Option<String>,
     #[serde(default)]
     pub future_scope: Option<String>,
     #[serde(default)]
@@ -1014,6 +1013,9 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
 
         for export in intelligence.portable_consent_exports(household_id)? {
             let consent = export.scope;
+            if consent.kind == ConsentGrantKind::OneTime {
+                continue;
+            }
             let grant_reference =
                 self.entity_reference(household_id, "consent", consent.id, "grant")?;
             let fields = consent
@@ -1031,7 +1033,6 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     provider: portable_provider(&consent.provider_id)?,
                     scope: PortableConsentScope {
                         document_type: None,
-                        document_arrival_id: consent.document_arrival_id,
                         future_scope: consent.future_scope,
                         future_scope_evidence: export
                             .future_scope_evidence
@@ -1110,7 +1111,17 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 &event.id.to_string(),
                 PortableFact::AuditEvent {
                     event_kind: PortableAuditEventKind::ExecutionCompleted,
-                    authority: PortableAuthority::MemberDirection,
+                    authority: if matches!(
+                        event.outcome,
+                        CloudAssistanceOutcome::Denied | CloudAssistanceOutcome::Cancelled
+                    ) || matches!(
+                        event.candidate_disposition,
+                        CandidateDisposition::Accepted | CandidateDisposition::Corrected
+                    ) {
+                        PortableAuthority::MemberDirection
+                    } else {
+                        PortableAuthority::ConsentGrant
+                    },
                     subject_reference,
                     outcome,
                     candidate_disposition: Some(match event.candidate_disposition {
@@ -1123,49 +1134,6 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                 None,
                 false,
             )?;
-            if event.consent == CloudConsentDecision::KeepLocal {
-                let grant_reference = deterministic_reference(
-                    "grant",
-                    household_id,
-                    "denied-cloud-request",
-                    &event.request_id,
-                )?;
-                cabinet_unavailable |= self.capture_fact(
-                    household_id,
-                    cabinet_root,
-                    "denied-consent",
-                    &event.id.to_string(),
-                    PortableFact::ConsentGrant {
-                        grant_reference,
-                        provider: portable_provider(&event.provider_id)?,
-                        scope: PortableConsentScope {
-                            document_type: None,
-                            document_arrival_id: Some(event.document_arrival_id),
-                            future_scope: None,
-                            future_scope_evidence: Vec::new(),
-                            fields: Vec::new(),
-                        },
-                        state: PortableConsentState::Denied,
-                        details: PortableConsentDetails {
-                            model_id: event.model_id,
-                            capability: PortableIntelligenceCapability::DirectionInterpretation,
-                            purpose: PortableConsentPurpose::DocumentEvaluation,
-                            kind: PortableConsentGrantKind::OneTime,
-                            granted_by: deterministic_reference(
-                                "subject",
-                                household_id,
-                                "member",
-                                &event.granted_by,
-                            )?,
-                            created_at: portable_now(),
-                            consumed_at: None,
-                            revoked_at: None,
-                        },
-                    },
-                    None,
-                    false,
-                )?;
-            }
         }
 
         if cabinet_unavailable {
@@ -2429,10 +2397,6 @@ fn valid_fact_reference_kinds(fact: &PortableFact) -> bool {
                     .document_type
                     .as_ref()
                     .is_none_or(|reference| reference.kind() == "document-type")
-                && scope
-                    .document_arrival_id
-                    .as_deref()
-                    .is_none_or(valid_portable_identifier)
                 && scope
                     .future_scope
                     .as_deref()
