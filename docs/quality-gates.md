@@ -44,11 +44,24 @@ Tauri supports unit and integration testing through its mock runtime and desktop
 ### Every ticket pull request
 
 - Every acceptance criterion is demonstrated through an approved seam.
-- Windows and macOS CI are green.
+- The required Ubuntu core check is green: Rust formatting, the complete Rust suite, strict Clippy and TypeScript typechecking.
+- Windows and macOS desktop build checks are green.
+- Account-service lint and contract checks are green when account or Supabase paths change.
+- A final-head `Full desktop validation` run is green before merging changes that affect runtime behaviour, the interface, configuration or packaging.
 - The Standards review passes against repository guidance and the smell baseline.
 - The Spec review passes against the originating GitHub issue and parent specification.
 - No unresolved P0 or P1 finding remains.
 - CI output and any required manual evidence are attached to the issue.
+
+## GitHub Actions execution policy
+
+Pull requests run the fast core suite once on `ubuntu-latest` and compile the desktop application on `windows-latest` and `macos-latest`. The account-service workflow is path-scoped so unrelated desktop changes do not start Supabase. Documentation-only changes do not start desktop workflows.
+
+Full installed-application E2E and release-mode no-bundle builds run automatically after relevant changes reach `main`. They can also be dispatched manually against the final pull-request head. This avoids repeating the most expensive Windows and macOS work after every intermediate push without weakening the final acceptance gate: runtime, interface, configuration and packaging changes still require a successful manually dispatched full run before merge.
+
+All workflows use only standard GitHub-hosted runners. Dependency downloads use pnpm caching through `actions/setup-node`, while Rust registry, Git and suitable `target` outputs use `Swatinem/rust-cache`. Workflow-level concurrency cancels superseded runs on the same ref.
+
+Path-filtered workflow names must not be configured as unconditional repository ruleset checks because GitHub leaves a path-skipped required workflow pending. If required status checks are added, use always-created aggregate checks or rules scoped to the paths they protect.
 
 ## Milestone checkpoints
 
@@ -62,6 +75,14 @@ Tauri supports unit and integration testing through its mock runtime and desktop
 | Beta release | #16 | The repeated golden path passes using signed Windows and macOS installers; keyboard, accessibility, recovery, data-loss and security checks have recorded evidence. |
 
 A milestone-closing issue cannot close while its checkpoint is incomplete, even if its own narrower acceptance criteria pass.
+
+## Cloud Assistance environment gates
+
+The prototype's evaluated-real-provider criterion may be demonstrated by the pinned LiteLLM deployment running ephemerally on an operator's loopback interface. It must use the fixed synthetic canary, disposable credentials and the same privacy, exact-route, structured-result, usage and revocation checks as a remote deployment. This is release-environment evidence, not a standard-suite dependency or a supported desktop sidecar.
+
+Before Luna-managed Intelligence is available to external testers, the gateway must be remotely operated behind authenticated TLS ingress with managed secrets, attributable client credentials, abuse controls and verified body-free logs. Issue #53 owns this pre-production gate; it does not block completion of issue #13's prototype contract after the local real-provider canary passes.
+
+Managed gateway credentials are provisioned automatically and are not customer configuration. Bring-your-own Intelligence is enabled only through Options after the issue #55 canary proved BYOK-only process and virtual-key isolation, provider-key non-persistence, credential-free logs, missing-key failure and HTTP 403 for a managed route. Remote use still depends on issue #53's authenticated TLS ingress evidence.
 
 ## Severity and release policy
 

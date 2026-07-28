@@ -12,10 +12,19 @@ export type ConversationMessage = {
   conversationId: number;
   author: "member" | "luna";
   body: string;
-  linkedDocumentArrival: number | null;
 };
 
-export type DocumentProcessingState = "needsMemberDirection" | "possibleDuplicate" | "readyToFile" | "filing" | "waitingForConnectivity" | "cabinetUnavailable" | "filed" | "dismissed";
+export type DocumentProcessingState =
+  | "needsCloudConsent"
+  | "inspectingWithAssistance"
+  | "waitingForCloudAssistance"
+  | "needsMemberDirection"
+  | "possibleDuplicate"
+  | "readyToFile"
+  | "filing"
+  | "cabinetUnavailable"
+  | "filed"
+  | "dismissed";
 
 export type ConfidenceState = "confirmed" | "looksRight" | "needsChecking" | "unknown";
 
@@ -53,55 +62,6 @@ export type ClarificationQuestion = {
     | "amount"
     | "relevantDates";
   prompt: string;
-};
-
-export type ConversationPromptPurpose =
-  | "clarifyContext"
-  | "confirmFilingDecision"
-  | "learnFilingRule";
-
-export type ConversationExpectedResponse = "confirmation" | "contextValue";
-
-export type ConversationAction = "yes" | "no" | "alwaysDoThis" | "reviewDetails";
-
-export type ConversationPrompt = {
-  id: string;
-  purpose: ConversationPromptPurpose;
-  subject: string;
-  message: string;
-  expectedResponse: ConversationExpectedResponse;
-  allowedActions: ConversationAction[];
-  linkedDocumentArrival: number;
-  evidenceSummary: string[];
-  contextField: ClarificationQuestion["field"] | null;
-};
-
-export type MemberUtterance = {
-  conversationId: number;
-  message: string;
-  linkedPrompt: string;
-};
-
-export type MemberDirectionCommand =
-  | { type: "confirmContextField"; field: ClarificationQuestion["field"] }
-  | { type: "rejectContextField"; field: ClarificationQuestion["field"] }
-  | { type: "setContextField"; field: ClarificationQuestion["field"]; value: string | null }
-  | { type: "confirmFilingDecision" }
-  | { type: "learnFilingRule" }
-  | { type: "decline" };
-
-export type DocumentConversationView = {
-  understanding: string;
-  prompt: ConversationPrompt | null;
-  completionMessage: string | null;
-};
-
-export type ConversationTurnOutcome = {
-  status: "acceptedDirection" | "clarificationRequired" | "actionCompleted" | "actionRefused";
-  acceptedDirection: MemberDirectionCommand | null;
-  message: string;
-  nextPrompt: ConversationPrompt | null;
-  arrival: DocumentArrival;
 };
 
 export type FilingDecisionReview = {
@@ -187,26 +147,45 @@ export type IntelligenceProviderDescriptor = {
   id: string;
   name: string;
   description: string;
+  models: Array<{ id: string; name: string }>;
+  managedByLuna: boolean;
   authUrl: string | null;
 };
 
 export type IntelligenceProviderStatus = {
   descriptor: IntelligenceProviderDescriptor;
+  gatewayConfigured: boolean;
   configured: boolean;
 };
 
-export type IntelligenceRequest = {
-  purpose: string;
-  documentName: string;
-  mediaType: string;
-  evidence: Array<{ field: string; value: string }>;
-  unresolvedFields: string[];
+export type IntelligenceSelection = {
+  providerId: string;
+  modelId: string;
 };
 
 export type IntelligenceResult = {
+  requestId: string;
+  documentArrivalId: string;
   providerId: string;
+  modelId: string;
+  consentGrantId: number;
   fields: Record<string, string>;
-  evidence: Array<{ field: string; value: string }>;
+  evidence: Array<{ field: string; value: string; sourceReference: string | null }>;
+  sourceReferences: string[];
+  candidateDirection: {
+    documentType: string | null;
+    serviceProvider: string | null;
+    addressee: string | null;
+    property: string | null;
+    account: string | null;
+    amount: string | null;
+    relevantDates: string[];
+  } | null;
+  usage: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+    estimatedCostUsd: number | null;
+  };
 };
 
 export type CloudConsentDecision = "allowOnce" | "allowForScope" | "keepLocal" | "useExistingScope";
@@ -215,20 +194,41 @@ export type CloudConsentScope = {
   id: number;
   householdId: string;
   providerId: string;
+  modelId: string;
+  capability: "directionInterpretation";
   purpose: string;
+  documentArrivalId: string | null;
+  futureScope: string | null;
   fields: string[];
+  kind: "oneTime" | "reusable";
+  grantedBy: string;
   createdAt: string;
+  consumedAt: string | null;
+  revokedAt: string | null;
   revoked: boolean;
 };
 
 export type CloudAssistanceAuditEvent = {
   id: number;
   householdId: string;
+  requestId: string;
+  documentArrivalId: string;
   providerId: string;
+  modelId: string;
+  capability: "directionInterpretation";
   purpose: string;
   consent: CloudConsentDecision;
-  outcome: "completed" | "denied" | "waitingForConnectivity";
+  consentGrantId: number | null;
+  grantedBy: string;
+  outcome: "completed" | "denied" | "waitingForRetry" | "cancelled";
+  candidateDisposition: "pending" | "accepted" | "corrected" | "rejected";
   reason: string;
+  usage: IntelligenceResult["usage"];
+};
+
+export type CloudAssistanceResolution = {
+  result: IntelligenceResult | null;
+  processingState: DocumentProcessingState;
 };
 
 export type ManualMoveCandidate = {
@@ -313,11 +313,6 @@ export type DocumentArrival = {
   filedOriginal: FiledOriginal | null;
   duplicateReview: DuplicateReview | null;
   duplicateResolution: DuplicateResolution | null;
-  authoritySource: "memberDirection" | "filingRule" | null;
-  cloudAssistanceHistory: string[];
-  executionHistory: string[];
-  filingDecisionDeclined: boolean;
-  filingRuleDeclined: boolean;
 };
 
 export type TodoItem = {
@@ -339,12 +334,6 @@ export interface ConversationService {
   listMessages(householdId: string, conversationId: number): Promise<ConversationMessage[]>;
   selectDocumentFiles(): Promise<string[]>;
   attachDocument(householdId: string, conversationId: number, path: string): Promise<DocumentArrival>;
-  getDocumentConversation(householdId: string, arrivalId: number): Promise<DocumentConversationView>;
-  submitMemberUtterance(
-    householdId: string,
-    arrivalId: number,
-    utterance: MemberUtterance,
-  ): Promise<ConversationTurnOutcome>;
   resumeDocumentFilings(householdId: string): Promise<void>;
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
   listTodoItems(householdId: string): Promise<TodoItem[]>;
@@ -368,8 +357,6 @@ export interface ConversationService {
   listManualMoveCandidates(householdId: string): Promise<ManualMoveCandidate[]>;
   recordManualMoveDecision(householdId: string, arrivalId: number, teachesRule: boolean): Promise<DocumentArrival>;
   dismissDocumentArrival(householdId: string, arrivalId: number): Promise<void>;
-  markDocumentWaitingForConnectivity(householdId: string, arrivalId: number): Promise<DocumentArrival>;
-  resumeWaitingDocument(householdId: string, arrivalId: number): Promise<DocumentArrival>;
   recordMemberDirection(
     householdId: string,
     arrivalId: number,
@@ -382,12 +369,27 @@ export interface ConversationService {
   ): Promise<DocumentArrival>;
   listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
   listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
+  testAndSetIntelligenceProviderCredential(
+    householdId: string,
+    providerId: string,
+    credential: string,
+  ): Promise<void>;
+  clearIntelligenceProviderCredential(householdId: string, providerId: string): Promise<void>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
-  grantCloudConsentScope(householdId: string, providerId: string, purpose: string, fields: string[]): Promise<CloudConsentScope>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
-  setCloudProviderCredential(householdId: string, providerId: string, credential: string): Promise<void>;
-  clearCloudProviderCredential(householdId: string, providerId: string): Promise<void>;
-  evaluateCloudRequest(householdId: string, arrivalId: number, request: IntelligenceRequest, providerId: string, consent: CloudConsentDecision): Promise<IntelligenceResult>;
+  evaluateDocumentWithCloudAssistance(
+    householdId: string,
+    arrivalId: number,
+    selection: IntelligenceSelection,
+    consent: CloudConsentDecision,
+    existingConsentGrantId: number | null,
+  ): Promise<CloudAssistanceResolution>;
+  recordCloudCandidateDisposition(
+    householdId: string,
+    arrivalId: number,
+    requestId: string,
+    disposition: "accepted" | "corrected" | "rejected",
+  ): Promise<void>;
 }
 
 export const tauriConversationService: ConversationService = {
@@ -421,19 +423,6 @@ export const tauriConversationService: ConversationService = {
   },
   attachDocument(householdId, conversationId, path) {
     return invoke<DocumentArrival>("attach_document", { householdId, conversationId, path });
-  },
-  getDocumentConversation(householdId, arrivalId) {
-    return invoke<DocumentConversationView>("get_document_conversation", {
-      householdId,
-      arrivalId,
-    });
-  },
-  submitMemberUtterance(householdId, arrivalId, utterance) {
-    return invoke<ConversationTurnOutcome>("submit_member_utterance", {
-      householdId,
-      arrivalId,
-      utterance,
-    });
   },
   resumeDocumentFilings(householdId) {
     return invoke("resume_document_filings", { householdId });
@@ -500,12 +489,6 @@ export const tauriConversationService: ConversationService = {
   dismissDocumentArrival(householdId, arrivalId) {
     return invoke("dismiss_document_arrival", { householdId, arrivalId });
   },
-  markDocumentWaitingForConnectivity(householdId, arrivalId) {
-    return invoke<DocumentArrival>("mark_document_waiting_for_connectivity", { householdId, arrivalId });
-  },
-  resumeWaitingDocument(householdId, arrivalId) {
-    return invoke<DocumentArrival>("resume_waiting_document", { householdId, arrivalId });
-  },
   recordMemberDirection(householdId, arrivalId, direction) {
     return invoke<DocumentArrival>("record_member_direction", {
       householdId,
@@ -526,33 +509,39 @@ export const tauriConversationService: ConversationService = {
   listIntelligenceProviderStatuses(householdId) {
     return invoke<IntelligenceProviderStatus[]>("list_intelligence_provider_statuses", { householdId });
   },
-  listCloudConsentScopes(householdId) {
-    return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
-  },
-  grantCloudConsentScope(householdId, providerId, purpose, fields) {
-    return invoke<CloudConsentScope>("grant_cloud_consent_scope", {
+  testAndSetIntelligenceProviderCredential(householdId, providerId, credential) {
+    return invoke("test_and_set_intelligence_provider_credential", {
       householdId,
       providerId,
-      purpose,
-      fields,
+      credential,
     });
+  },
+  clearIntelligenceProviderCredential(householdId, providerId) {
+    return invoke("clear_intelligence_provider_credential", { householdId, providerId });
+  },
+  listCloudConsentScopes(householdId) {
+    return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
   },
   revokeCloudConsentScope(householdId, scopeId) {
     return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
   },
-  setCloudProviderCredential(householdId, providerId, credential) {
-    return invoke("set_cloud_provider_credential", { householdId, providerId, credential });
+  evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, existingConsentGrantId) {
+    return invoke<CloudAssistanceResolution>("evaluate_document_with_cloud_assistance", {
+      input: {
+        householdId,
+        arrivalId,
+        selection,
+        consent,
+        existingConsentGrantId,
+      },
+    });
   },
-  clearCloudProviderCredential(householdId, providerId) {
-    return invoke("clear_cloud_provider_credential", { householdId, providerId });
-  },
-  evaluateCloudRequest(householdId, arrivalId, request, providerId, consent) {
-    return invoke<IntelligenceResult>("evaluate_cloud_request", {
+  recordCloudCandidateDisposition(householdId, arrivalId, requestId, disposition) {
+    return invoke("record_cloud_candidate_disposition", {
       householdId,
       arrivalId,
-      request,
-      providerId,
-      consent,
+      requestId,
+      disposition,
     });
   },
 };

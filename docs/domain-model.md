@@ -91,7 +91,7 @@ A Filing Rule is independently visible, editable and revocable. It records the c
 
 ### Consent Grant
 
-A Consent Grant is independently visible and revocable. It names the Intelligence Provider, permitted content and scope; it never implies permission to use another provider.
+A Consent Grant is independently visible and revocable. It names the Intelligence Provider, approved model, capability, permitted content, granting member, creation time and document or future scope. A one-time grant is consumed by its first transmission attempt; a reusable grant remains restricted to its declared scope. It never implies permission to use another provider or model.
 
 ### Conversation
 
@@ -120,7 +120,7 @@ Portable Memory Records carry only typed durable facts and opaque owning-domain 
 11. **Duplicate identity is not assumed.** A Possible Duplicate remains distinct until a member or exact-byte match establishes its relationship.
 12. **Manual cabinet changes are authoritative.** Luna may ask whether a move teaches a rule but never silently reverses it.
 13. **Cloud assistance is provider-specific.** A Consent Grant for one Intelligence Provider cannot authorise another.
-14. **No silent fallback.** Provider unavailability creates a waiting state unless a member grants another provider.
+14. **No silent fallback.** Provider unavailability creates a waiting state unless a member grants another provider. Bring-your-own Intelligence can never fall back to a Luna-funded route.
 15. **Evidence is not authority.** Local or cloud interpretation can propose context but cannot replace Member Direction where direction is required.
 16. **Staging ends only after verification.** Luna removes a staged copy only after the cabinet copy is checksum-verified and the outcome is durably recorded.
 17. **Rules change prospectively.** Historical reorganisation requires a preview and explicit direction.
@@ -152,7 +152,10 @@ stateDiagram-v2
     NeedsCloudConsent --> NeedsMemberDirection: kept local
     InspectingWithAssistance --> NeedsMemberDirection
     InspectingWithAssistance --> ReadyToFile
+    InspectingWithAssistance --> WaitingForCloudAssistance: provider, gateway or result failure
     WaitingForConnectivity --> InspectingWithAssistance: connectivity restored
+    WaitingForCloudAssistance --> InspectingWithAssistance: same provider and model retried
+    WaitingForCloudAssistance --> NeedsMemberDirection: kept local
 
     PossibleDuplicate --> NeedsMemberDirection
     NeedsMemberDirection --> ReadyToFile: filing decision confirmed

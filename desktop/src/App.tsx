@@ -69,6 +69,12 @@ export default function App({ accountService, cabinetService, conversationServic
     setCabinetRecoveryRequest((request) => request + 1);
   };
 
+  const handleCabinetUnavailable = useCallback(() => {
+    setCabinetValidation((current) => (
+      current ? { ...current, availability: "unavailable" } : current
+    ));
+  }, []);
+
   const lockLuna = async () => {
     if (!session) return;
     await trustedDeviceService.lockDevice(session.householdId);
@@ -197,6 +203,42 @@ export default function App({ accountService, cabinetService, conversationServic
       active = false;
     };
   }, [cabinetCheckAttempt, cabinetService, session?.householdId]);
+
+  useEffect(() => {
+    if (!session || !cabinetValidation) return;
+    let active = true;
+    let checking = false;
+    const recheckCabinet = () => {
+      if (checking) return;
+      checking = true;
+      void cabinetService.validate(session.householdId)
+        .then(async (validation) => {
+          if (!active || !validation) return;
+          const cabinetReturned = (
+            cabinetValidation.availability === "unavailable"
+            && validation.availability === "ready"
+          );
+          const hasWaitingFiling = validation.availability === "ready"
+            && (await conversationService.listTodoItems(session.householdId))
+              .some(({ processingState }) => processingState === "cabinetUnavailable");
+          if (cabinetReturned || hasWaitingFiling) {
+            setCabinetRecoveryRequest((request) => request + 1);
+          }
+          setCabinetValidation(validation);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          checking = false;
+        });
+    };
+    const retryTimer = window.setInterval(recheckCabinet, 30_000);
+    window.addEventListener("online", recheckCabinet);
+    return () => {
+      active = false;
+      window.clearInterval(retryTimer);
+      window.removeEventListener("online", recheckCabinet);
+    };
+  }, [cabinetService, cabinetValidation, conversationService, session]);
 
   useEffect(() => {
     if (!session || (activeDestination !== "Cabinet" && activeDestination !== "History")) return;
@@ -400,9 +442,10 @@ export default function App({ accountService, cabinetService, conversationServic
           {auditEvents.length === 0 && duplicateAuditEvents.length === 0 && cloudAssistanceAuditEvents.length === 0 && filingRuleAuditEvents.length === 0
             ? <p className="empty-state">No consequential document actions yet.</p>
             : <>{cloudAssistanceAuditEvents.map((event) => <article className="history-event cloud-history-event" key={`cloud-${event.id}`}>
-              <strong>Cloud assistance {event.outcome === "completed" ? "completed" : event.outcome === "denied" ? "kept local" : "waiting"}</strong>
+              <strong>Cloud Assistance {event.outcome === "completed" ? "completed" : event.outcome === "denied" ? "kept local" : event.outcome === "cancelled" ? "cancelled" : "waiting to retry"}</strong>
               <p>{event.providerId} · {event.purpose} · {event.consent}</p>
-              <small>{event.reason}</small>
+              <small>Provider model: {event.modelId} · Consent Grant {event.consentGrantId ?? "not created"} · granted by {event.grantedBy} · candidate {event.candidateDisposition}</small>
+              <small>{event.reason}{event.usage.inputTokens != null || event.usage.outputTokens != null ? ` · ${event.usage.inputTokens ?? 0} input / ${event.usage.outputTokens ?? 0} output tokens` : ""}</small>
             </article>)}{duplicateAuditEvents.map((event) => <article className="history-event duplicate-history-event" key={`duplicate-${event.id}`}>
               <strong>{event.kind === "duplicatePreferenceApplied" ? "Duplicate preference applied" : "Duplicate decision recorded"}</strong>
               <p>{event.subject}</p>
@@ -428,6 +471,7 @@ export default function App({ accountService, cabinetService, conversationServic
           cabinetRecoveryRequest={cabinetRecoveryRequest}
           newConversationRequest={newConversationRequest}
           conversationSelectionRequest={conversationSelectionRequest}
+          onCabinetUnavailable={handleCabinetUnavailable}
           onRecentConversationsChange={setRecentConversations}
           onActiveConversationChange={setActiveConversationId}
           onOpenConversation={() => setActiveDestination("Luna")}

@@ -1,7 +1,9 @@
 mod account_session;
 mod cabinet;
 mod conversation;
+mod document_intelligence;
 mod intelligence;
+mod litellm;
 mod portable_memory;
 mod settings;
 mod trusted_device;
@@ -13,24 +15,28 @@ pub use cabinet::{
 };
 pub use conversation::{
     AuditAuthority, AuditEvent, AuditEventKind, ClarificationQuestion, ConfidenceState,
-    ContextField, ContextRelevanceDirection, Conversation, ConversationAction, ConversationError,
-    ConversationExpectedResponse, ConversationMessage, ConversationPrompt,
-    ConversationPromptPurpose, ConversationStore, ConversationTurnOutcome, ConversationTurnStatus,
-    DeterministicMemberDirectionInterpreter, DirectionInterpretation, DocumentArrival,
-    DocumentContextDirection, DocumentContextReview, DocumentConversationView,
+    ContextField, ContextRelevanceDirection, Conversation, ConversationError, ConversationMessage,
+    ConversationStore, DocumentArrival, DocumentContextDirection, DocumentContextReview,
     DocumentProcessingState, DuplicateAuditEvent, DuplicateAuditKind, DuplicateCandidate,
     DuplicateDecision, DuplicateKind, DuplicateResolution, DuplicateReview, FiledOriginal,
     FilingDecisionDirection, FilingDecisionReview, FilingRuleAuditEvent, FilingRuleAuditKind,
     FilingRuleReorganizationDocument, FilingRuleReorganizationPreview, FilingRuleSummary,
-    FilingRuleUpdate, InterpretationConfidence, LocalOcr, ManualMoveCandidate,
-    MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance, ReviewCard,
-    ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    FilingRuleUpdate, LocalOcr, ManualMoveCandidate, ReviewCard, ReviewEvidence, ReviewField,
+    TesseractOcr, TodoItem,
+};
+pub use document_intelligence::{
+    CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
 };
 pub use intelligence::{
+    AdditionalIntelligenceEvidence, CandidateDirectionInterpretation, CandidateDisposition,
     CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
-    CloudIntelligenceStore, IntelligenceEvidence, IntelligenceProviderDescriptor,
-    IntelligenceProviderStatus, IntelligenceRequest, IntelligenceResult, LunaManagedProvider,
-    ProviderError,
+    CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
+    DocumentContentExcerpt, IntelligenceCapability, IntelligenceEvidence,
+    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceGateway,
+    IntelligenceModelDescriptor, IntelligenceProviderDescriptor, IntelligenceProviderStatus,
+    IntelligenceRequest, IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection,
+    IntelligenceUsage, UntrustedIntelligenceResult, MANAGED_INTELLIGENCE_MODEL_ID,
+    MANAGED_INTELLIGENCE_PROVIDER_ID,
 };
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff, PortableConflict,
@@ -434,37 +440,83 @@ fn list_intelligence_provider_statuses(
 }
 
 #[tauri::command]
-fn evaluate_cloud_request(
-    intelligence: State<'_, IntelligenceState>,
-    conversations: State<'_, ConversationState>,
+fn test_and_set_intelligence_provider_credential(
+    store: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    provider_id: String,
+    credential: String,
+) -> Result<(), String> {
+    current_household_actor(&sessions, &household_id)?;
+    store
+        .test_and_set_provider_credential(&household_id, &provider_id, credential.trim().as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_intelligence_provider_credential(
+    store: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    provider_id: String,
+) -> Result<(), String> {
+    current_household_actor(&sessions, &household_id)?;
+    store
+        .clear_provider_credential(&household_id, &provider_id)
+        .map_err(|error| error.to_string())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudAssistanceCommand {
     household_id: String,
     arrival_id: i64,
-    request: IntelligenceRequest,
-    provider_id: String,
+    selection: IntelligenceSelection,
     consent: CloudConsentDecision,
-) -> Result<IntelligenceResult, String> {
-    let result = intelligence.evaluate(&household_id, &request, &provider_id, consent);
-    let summary = match (consent, result.is_ok()) {
-        (CloudConsentDecision::KeepLocal, _) => format!(
-            "Member chose Keep local for {provider_id}; no document evidence was sent."
-        ),
-        (CloudConsentDecision::AllowOnce, true) => {
-            format!("Member allowed {provider_id} once; the provider returned suggestions.")
-        }
-        (CloudConsentDecision::AllowForScope, true) => format!(
-            "Member allowed {provider_id} for this consent scope; the provider returned suggestions."
-        ),
-        (CloudConsentDecision::UseExistingScope, true) => format!(
-            "An existing consent scope allowed {provider_id}; the provider returned suggestions."
-        ),
-        (_, false) => format!(
-            "Consent was recorded for {provider_id}, but provider assistance did not complete and Luna did not switch providers."
-        ),
-    };
-    conversations
-        .record_cloud_assistance_event(&household_id, arrival_id, &summary)
-        .map_err(|error| error.to_string())?;
-    result.map_err(|error| error.to_string())
+    existing_consent_grant_id: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredHouseholdSession {
+    account_id: String,
+    household_id: String,
+}
+
+fn current_household_actor(
+    sessions: &AccountSessionManager,
+    household_id: &str,
+) -> Result<String, String> {
+    let stored = sessions
+        .get("luna-household-session")
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "A verified Luna Account session is required.".to_owned())?;
+    let session: StoredHouseholdSession = serde_json::from_str(&stored)
+        .map_err(|_| "The stored Luna Household session is invalid.".to_owned())?;
+    if session.household_id != household_id {
+        return Err("The Luna Account session does not belong to this Household.".to_owned());
+    }
+    Ok(session.account_id)
+}
+
+#[tauri::command]
+fn evaluate_document_with_cloud_assistance(
+    conversations: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    input: CloudAssistanceCommand,
+) -> Result<CloudAssistanceResolution, String> {
+    let granted_by = current_household_actor(sessions.inner(), &input.household_id)?;
+    DocumentIntelligenceService::new(conversations.inner().clone(), intelligence.inner().clone())
+        .evaluate_document(
+            &input.household_id,
+            input.arrival_id,
+            input.selection,
+            input.consent,
+            &granted_by,
+            input.existing_consent_grant_id,
+        )
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -474,19 +526,6 @@ fn list_cloud_consent_scopes(
 ) -> Result<Vec<CloudConsentScope>, String> {
     store
         .list_consent_scopes(&household_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn grant_cloud_consent_scope(
-    store: State<'_, IntelligenceState>,
-    household_id: String,
-    provider_id: String,
-    purpose: String,
-    fields: Vec<String>,
-) -> Result<CloudConsentScope, String> {
-    store
-        .grant_scope(&household_id, &provider_id, &purpose, fields)
         .map_err(|error| error.to_string())
 }
 
@@ -502,49 +541,59 @@ fn revoke_cloud_consent_scope(
 }
 
 #[tauri::command]
-fn set_cloud_provider_credential(
-    store: State<'_, IntelligenceState>,
-    device: State<'_, DeviceManager>,
-    household_id: String,
-    provider_id: String,
-    credential: String,
-) -> Result<(), String> {
-    if !device
-        .is_current_device_unlocked(&household_id)
-        .map_err(|error| error.to_string())?
-    {
-        return Err("Unlock this Trusted Device before changing provider credentials.".to_owned());
-    }
-    store
-        .set_provider_credential(&household_id, &provider_id, credential.as_bytes())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn clear_cloud_provider_credential(
-    store: State<'_, IntelligenceState>,
-    device: State<'_, DeviceManager>,
-    household_id: String,
-    provider_id: String,
-) -> Result<(), String> {
-    if !device
-        .is_current_device_unlocked(&household_id)
-        .map_err(|error| error.to_string())?
-    {
-        return Err("Unlock this Trusted Device before changing provider credentials.".to_owned());
-    }
-    store
-        .clear_provider_credential(&household_id, &provider_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn list_cloud_assistance_audit_events(
     store: State<'_, IntelligenceState>,
     household_id: String,
 ) -> Result<Vec<CloudAssistanceAuditEvent>, String> {
     store
         .list_audit_events(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_cloud_candidate_disposition(
+    store: State<'_, IntelligenceState>,
+    conversations: State<'_, ConversationState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    arrival_id: i64,
+    request_id: String,
+    disposition: CandidateDisposition,
+) -> Result<(), String> {
+    current_household_actor(sessions.inner(), &household_id)?;
+    if !matches!(
+        disposition,
+        CandidateDisposition::Accepted | CandidateDisposition::Corrected
+    ) {
+        return Err(
+            "Only accepted or corrected candidate Evidence can be recorded here.".to_owned(),
+        );
+    }
+    let event = store
+        .list_audit_events(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|event| event.request_id == request_id)
+        .ok_or_else(|| "The Cloud Assistance History event was not found.".to_owned())?;
+    if event.document_arrival_id != format!("arrival-{arrival_id}")
+        || event.outcome != CloudAssistanceOutcome::Completed
+        || event.candidate_disposition != CandidateDisposition::Pending
+    {
+        return Err("The candidate Evidence is not pending for this Document Arrival.".to_owned());
+    }
+    let arrival = conversations
+        .list_document_arrivals(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|arrival| arrival.id == arrival_id)
+        .ok_or_else(|| "The Document Arrival was not found.".to_owned())?;
+    if arrival.processing_state != DocumentProcessingState::ReadyToFile {
+        return Err(
+            "Member Direction must be recorded before candidate History changes.".to_owned(),
+        );
+    }
+    store
+        .record_candidate_disposition(&household_id, &request_id, disposition)
         .map_err(|error| error.to_string())
 }
 
@@ -576,76 +625,6 @@ fn dismiss_document_arrival(
 ) -> Result<(), String> {
     store
         .dismiss_document_arrival(&household_id, arrival_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn mark_document_waiting_for_connectivity(
-    store: State<'_, ConversationState>,
-    household_id: String,
-    arrival_id: i64,
-) -> Result<DocumentArrival, String> {
-    store
-        .mark_waiting_for_connectivity(&household_id, arrival_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn resume_waiting_document(
-    store: State<'_, ConversationState>,
-    household_id: String,
-    arrival_id: i64,
-) -> Result<DocumentArrival, String> {
-    store
-        .resume_waiting_for_connectivity(&household_id, arrival_id)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn get_document_conversation(
-    store: State<'_, ConversationState>,
-    cabinet: State<'_, CabinetState>,
-    household_id: String,
-    arrival_id: i64,
-) -> Result<DocumentConversationView, String> {
-    let configuration = cabinet
-        .load(&household_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "A Cabinet must be configured before handling a document.".to_owned())?;
-    let cabinet_section = configuration
-        .sections
-        .first()
-        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
-    store
-        .document_conversation_in_section(&household_id, arrival_id, cabinet_section)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn submit_member_utterance(
-    store: State<'_, ConversationState>,
-    cabinet: State<'_, CabinetState>,
-    household_id: String,
-    arrival_id: i64,
-    utterance: MemberUtterance,
-) -> Result<ConversationTurnOutcome, String> {
-    let configuration = cabinet
-        .load(&household_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "A Cabinet must be configured before handling a document.".to_owned())?;
-    let cabinet_section = configuration
-        .sections
-        .first()
-        .ok_or_else(|| "The Cabinet has no filing sections.".to_owned())?;
-    store
-        .submit_member_utterance(
-            &household_id,
-            arrival_id,
-            utterance,
-            &DeterministicMemberDirectionInterpreter,
-            configuration.root,
-            cabinet_section,
-        )
         .map_err(|error| error.to_string())
 }
 
@@ -692,9 +671,7 @@ fn confirm_filing_decision(
 
 #[cfg(feature = "e2e")]
 fn e2e_digital_pdf() -> Vec<u8> {
-    e2e_pdf_with_text(
-        "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Amount: $184.72; Relevant Date: 2026-07-15",
-    )
+    e2e_pdf_with_text("Luna E2E fixture")
 }
 
 #[tauri::command]
@@ -836,6 +813,10 @@ fn select_e2e_context_document_file(kind: String) -> Result<String, String> {
         "matching" => "Document Type: Electricity bill; Service Provider: Mercury Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
         "rule-match" => "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-16",
         "changed-provider" => "Document Type: Electricity bill; Service Provider: Origin Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-09-15",
+        "cloud-scope" => "Unfamiliar cloud scope notice 2026-10-01",
+        "cloud-reuse" => "Unfamiliar cloud reuse notice 2026-10-02",
+        "cloud-once" => "Unfamiliar cloud once notice 2026-10-03",
+        "cloud-local" => "Unfamiliar cloud local notice 2026-10-04",
         _ => return Err("Unknown E2E context document kind.".to_owned()),
     };
     let document = std::env::temp_dir().join(format!(
@@ -844,6 +825,31 @@ fn select_e2e_context_document_file(kind: String) -> Result<String, String> {
     ));
     std::fs::write(&document, e2e_pdf_with_text(text)).map_err(|error| error.to_string())?;
     Ok(document.to_string_lossy().into_owned())
+}
+
+#[cfg(feature = "e2e")]
+#[tauri::command]
+fn set_e2e_cabinet_availability(
+    cabinet: State<'_, CabinetState>,
+    household_id: String,
+    available: bool,
+) -> Result<(), String> {
+    let configuration = cabinet
+        .load(&household_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "The E2E Household has no configured Cabinet.".to_owned())?;
+    let unavailable = configuration.root.with_extension("luna-e2e-unavailable");
+    if available {
+        if configuration.root.exists() {
+            return Ok(());
+        }
+        std::fs::rename(&unavailable, &configuration.root).map_err(|error| error.to_string())
+    } else {
+        if unavailable.exists() {
+            return Err("The E2E Cabinet is already unavailable.".to_owned());
+        }
+        std::fs::rename(&configuration.root, unavailable).map_err(|error| error.to_string())
+    }
 }
 
 #[tauri::command]
@@ -1207,9 +1213,15 @@ pub fn run() {
         {
             let trusted_device = TrustedDeviceManager::new(E2eCredentialVault::default());
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
-            app.manage(CloudIntelligenceStore::open(
+            app.manage(CloudIntelligenceStore::open_with_gateway(
                 &database,
                 trusted_device.clone(),
+                DeterministicIntelligenceGateway::new(
+                    MANAGED_INTELLIGENCE_PROVIDER_ID,
+                    MANAGED_INTELLIGENCE_MODEL_ID,
+                    std::collections::BTreeMap::from([("amount".to_owned(), "$184.72".to_owned())]),
+                ),
+                intelligence::provider_catalog(),
             )?);
             app.manage(trusted_device);
         }
@@ -1241,13 +1253,13 @@ pub fn run() {
         list_duplicate_audit_events,
         list_intelligence_providers,
         list_intelligence_provider_statuses,
-        evaluate_cloud_request,
+        test_and_set_intelligence_provider_credential,
+        clear_intelligence_provider_credential,
+        evaluate_document_with_cloud_assistance,
         list_cloud_consent_scopes,
-        grant_cloud_consent_scope,
         revoke_cloud_consent_scope,
-        set_cloud_provider_credential,
-        clear_cloud_provider_credential,
         list_cloud_assistance_audit_events,
+        record_cloud_candidate_disposition,
         resolve_duplicate,
         list_filing_rules,
         update_filing_rule,
@@ -1258,15 +1270,13 @@ pub fn run() {
         list_manual_move_candidates,
         record_manual_move_decision,
         dismiss_document_arrival,
-        mark_document_waiting_for_connectivity,
-        resume_waiting_document,
-        get_document_conversation,
-        submit_member_utterance,
         record_member_direction,
         confirm_filing_decision,
         select_document_files,
         #[cfg(feature = "e2e")]
         select_e2e_context_document_file,
+        #[cfg(feature = "e2e")]
+        set_e2e_cabinet_availability,
         get_account_session_item,
         set_account_session_item,
         remove_account_session_item,

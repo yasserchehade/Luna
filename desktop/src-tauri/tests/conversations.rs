@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::Cursor,
     path::Path,
@@ -7,13 +7,13 @@ use std::{
 };
 
 use luna_core::{
-    AuditAuthority, AuditEventKind, ConfidenceState, ContextField, ContextRelevanceDirection,
-    ConversationAction, ConversationExpectedResponse, ConversationPromptPurpose, ConversationStore,
-    ConversationTurnStatus, CredentialVault, DeterministicMemberDirectionInterpreter,
-    DirectionInterpretation, DocumentContextDirection, DocumentProcessingState, DuplicateDecision,
-    DuplicateKind, FilingDecisionDirection, FilingRuleSummary, InterpretationConfidence, LocalOcr,
-    MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance, TrustedDeviceManager,
-    VaultError,
+    AuditAuthority, AuditEventKind, CandidateDirectionInterpretation, CloudConsentDecision,
+    CloudIntelligenceStore, ConfidenceState, ContextField, ContextRelevanceDirection,
+    ConversationError, ConversationStore, CredentialVault, DeterministicIntelligenceGateway,
+    DocumentContextDirection, DocumentIntelligenceService, DocumentProcessingState,
+    DuplicateDecision, DuplicateKind, FilingDecisionDirection, FilingRuleSummary,
+    IntelligenceFailure, IntelligenceModelDescriptor, IntelligenceProviderDescriptor,
+    IntelligenceSelection, LocalOcr, TrustedDeviceManager, VaultError,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -57,20 +57,6 @@ struct FixedLocalOcr(&'static str);
 impl LocalOcr for FixedLocalOcr {
     fn extract_text(&self, _original: &Path, _media_type: &str) -> Option<String> {
         Some(self.0.to_owned())
-    }
-}
-
-struct FixedDirectionInterpreter {
-    interpretation: DirectionInterpretation,
-}
-
-impl MemberDirectionInterpreter for FixedDirectionInterpreter {
-    fn interpret(
-        &self,
-        _prompt: &luna_core::ConversationPrompt,
-        _utterance: &MemberUtterance,
-    ) -> DirectionInterpretation {
-        self.interpretation.clone()
     }
 }
 
@@ -121,6 +107,377 @@ fn image_fixture(format: image::ImageFormat) -> Vec<u8> {
         .write_to(&mut bytes, format)
         .expect("encode image fixture");
     bytes.into_inner()
+}
+
+#[test]
+fn difficult_document_waits_for_cloud_consent_after_local_inspection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice 8472 from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (store, _) = open_conversation_store(&database);
+    let conversation = store
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+
+    assert_eq!(
+        arrival.processing_state,
+        DocumentProcessingState::NeedsCloudConsent
+    );
+}
+
+#[test]
+fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_document() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice 8472 from AGL for Sam Rivera"),
+    )
+    .expect("write difficult Document");
+    let (conversations, trusted_device) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    let gateway = DeterministicIntelligenceGateway::new(
+        "openai",
+        "gpt-4.1-mini",
+        BTreeMap::from([
+            ("documentType".to_owned(), "Electricity bill".to_owned()),
+            ("serviceProvider".to_owned(), "AGL".to_owned()),
+            ("addressee".to_owned(), "Sam Rivera".to_owned()),
+        ]),
+    );
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway.clone(),
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Evaluated test route".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Intelligence store");
+    let service = DocumentIntelligenceService::new(conversations.clone(), intelligence);
+
+    let outcome = service
+        .evaluate_document(
+            "rivera-household",
+            arrival.id,
+            IntelligenceSelection {
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+            },
+            CloudConsentDecision::AllowOnce,
+            "sam-rivera",
+            None,
+        )
+        .expect("evaluate difficult Document");
+
+    let result = outcome.result.expect("validated candidate result");
+    assert_eq!(
+        result
+            .candidate_direction
+            .as_ref()
+            .and_then(|candidate| candidate.service_provider.as_deref()),
+        Some("AGL")
+    );
+    let transmitted = gateway.requests();
+    assert_eq!(transmitted.len(), 1);
+    assert_eq!(
+        transmitted[0].document_arrival_id,
+        format!("arrival-{}", arrival.id)
+    );
+    assert!(transmitted[0]
+        .content_excerpts
+        .iter()
+        .all(|excerpt| excerpt.text.chars().count() <= 4_000));
+    let after = conversations
+        .list_document_arrivals("rivera-household")
+        .expect("list arrivals")
+        .into_iter()
+        .find(|candidate| candidate.id == arrival.id)
+        .expect("updated arrival");
+    assert_eq!(
+        after.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert!(after.filed_original.is_none());
+}
+
+#[test]
+fn invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, trusted_device) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    let gateway = DeterministicIntelligenceGateway::new(
+        "openai",
+        "gpt-4.1-mini",
+        BTreeMap::from([("amount".to_owned(), "not an amount".to_owned())]),
+    );
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway,
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Evaluated test route".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Intelligence store");
+    let history = intelligence.clone();
+    let service = DocumentIntelligenceService::new(conversations.clone(), intelligence);
+
+    assert!(service
+        .evaluate_document(
+            "rivera-household",
+            arrival.id,
+            IntelligenceSelection {
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+            },
+            CloudConsentDecision::AllowOnce,
+            "sam-rivera",
+            None,
+        )
+        .is_err());
+
+    let after = conversations
+        .list_document_arrivals("rivera-household")
+        .expect("list arrivals")
+        .into_iter()
+        .find(|candidate| candidate.id == arrival.id)
+        .expect("updated arrival");
+    assert_eq!(
+        after.processing_state,
+        DocumentProcessingState::WaitingForCloudAssistance
+    );
+    assert!(after.original_path.is_file());
+    let events = history
+        .list_audit_events("rivera-household")
+        .expect("list cloud assistance History");
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[0].outcome,
+        luna_core::CloudAssistanceOutcome::WaitingForRetry
+    );
+    assert_eq!(
+        events[0].candidate_disposition,
+        luna_core::CandidateDisposition::Rejected
+    );
+    assert_eq!(
+        events[1].outcome,
+        luna_core::CloudAssistanceOutcome::Completed
+    );
+    assert_eq!(
+        events[1].candidate_disposition,
+        luna_core::CandidateDisposition::Pending
+    );
+    assert_ne!(events[0].id, events[1].id);
+}
+
+#[test]
+fn invalid_candidate_calendar_date_is_rejected_by_document_handling() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, _) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    conversations
+        .begin_cloud_assistance("rivera-household", arrival.id)
+        .expect("begin Cloud Assistance");
+
+    assert!(conversations
+        .validate_candidate_direction(
+            "rivera-household",
+            arrival.id,
+            CandidateDirectionInterpretation {
+                relevant_dates: vec!["2026-02-30".to_owned()],
+                ..CandidateDirectionInterpretation::default()
+            },
+        )
+        .is_err());
+}
+
+#[test]
+fn candidate_cannot_replace_context_that_already_has_member_direction() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, _) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    conversations
+        .record_member_direction(
+            "rivera-household",
+            arrival.id,
+            DocumentContextDirection {
+                service_provider: Some("AGL".to_owned()),
+                service_provider_resolved: true,
+                service_provider_relevance: Some(ContextRelevanceDirection {
+                    subject: "AGL".to_owned(),
+                    explanation: "Household electricity provider".to_owned(),
+                }),
+                ..DocumentContextDirection::default()
+            },
+            "Bills & Services",
+        )
+        .expect("record existing Member Direction");
+    conversations
+        .begin_cloud_assistance("rivera-household", arrival.id)
+        .expect("begin Cloud Assistance");
+
+    assert!(conversations
+        .validate_candidate_direction(
+            "rivera-household",
+            arrival.id,
+            CandidateDirectionInterpretation {
+                service_provider: Some("Different provider".to_owned()),
+                ..CandidateDirectionInterpretation::default()
+            },
+        )
+        .is_err());
+}
+
+#[test]
+fn provider_failure_retries_only_the_selected_route_and_preserves_waiting_work() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("luna.db");
+    let cabinet = temporary.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Incoming")).expect("create Incoming folder");
+    let source = temporary.path().join("unfamiliar.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text("Quarterly notice from an unfamiliar issuer"),
+    )
+    .expect("write difficult Document");
+    let (conversations, trusted_device) = open_conversation_store(&database);
+    let conversation = conversations
+        .create_conversation("rivera-household", "Difficult Document")
+        .expect("create Conversation");
+    let arrival = conversations
+        .attach_document("rivera-household", conversation.id, &source, &cabinet)
+        .expect("attach difficult Document");
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
+    gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
+    let intelligence = CloudIntelligenceStore::open_with_gateway(
+        &database,
+        trusted_device,
+        gateway.clone(),
+        vec![IntelligenceProviderDescriptor {
+            id: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            description: "Evaluated test route".to_owned(),
+            models: vec![IntelligenceModelDescriptor {
+                id: "gpt-4.1-mini".to_owned(),
+                name: "GPT-4.1 mini".to_owned(),
+            }],
+            managed_by_luna: true,
+            auth_url: None,
+        }],
+    )
+    .expect("open Intelligence store");
+    let service = DocumentIntelligenceService::new(conversations.clone(), intelligence);
+
+    assert!(service
+        .evaluate_document(
+            "rivera-household",
+            arrival.id,
+            IntelligenceSelection {
+                provider_id: "openai".to_owned(),
+                model_id: "gpt-4.1-mini".to_owned(),
+            },
+            CloudConsentDecision::AllowOnce,
+            "sam-rivera",
+            None,
+        )
+        .is_err());
+
+    let requests = gateway.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|request| request.provider_id == "openai" && request.model_id == "gpt-4.1-mini"));
+    let after = conversations
+        .list_document_arrivals("rivera-household")
+        .expect("list arrivals")
+        .into_iter()
+        .find(|candidate| candidate.id == arrival.id)
+        .expect("updated arrival");
+    assert_eq!(
+        after.processing_state,
+        DocumentProcessingState::WaitingForCloudAssistance
+    );
+    assert_eq!(after.extracted_text, arrival.extracted_text);
+    assert!(after.original_path.is_file());
 }
 
 fn open_conversation_store(
@@ -368,7 +725,7 @@ fn a_document_arrival_and_one_todo_survive_conversation_deletion() {
     assert_eq!(arrival.original_name, "AGL bill.pdf");
     assert_eq!(
         arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
     let todos = store
         .list_todo_items("rivera-household")
@@ -843,6 +1200,8 @@ fn an_unfamiliar_document_review_represents_context_and_asks_only_filing_questio
             ContextField::Addressee,
             ContextField::Property,
             ContextField::Account,
+            ContextField::Amount,
+            ContextField::RelevantDates,
         ]
     );
 }
@@ -960,577 +1319,6 @@ fn a_new_service_provider_and_property_stay_unresolved_until_their_relevance_is_
     assert_eq!(
         reviewed.processing_state,
         DocumentProcessingState::NeedsMemberDirection
-    );
-}
-
-#[test]
-fn conversation_orchestration_presents_one_confirmation_for_a_complete_document() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("agl-july.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Amount: $184.72; Relevant Date: 2026-07-15",
-        ),
-    )
-    .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Electricity bill")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach AGL bill");
-
-    let view = store
-        .document_conversation("rivera-household", arrival.id)
-        .expect("derive Conversation view");
-    let prompt = view.prompt.expect("next conversational prompt");
-
-    assert_eq!(
-        prompt.purpose,
-        ConversationPromptPurpose::ConfirmFilingDecision
-    );
-    assert_eq!(
-        prompt.expected_response,
-        ConversationExpectedResponse::Confirmation
-    );
-    assert_eq!(prompt.context_field, None);
-    assert!(prompt.message.contains("electricity bill"));
-    assert!(prompt
-        .message
-        .contains("Household records/12 Seabreeze Avenue/AGL/2026/"));
-    assert!(prompt.message.contains("account 12345678"));
-    assert_eq!(
-        prompt.allowed_actions,
-        vec![
-            ConversationAction::Yes,
-            ConversationAction::No,
-            ConversationAction::ReviewDetails,
-        ]
-    );
-    assert!(!prompt.message.to_lowercase().contains("amount"));
-    assert!(!prompt.message.contains("Amount"));
-}
-
-#[test]
-fn a_member_utterance_becomes_a_validated_context_command_before_state_changes() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("agl-july.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text("Document Type: Electricity bill"),
-    )
-    .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Electricity bill")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach AGL bill");
-    let prompt = store
-        .document_conversation("rivera-household", arrival.id)
-        .expect("derive Conversation view")
-        .prompt
-        .expect("next prompt");
-    let interpreter = DeterministicMemberDirectionInterpreter;
-
-    let outcome = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Yes, that's right.".to_owned(),
-                linked_prompt: prompt.id,
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("apply interpreted Member Direction");
-
-    assert_eq!(
-        outcome.accepted_direction,
-        Some(MemberDirectionCommand::ConfirmContextField {
-            field: ContextField::DocumentType,
-        })
-    );
-    assert_eq!(
-        outcome
-            .arrival
-            .review_card
-            .context
-            .document_type
-            .confidence_state,
-        ConfidenceState::Confirmed
-    );
-    assert_eq!(
-        outcome
-            .next_prompt
-            .expect("next sequential prompt")
-            .context_field,
-        Some(ContextField::ServiceProvider)
-    );
-}
-
-#[test]
-fn declining_a_provisional_filing_decision_is_durable_and_never_files() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("agl-july.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
-        ),
-    )
-    .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Electricity bill")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach AGL bill");
-    let prompt = store
-        .document_conversation_in_section("rivera-household", arrival.id, "Bills & Services")
-        .expect("derive filing proposal")
-        .prompt
-        .expect("filing prompt");
-
-    let declined = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "No".to_owned(),
-                linked_prompt: prompt.id,
-            },
-            &DeterministicMemberDirectionInterpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("decline filing");
-
-    assert_eq!(declined.status, ConversationTurnStatus::ActionRefused);
-    assert!(declined.arrival.filing_decision_declined);
-    assert!(declined.arrival.filed_original.is_none());
-    assert!(declined.next_prompt.is_none());
-    assert!(store
-        .document_conversation_in_section("rivera-household", arrival.id, "Bills & Services")
-        .expect("reload declined Conversation")
-        .prompt
-        .is_none());
-}
-
-#[test]
-fn an_interpreter_cannot_use_evidence_to_bypass_unresolved_context() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("unknown.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text("Unfamiliar household document"),
-    )
-    .expect("write document");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Unfamiliar document")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach document");
-    let prompt = store
-        .document_conversation("rivera-household", arrival.id)
-        .expect("derive Conversation view")
-        .prompt
-        .expect("context prompt");
-    let interpreter = FixedDirectionInterpreter {
-        interpretation: DirectionInterpretation {
-            proposed_commands: vec![MemberDirectionCommand::ConfirmFilingDecision],
-            confidence: InterpretationConfidence::Confident,
-            ambiguity: None,
-            evidence: vec!["The extracted text looks convincing".to_owned()],
-        },
-    };
-
-    assert!(store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Go ahead".to_owned(),
-                linked_prompt: prompt.id,
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .is_err());
-    let unchanged = store
-        .list_document_arrivals("rivera-household")
-        .expect("list durable work")
-        .into_iter()
-        .find(|candidate| candidate.id == arrival.id)
-        .expect("arrival remains");
-    assert_eq!(
-        unchanged.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
-    );
-    assert!(unchanged.filed_original.is_none());
-}
-
-#[test]
-fn ambiguous_and_negative_natural_replies_never_execute_unresolved_work() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("agl-july.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text("Document Type: Electricity bill; Service Provider: AGL"),
-    )
-    .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Electricity bill")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach AGL bill");
-    let prompt = store
-        .document_conversation("rivera-household", arrival.id)
-        .expect("derive Conversation view")
-        .prompt
-        .expect("document type prompt");
-    let interpreter = DeterministicMemberDirectionInterpreter;
-
-    let delegated = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Can you take care of this?".to_owned(),
-                linked_prompt: prompt.id.clone(),
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("keep delegation conversational");
-    assert_eq!(
-        delegated.status,
-        ConversationTurnStatus::ClarificationRequired
-    );
-    assert_eq!(
-        delegated
-            .arrival
-            .review_card
-            .context
-            .document_type
-            .confidence_state,
-        ConfidenceState::LooksRight
-    );
-
-    let ambiguous = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Maybe, I suppose.".to_owned(),
-                linked_prompt: prompt.id.clone(),
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("ask for clarification");
-    assert_eq!(
-        ambiguous.status,
-        ConversationTurnStatus::ClarificationRequired
-    );
-    assert_eq!(ambiguous.accepted_direction, None);
-    assert_eq!(
-        ambiguous.arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
-    );
-    assert_eq!(
-        ambiguous
-            .arrival
-            .review_card
-            .context
-            .document_type
-            .confidence_state,
-        ConfidenceState::LooksRight
-    );
-
-    let rejected = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "No".to_owned(),
-                linked_prompt: prompt.id,
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("reject extracted context");
-    let correction_prompt = rejected.next_prompt.expect("open correction prompt");
-    assert_eq!(
-        correction_prompt.expected_response,
-        ConversationExpectedResponse::ContextValue
-    );
-    assert_eq!(
-        correction_prompt.context_field,
-        Some(ContextField::DocumentType)
-    );
-
-    let corrected = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "It is a council rates notice.".to_owned(),
-                linked_prompt: correction_prompt.id,
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("record natural-language correction");
-    assert_eq!(
-        corrected
-            .arrival
-            .review_card
-            .context
-            .document_type
-            .value
-            .as_deref(),
-        Some("council rates notice")
-    );
-    assert_eq!(
-        corrected
-            .arrival
-            .review_card
-            .context
-            .document_type
-            .confidence_state,
-        ConfidenceState::Confirmed
-    );
-}
-
-#[test]
-fn a_reply_to_an_old_prompt_cannot_confirm_a_changed_filing_proposal() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("agl-july.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
-        ),
-    )
-    .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Electricity bill")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach AGL bill");
-    let old_prompt = store
-        .document_conversation_in_section("rivera-household", arrival.id, "Bills & Services")
-        .expect("derive initial proposal")
-        .prompt
-        .expect("filing prompt");
-
-    store
-        .record_member_direction(
-            "rivera-household",
-            arrival.id,
-            DocumentContextDirection {
-                document_type: Some("Electricity bill".to_owned()),
-                document_type_resolved: true,
-                service_provider: Some("AGL".to_owned()),
-                service_provider_resolved: true,
-                addressee: Some("Sam Rivera".to_owned()),
-                addressee_resolved: true,
-                property: Some("12 Seabreeze Avenue".to_owned()),
-                property_resolved: true,
-                account: Some("87654321".to_owned()),
-                account_resolved: true,
-                amount_resolved: true,
-                relevant_dates: vec!["2026-07-15".to_owned()],
-                relevant_dates_resolved: true,
-                service_provider_relevance: Some(ContextRelevanceDirection {
-                    subject: "AGL".to_owned(),
-                    explanation: "Supplies electricity to the Household".to_owned(),
-                }),
-                property_relevance: Some(ContextRelevanceDirection {
-                    subject: "12 Seabreeze Avenue".to_owned(),
-                    explanation: "The Household's home".to_owned(),
-                }),
-                ..Default::default()
-            },
-            "Bills & Services",
-        )
-        .expect("change the proposed account");
-
-    assert!(store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Yes".to_owned(),
-                linked_prompt: old_prompt.id,
-            },
-            &DeterministicMemberDirectionInterpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .is_err());
-    assert!(store
-        .list_document_arrivals("rivera-household")
-        .expect("reload work")
-        .into_iter()
-        .find(|candidate| candidate.id == arrival.id)
-        .expect("arrival remains")
-        .filed_original
-        .is_none());
-}
-
-#[test]
-fn conversational_confirmation_files_first_then_learns_only_when_asked() {
-    let directory = tempfile::tempdir().expect("temporary conversation directory");
-    let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
-    let document = directory.path().join("agl-july.pdf");
-    fs::write(
-        &document,
-        digital_pdf_with_text(
-            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
-        ),
-    )
-    .expect("write AGL fixture");
-    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Electricity bill")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &document, &cabinet)
-        .expect("attach AGL bill");
-    store
-        .record_member_direction(
-            "rivera-household",
-            arrival.id,
-            DocumentContextDirection {
-                document_type: Some("Electricity bill".to_owned()),
-                document_type_resolved: true,
-                service_provider: Some("AGL".to_owned()),
-                service_provider_resolved: true,
-                addressee: Some("Sam Rivera".to_owned()),
-                addressee_resolved: true,
-                property: Some("12 Seabreeze Avenue".to_owned()),
-                property_resolved: true,
-                account: Some("12345678".to_owned()),
-                account_resolved: true,
-                amount_resolved: true,
-                relevant_dates: vec!["2026-07-15".to_owned()],
-                relevant_dates_resolved: true,
-                service_provider_relevance: Some(ContextRelevanceDirection {
-                    subject: "AGL".to_owned(),
-                    explanation: "Supplies electricity to the Household".to_owned(),
-                }),
-                property_relevance: Some(ContextRelevanceDirection {
-                    subject: "12 Seabreeze Avenue".to_owned(),
-                    explanation: "The Household's home".to_owned(),
-                }),
-                ..Default::default()
-            },
-            "Bills & Services",
-        )
-        .expect("resolve Household Context");
-    let prompt = store
-        .document_conversation("rivera-household", arrival.id)
-        .expect("derive filing proposal")
-        .prompt
-        .expect("filing confirmation prompt");
-    assert_eq!(
-        prompt.purpose,
-        ConversationPromptPurpose::ConfirmFilingDecision
-    );
-
-    let interpreter = DeterministicMemberDirectionInterpreter;
-    let filed = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Yes".to_owned(),
-                linked_prompt: prompt.id,
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("confirm and file");
-    assert_eq!(filed.status, ConversationTurnStatus::ActionCompleted);
-    assert_eq!(
-        filed.arrival.processing_state,
-        DocumentProcessingState::Filed
-    );
-    assert_eq!(
-        filed.arrival.authority_source,
-        Some(AuditAuthority::MemberDirection)
-    );
-    assert!(filed.arrival.review_card.learned_rule.is_none());
-    let learning_prompt = filed.next_prompt.expect("post-filing learning prompt");
-    assert_eq!(
-        learning_prompt.purpose,
-        ConversationPromptPurpose::LearnFilingRule
-    );
-
-    let learned = store
-        .submit_member_utterance(
-            "rivera-household",
-            arrival.id,
-            MemberUtterance {
-                conversation_id: conversation.id,
-                message: "Always do this".to_owned(),
-                linked_prompt: learning_prompt.id,
-            },
-            &interpreter,
-            &cabinet,
-            "Bills & Services",
-        )
-        .expect("teach scoped rule");
-    assert_eq!(learned.status, ConversationTurnStatus::ActionCompleted);
-    assert!(learned.arrival.review_card.learned_rule.is_some());
-    assert_eq!(
-        store
-            .list_filing_rules("rivera-household")
-            .expect("list rules")
-            .len(),
-        1
     );
 }
 
@@ -1938,14 +1726,12 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         waiting.processing_state,
         DocumentProcessingState::CabinetUnavailable
     );
-    assert_eq!(
-        waiting.authority_source,
-        Some(AuditAuthority::MemberDirection)
-    );
-    assert!(waiting
-        .execution_history
-        .iter()
-        .any(|entry| entry.contains("Cabinet is unavailable")));
+    assert!(waiting.review_card.evidence.iter().any(|evidence| {
+        evidence.label == "Recovery status"
+            && evidence
+                .value
+                .contains("only the confirmed Cabinet Destination")
+    }));
     assert!(ready.original_path.is_file());
     assert_eq!(
         store
@@ -1966,51 +1752,104 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         .expect("retried arrival");
     assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
     assert!(!ready.original_path.exists());
+
+    let unrelated_source = directory.path().join("unrelated.pdf");
+    fs::write(
+        &unrelated_source,
+        digital_pdf_with_text("An unfamiliar document"),
+    )
+    .expect("write unrelated fixture");
+    let conversation = store
+        .create_conversation("rivera-household", "Unrelated work")
+        .expect("create unrelated Conversation");
+    let unrelated = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &unrelated_source,
+            &cabinet,
+        )
+        .expect("attach unrelated document");
+    assert!(store
+        .file_document("rivera-household", unrelated.id, &unavailable)
+        .is_err());
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list unrelated document")
+        .into_iter()
+        .find(|arrival| arrival.id == unrelated.id)
+        .expect("unchanged unrelated document");
+    assert_eq!(unchanged.processing_state, unrelated.processing_state);
+
+    let queued_source = directory.path().join("queued.jpg");
+    fs::write(&queued_source, image_fixture(image::ImageFormat::Jpeg))
+        .expect("write queued fixture");
+    let queued = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &queued_source,
+        "Queued rates.jpg",
+    );
+    fs::rename(&cabinet, &unavailable).expect("disconnect Cabinet");
+    assert!(store
+        .resume_document_filings("rivera-household", &cabinet)
+        .is_err());
+    let queued_waiting = store
+        .list_document_arrivals("rivera-household")
+        .expect("list queued work after batch retry")
+        .into_iter()
+        .find(|arrival| arrival.id == queued.id)
+        .expect("queued waiting document");
+    assert_eq!(
+        queued_waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
+    fs::rename(&unavailable, &cabinet).expect("restore Cabinet");
+    store
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("resume all filing work after Cabinet returns");
 }
 
 #[test]
-fn provider_unavailability_is_a_visible_waiting_state_until_retried() {
-    let directory = tempfile::tempdir().expect("temporary waiting directory");
+fn a_missing_staged_original_is_not_reported_as_a_cabinet_outage() {
+    let directory = tempfile::tempdir().expect("temporary missing Original directory");
     let cabinet = directory.path().join("Cabinet");
-    fs::create_dir_all(&cabinet).expect("create Cabinet");
-    let source = directory.path().join("waiting.pdf");
-    fs::write(&source, digital_pdf_with_text("Needs provider assistance"))
-        .expect("write source fixture");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("missing.png");
+    fs::write(&source, image_fixture(image::ImageFormat::Png)).expect("write source fixture");
     let (store, _) = open_conversation_store(directory.path().join("luna.db"));
-    let conversation = store
-        .create_conversation("rivera-household", "Waiting for provider")
-        .expect("create Conversation");
-    let arrival = store
-        .attach_document("rivera-household", conversation.id, &source, &cabinet)
-        .expect("attach document");
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Missing Original.png",
+    );
+    fs::remove_file(&ready.original_path).expect("simulate missing staged Original");
 
-    let waiting = store
-        .mark_waiting_for_connectivity("rivera-household", arrival.id)
-        .expect("mark provider wait");
+    let error = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect_err("reject missing staged Original");
+    assert!(matches!(
+        error,
+        ConversationError::OriginalVerificationFailed
+    ));
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list missing Original")
+        .into_iter()
+        .find(|arrival| arrival.id == ready.id)
+        .expect("missing Original arrival");
     assert_eq!(
-        waiting.processing_state,
-        DocumentProcessingState::WaitingForConnectivity
+        unchanged.processing_state,
+        DocumentProcessingState::ReadyToFile
     );
-    assert_eq!(
-        store
-            .list_todo_items("rivera-household")
-            .expect("list waiting To-do item")
-            .len(),
-        1
-    );
-
-    let resumed = store
-        .resume_waiting_for_connectivity("rivera-household", arrival.id)
-        .expect("resume provider wait");
-    assert_eq!(
-        resumed.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
-    );
-    assert!(store
-        .list_todo_items("rivera-household")
-        .expect("list resumed To-do items")
+    assert!(unchanged
+        .review_card
+        .evidence
         .iter()
-        .any(|item| item.arrival_id == arrival.id));
+        .all(|evidence| evidence.label != "Recovery status"));
 }
 
 #[test]
@@ -2526,15 +2365,19 @@ fn filing_recovers_after_the_verified_destination_was_written_before_event_recor
     let interrupted_temporary =
         section.join(format!(".luna-filing-{}-{}.tmp", ready.id, ready.checksum));
     fs::create_dir(&interrupted_temporary).expect("block temporary filing write");
-    store
+    let waiting = store
         .file_document("rivera-household", ready.id, &cabinet)
-        .expect_err("simulate interruption after durable Filing state");
+        .expect("keep interrupted filing waiting");
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::CabinetUnavailable
+    );
     assert_eq!(
         store
             .list_document_arrivals("rivera-household")
             .expect("list interrupted filing")[0]
             .processing_state,
-        DocumentProcessingState::Filing
+        DocumentProcessingState::CabinetUnavailable
     );
     fs::remove_dir(interrupted_temporary).expect("clear interrupted temporary write");
     fs::write(&destination, &original).expect("simulate verified write before durable event");
@@ -2728,7 +2571,7 @@ fn conversation_content_is_protected_and_requires_an_unlocked_trusted_device() {
 }
 
 #[test]
-fn an_explicit_post_filing_direction_teaches_a_rule_and_exact_matches_file_automatically() {
+fn a_confirmed_filing_teaches_a_rule_and_exact_context_matches_file_automatically() {
     let directory = tempfile::tempdir().expect("temporary rule directory");
     let cabinet = directory.path().join("Cabinet");
     fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
@@ -2789,11 +2632,7 @@ fn an_explicit_post_filing_direction_teaches_a_rule_and_exact_matches_file_autom
     let filed = store
         .file_document("rivera-household", first.id, &cabinet)
         .expect("file first bill");
-    assert!(filed.review_card.learned_rule.is_none());
-    let taught = store
-        .learn_filing_rule("rivera-household", first.id)
-        .expect("teach scoped Filing Rule");
-    assert!(taught.review_card.learned_rule.is_some());
+    assert!(filed.review_card.learned_rule.is_some());
 
     let second_source = directory.path().join("agl-august.pdf");
     fs::write(
@@ -2813,14 +2652,6 @@ fn an_explicit_post_filing_direction_teaches_a_rule_and_exact_matches_file_autom
         automatically_filed.processing_state,
         DocumentProcessingState::Filed
     );
-    let automatic_view = store
-        .document_conversation("rivera-household", automatically_filed.id)
-        .expect("derive automatic filing Conversation view");
-    assert_eq!(automatic_view.prompt, None);
-    assert!(automatic_view
-        .completion_message
-        .as_deref()
-        .is_some_and(|message| message.contains("Done. I filed the verified Original")));
     assert!(automatically_filed.filed_original.is_some());
     assert!(automatically_filed.review_card.learned_rule.is_some());
     let history = store
@@ -2850,7 +2681,7 @@ fn an_explicit_post_filing_direction_teaches_a_rule_and_exact_matches_file_autom
         .expect("attach unstructured changed-provider bill");
     assert_eq!(
         unstructured_changed_arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
 
     let unstructured_account_changed = directory.path().join("account-unstructured.pdf");
@@ -2871,7 +2702,7 @@ fn an_explicit_post_filing_direction_teaches_a_rule_and_exact_matches_file_autom
         .expect("attach unstructured changed-account bill");
     assert_eq!(
         unstructured_account_changed_arrival.processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
 
     let changed_contexts = [
@@ -2933,7 +2764,7 @@ fn an_explicit_post_filing_direction_teaches_a_rule_and_exact_matches_file_autom
             .unwrap_or_else(|_| panic!("attach changed-{label} bill"));
         assert_eq!(
             changed.processing_state,
-            DocumentProcessingState::NeedsMemberDirection,
+            DocumentProcessingState::NeedsCloudConsent,
             "changed {label} must not inherit the learned rule",
         );
         assert!(
@@ -3020,7 +2851,6 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
                     subject: "12 Seabreeze Avenue".to_owned(),
                     explanation: "Our primary residence".to_owned(),
                 }),
-                ..Default::default()
             },
             "Household records",
         )
@@ -3037,12 +2867,9 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
             },
         )
         .expect("confirm Filing Decision");
-    store
+    let filed = store
         .file_document("rivera-household", arrival.id, &cabinet)
         .expect("file bill");
-    let filed = store
-        .learn_filing_rule("rivera-household", arrival.id)
-        .expect("teach scoped Filing Rule");
 
     let rules: Vec<FilingRuleSummary> = store
         .list_filing_rules("rivera-household")
@@ -3120,13 +2947,15 @@ fn an_owner_can_inspect_the_learned_rule_scope_and_affected_documents() {
             )
             .expect("attach paused match")
             .processing_state,
-        DocumentProcessingState::NeedsMemberDirection
+        DocumentProcessingState::NeedsCloudConsent
     );
 
     store
         .pause_filing_rule("rivera-household", rules[0].id, false)
         .expect("resume Filing Rule");
     let resumed_source = directory.path().join("agl-august-resumed.pdf");
+    // Keep this Original distinct from the paused fixture so checksum-based
+    // manual-move discovery cannot select the still-staged paused copy.
     fs::write(
         &resumed_source,
         digital_pdf_with_text(
