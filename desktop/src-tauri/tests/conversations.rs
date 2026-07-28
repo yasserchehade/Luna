@@ -1398,6 +1398,140 @@ fn conversation_orchestration_presents_one_confirmation_for_a_complete_document(
 }
 
 #[test]
+fn cloud_assistance_can_be_kept_local_through_the_conversation() {
+    let directory = tempfile::tempdir().expect("temporary conversation directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Bills & Services")).expect("create Cabinet");
+    let document = directory.path().join("agl-july.pdf");
+    fs::write(
+        &document,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write AGL fixture");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Electricity bill")
+        .expect("create Conversation");
+    let arrival = store
+        .attach_document("rivera-household", conversation.id, &document, &cabinet)
+        .expect("attach AGL bill");
+
+    let prompt = store
+        .document_conversation("rivera-household", arrival.id)
+        .expect("derive Cloud Assistance prompt")
+        .prompt
+        .expect("Cloud Assistance prompt");
+    assert_eq!(
+        prompt.purpose,
+        ConversationPromptPurpose::ChooseCloudAssistance
+    );
+    assert_eq!(
+        prompt.expected_response,
+        ConversationExpectedResponse::Choice
+    );
+    assert!(prompt
+        .allowed_actions
+        .contains(&ConversationAction::KeepLocal));
+
+    let outcome = store
+        .submit_member_utterance(
+            "rivera-household",
+            arrival.id,
+            MemberUtterance {
+                conversation_id: conversation.id,
+                message: "Please keep it local".to_owned(),
+                linked_prompt: prompt.id,
+            },
+            &DeterministicMemberDirectionInterpreter,
+            &cabinet,
+            "Bills & Services",
+        )
+        .expect("apply local-only Member Direction");
+
+    assert_eq!(
+        outcome.accepted_direction,
+        Some(MemberDirectionCommand::KeepDocumentLocal)
+    );
+    assert_eq!(
+        outcome.arrival.processing_state,
+        DocumentProcessingState::NeedsMemberDirection
+    );
+    assert!(outcome.next_prompt.is_some());
+}
+
+#[test]
+fn a_duplicate_decision_can_be_given_through_the_conversation() {
+    let directory = tempfile::tempdir().expect("temporary duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("first").join("statement.pdf");
+    let second_source = directory.path().join("second").join("statement.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    let original = digital_pdf_with_text("Household service statement for Sam Rivera");
+    fs::write(&first_source, &original).expect("write first Original");
+    fs::write(&second_source, &original).expect("write second Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Duplicate review")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first Original");
+    let second = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach duplicate Original");
+
+    let prompt = store
+        .document_conversation("rivera-household", second.id)
+        .expect("derive duplicate prompt")
+        .prompt
+        .expect("duplicate prompt");
+    assert_eq!(prompt.purpose, ConversationPromptPurpose::ResolveDuplicate);
+    assert_eq!(prompt.related_arrival_id, Some(first.id));
+    assert!(prompt
+        .allowed_actions
+        .contains(&ConversationAction::DiscardNew));
+
+    let outcome = store
+        .submit_member_utterance(
+            "rivera-household",
+            second.id,
+            MemberUtterance {
+                conversation_id: conversation.id,
+                message: "Discard the new copy".to_owned(),
+                linked_prompt: prompt.id,
+            },
+            &DeterministicMemberDirectionInterpreter,
+            &cabinet,
+            "Household records",
+        )
+        .expect("apply duplicate Member Direction");
+
+    assert_eq!(
+        outcome.accepted_direction,
+        Some(MemberDirectionCommand::ResolveDuplicate {
+            decision: DuplicateDecision::DiscardNew,
+            related_arrival_id: first.id,
+        })
+    );
+    assert_eq!(
+        outcome.arrival.processing_state,
+        DocumentProcessingState::Dismissed
+    );
+    assert!(outcome.arrival.duplicate_resolution.is_some());
+}
+
+#[test]
 fn a_member_utterance_becomes_a_validated_context_command_before_state_changes() {
     let directory = tempfile::tempdir().expect("temporary conversation directory");
     let cabinet = directory.path().join("Cabinet");
@@ -1573,7 +1707,7 @@ fn an_interpreter_cannot_use_evidence_to_bypass_unresolved_context() {
         },
     };
 
-    assert!(store
+    let unsupported = store
         .submit_member_utterance(
             "rivera-household",
             arrival.id,
@@ -1586,7 +1720,14 @@ fn an_interpreter_cannot_use_evidence_to_bypass_unresolved_context() {
             &cabinet,
             "Bills & Services",
         )
-        .is_err());
+        .expect("return a safe conversational response");
+    assert_eq!(
+        unsupported.status,
+        ConversationTurnStatus::ClarificationRequired
+    );
+    assert_eq!(unsupported.accepted_direction, None);
+    assert!(unsupported.next_prompt.is_some());
+    assert!(unsupported.message.contains("could not safely apply"));
     let unchanged = store
         .list_document_arrivals("rivera-household")
         .expect("list durable work")
@@ -1809,7 +1950,7 @@ fn a_reply_to_an_old_prompt_cannot_confirm_a_changed_filing_proposal() {
         )
         .expect("change the proposed account");
 
-    assert!(store
+    let stale = store
         .submit_member_utterance(
             "rivera-household",
             arrival.id,
@@ -1822,7 +1963,11 @@ fn a_reply_to_an_old_prompt_cannot_confirm_a_changed_filing_proposal() {
             &cabinet,
             "Bills & Services",
         )
-        .is_err());
+        .expect("return a safe stale-prompt response");
+    assert_eq!(stale.status, ConversationTurnStatus::ClarificationRequired);
+    assert_eq!(stale.accepted_direction, None);
+    assert!(stale.next_prompt.is_some());
+    assert!(stale.message.contains("earlier question"));
     assert!(store
         .list_document_arrivals("rivera-household")
         .expect("reload work")

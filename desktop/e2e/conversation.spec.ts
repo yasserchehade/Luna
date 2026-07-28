@@ -8,6 +8,17 @@ import { testHousehold } from "./testHousehold";
 describe("Luna Conversation desk", () => {
   it("keeps document work consistent between Conversation and To do", async () => {
     await onboardTestHousehold();
+    const activateByKeyboard = async (selector: string, key: "Enter" | " ") => {
+      await browser.execute((targetSelector, pressedKey) => {
+        const target = document.querySelector<HTMLElement>(targetSelector);
+        target?.focus();
+        target?.dispatchEvent(new KeyboardEvent("keydown", {
+          key: pressedKey,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }, selector, key);
+    };
     const openConversationActions = async () => {
       await $("button[aria-label='Conversation actions']").click();
     };
@@ -18,12 +29,12 @@ describe("Luna Conversation desk", () => {
 
     const message = "Please organise this electricity bill.";
     const composer = await $("#message-composer");
-    await composer.setValue(message);
+    await composer.click();
+    await browser.keys(message);
+    await expect(composer).toHaveValue(message);
     await $("button[aria-label='Send message']").click();
 
     await expect($(".member-message p")).toHaveText(message);
-    await browser.execute(() => document.querySelector<HTMLTextAreaElement>("#message-composer")?.focus());
-    expect(await browser.execute(() => document.activeElement?.id)).toBe("message-composer");
 
     await openConversationActions();
     await $("button=Rename").click();
@@ -52,11 +63,14 @@ describe("Luna Conversation desk", () => {
     await expect(cloudAssistance).toHaveText(expect.stringContaining("OpenAI"));
     await expect(cloudAssistance).toHaveText(expect.stringContaining("4,000 characters"));
     await expect(cloudAssistance.$("button=Keep local")).toBeDisplayed();
-    await browser.execute(() => document.querySelector<HTMLElement>(".review-details summary")?.focus());
-    expect(await browser.execute(() => document.activeElement?.tagName)).toBe("SUMMARY");
-    await $(".review-details summary").click();
+    const reviewDetailsSummary = $(".review-details summary");
+    await reviewDetailsSummary.click();
     await expect($("label=Service provider relevance")).toBeDisplayed();
     await expect($("label=Property relevance")).toBeDisplayed();
+    await activateByKeyboard(".review-details summary", "Enter");
+    await expect($("label=Service provider relevance")).not.toBeDisplayed();
+    await activateByKeyboard(".review-details summary", " ");
+    await expect($("label=Service provider relevance")).toBeDisplayed();
     const reviewCard = $(".document-arrival .review-card");
     await cloudAssistance.$("button=Keep local").click();
     await expect(cloudAssistance).toHaveText(expect.stringContaining("Kept local"));
@@ -115,15 +129,14 @@ describe("Luna Conversation desk", () => {
     await expect($(".document-luna-message .conversation-copy")).toHaveText(
       expect.stringContaining("Bills & Services/12 Seabreeze Avenue/AGL/2026/"),
     );
-    await browser.execute(() => Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent === "Always do this")?.focus());
-    expect(await browser.execute(() => document.activeElement?.textContent)).toBe("Always do this");
-    await $("button=Always do this").click();
+    await activateByKeyboard(".conversation-inline-actions button", "Enter");
     await browser.waitUntil(
       async () => !(await $("button=Always do this").isExisting()),
       { timeoutMsg: "The Filing Rule direction was not recorded." },
     );
-    await $(".review-details summary").click();
+    if (!await $("[aria-label='Learned filing rule']").isDisplayed()) {
+      await $(".review-details summary").click();
+    }
     await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
     await expect($(".review-transparency")).toHaveText(expect.stringContaining("Member Direction"));
     await expect($(".review-transparency")).toHaveText(expect.stringContaining("Member chose Keep local"));
@@ -324,7 +337,8 @@ describe("Luna Conversation desk", () => {
     await expect($("button=Link copies")).toBeDisplayed();
     await expect($("button=Discard new")).toBeDisplayed();
     await expect($("button=Updated version")).toBeDisplayed();
-    await $("button=Keep both").click();
+    await $("#message-composer").setValue("Keep both");
+    await $("button[aria-label='Send message']").click();
     await $(".document-arrival[data-focused='true'] .review-details summary").click();
     await expect($("[aria-label='Duplicate resolution']")).toHaveText(expect.stringContaining("Kept both Originals"));
     await expect($(".document-arrival[data-focused='true'] .conversation-copy")).toBeDisplayed();

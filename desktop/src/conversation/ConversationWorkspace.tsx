@@ -1,4 +1,12 @@
-import { FormEvent, Fragment, useCallback, useEffect, useRef, useState } from "react";
+import {
+  FormEvent,
+  Fragment,
+  KeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   Conversation,
@@ -81,7 +89,21 @@ const duplicateResolutionLabels: Record<DuplicateDecision, string> = {
 const conversationActionLabels: Record<Exclude<ConversationAction, "reviewDetails">, string> = {
   yes: "Yes",
   no: "No",
+  keepLocal: "Keep local",
+  keepBoth: "Keep both",
+  linkCopies: "Link copies",
+  discardNew: "Discard new",
+  updatedVersion: "Updated version",
   alwaysDoThis: "Always do this",
+};
+
+const activateFromKeyboard = (
+  event: KeyboardEvent<HTMLElement>,
+  action: () => void,
+) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  action();
 };
 
 type DocumentReviewEditorProps = {
@@ -418,7 +440,10 @@ function DocumentReviewEditor({
   </>;
 
   return <>{duplicateHandling}{cloudAssistance}<details className="review-details">
-    <summary>Review details</summary>
+    <summary onKeyDown={(event) => activateFromKeyboard(event, () => {
+      const details = event.currentTarget.parentElement as HTMLDetailsElement | null;
+      if (details) details.open = !details.open;
+    })}>Review details</summary>
     <section className="review-card" aria-label={`Review details for ${arrival.originalName}`}>
     <strong>{confidenceLabel(arrival)}</strong>
     <dl className="review-transparency">
@@ -536,22 +561,38 @@ export function ConversationWorkspace({
     onActiveConversationChange(selectedConversationId);
   }, [onActiveConversationChange, selectedConversationId]);
 
-  const loadHouseholdWork = useCallback(async (preserveDeletedConversationId?: number) => {
+  const loadHouseholdWork = useCallback(async (options: {
+    preserveDeletedConversationId?: number;
+    search?: string;
+    includeArchived?: boolean;
+    selectConversationId?: number;
+  } = {}) => {
+    const effectiveSearch = options.search ?? search;
+    const effectiveIncludeArchived = options.includeArchived ?? includeArchived;
     const [loadedConversations, loadedArrivals, loadedTodos] = await Promise.all([
-      conversationService.listConversations(householdId, search, includeArchived),
+      conversationService.listConversations(
+        householdId,
+        effectiveSearch,
+        effectiveIncludeArchived,
+      ),
       conversationService.listDocumentArrivals(householdId),
       conversationService.listTodoItems(householdId),
     ]);
     setConversations(loadedConversations);
-    if (!search) onRecentConversationsChange(loadedConversations.filter(({ archived }) => !archived));
+    if (!effectiveSearch) {
+      onRecentConversationsChange(loadedConversations.filter(({ archived }) => !archived));
+    }
     setArrivals(loadedArrivals);
     await loadDocumentConversations(loadedArrivals);
     setTodos(loadedTodos);
     onTodoCountChange(loadedTodos.length);
     setSelectedConversationId((current) => {
-      if (preserveDeletedConversationId && loadedArrivals.some(
-        ({ conversationId }) => conversationId === preserveDeletedConversationId,
-      )) return preserveDeletedConversationId;
+      if (options.selectConversationId && loadedConversations.some(
+        ({ id }) => id === options.selectConversationId,
+      )) return options.selectConversationId;
+      if (options.preserveDeletedConversationId && loadedArrivals.some(
+        ({ conversationId }) => conversationId === options.preserveDeletedConversationId,
+      )) return options.preserveDeletedConversationId;
       if (current && (
         loadedConversations.some(({ id }) => id === current)
         || loadedArrivals.some(({ id, conversationId }) => (
@@ -560,28 +601,21 @@ export function ConversationWorkspace({
       )) return current;
       return loadedConversations[0]?.id ?? null;
     });
-    return loadedArrivals;
+    return { conversations: loadedConversations, arrivals: loadedArrivals };
   }, [conversationService, focusedArrivalId, householdId, includeArchived, loadDocumentConversations, onRecentConversationsChange, onTodoCountChange, search]);
 
   const createConversation = useCallback(async () => {
     const created = await conversationService.createConversation(householdId, "New conversation");
-    const [loadedConversations, loadedArrivals, loadedTodos] = await Promise.all([
-      conversationService.listConversations(householdId, undefined, false),
-      conversationService.listDocumentArrivals(householdId),
-      conversationService.listTodoItems(householdId),
-    ]);
     setSearch("");
     setIncludeArchived(false);
-    setConversations(loadedConversations);
-    onRecentConversationsChange(loadedConversations);
-    setArrivals(loadedArrivals);
-    await loadDocumentConversations(loadedArrivals);
-    setTodos(loadedTodos);
-    onTodoCountChange(loadedTodos.length);
-    setSelectedConversationId(created.id);
+    await loadHouseholdWork({
+      search: "",
+      includeArchived: false,
+      selectConversationId: created.id,
+    });
     setFocusedArrivalId(null);
     onOpenConversation();
-  }, [conversationService, householdId, loadDocumentConversations, onOpenConversation, onRecentConversationsChange, onTodoCountChange]);
+  }, [conversationService, householdId, loadHouseholdWork, onOpenConversation]);
 
   const deleteConversationAndRecoverWorkspace = useCallback(async (conversationId: number) => {
     try {
@@ -596,7 +630,7 @@ export function ConversationWorkspace({
       } else {
         setSearch("");
         setIncludeArchived(false);
-        await loadHouseholdWork();
+        await loadHouseholdWork({ search: "", includeArchived: false });
       }
     } catch {
       setError("Luna could not delete that Conversation.");
@@ -610,30 +644,16 @@ export function ConversationWorkspace({
       .catch(() => {
         setError("Some Cabinet recovery work is still waiting.");
       })
-      .then(() => conversationService.listConversations(householdId, undefined, false))
-      .then(async (loaded) => {
-        if (loaded.length === 0) await createConversation();
-        else {
-          setConversations(loaded);
-          onRecentConversationsChange(loaded);
-          const requestedId = conversationSelectionRequest?.conversationId;
-          setSelectedConversationId(
-            requestedId && loaded.some(({ id }) => id === requestedId)
-              ? requestedId
-              : loaded[0].id,
-          );
-          const [loadedArrivals, loadedTodos] = await Promise.all([
-            conversationService.listDocumentArrivals(householdId),
-            conversationService.listTodoItems(householdId),
-          ]);
-          setArrivals(loadedArrivals);
-          await loadDocumentConversations(loadedArrivals);
-          setTodos(loadedTodos);
-          onTodoCountChange(loadedTodos.length);
-        }
+      .then(async () => {
+        const loaded = await loadHouseholdWork({
+          search: "",
+          includeArchived: false,
+          selectConversationId: conversationSelectionRequest?.conversationId,
+        });
+        if (loaded.conversations.length === 0) await createConversation();
       })
       .catch(() => setError("Luna could not open this Household's Conversations."));
-  }, [conversationSelectionRequest, conversationService, createConversation, householdId, loadDocumentConversations, onRecentConversationsChange, onTodoCountChange]);
+  }, [conversationSelectionRequest, conversationService, createConversation, householdId, loadHouseholdWork]);
 
   useEffect(() => {
     if (!conversationSelectionRequest) return;
@@ -688,7 +708,7 @@ export function ConversationWorkspace({
         }
       }
       setError("");
-      const loadedArrivals = await loadHouseholdWork();
+      const { arrivals: loadedArrivals } = await loadHouseholdWork();
       const conversationArrivals = loadedArrivals.filter(
         ({ conversationId }) => conversationId === selectedConversationId,
       );
@@ -910,6 +930,10 @@ export function ConversationWorkspace({
                 type="button"
                 key={action}
                 onClick={() => void submitUtterance(arrival.id, conversationActionLabels[action])}
+                onKeyDown={(event) => activateFromKeyboard(
+                  event,
+                  () => void submitUtterance(arrival.id, conversationActionLabels[action]),
+                )}
               >{conversationActionLabels[action]}</button>)}
           </div>}
         </div>

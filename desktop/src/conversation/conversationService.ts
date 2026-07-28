@@ -68,11 +68,22 @@ export type ClarificationQuestion = {
 export type ConversationPromptPurpose =
   | "clarifyContext"
   | "confirmFilingDecision"
+  | "chooseCloudAssistance"
+  | "resolveDuplicate"
   | "learnFilingRule";
 
-export type ConversationExpectedResponse = "confirmation" | "contextValue";
+export type ConversationExpectedResponse = "confirmation" | "contextValue" | "choice";
 
-export type ConversationAction = "yes" | "no" | "alwaysDoThis" | "reviewDetails";
+export type ConversationAction =
+  | "yes"
+  | "no"
+  | "keepLocal"
+  | "keepBoth"
+  | "linkCopies"
+  | "discardNew"
+  | "updatedVersion"
+  | "alwaysDoThis"
+  | "reviewDetails";
 
 export type ConversationPrompt = {
   id: string;
@@ -84,6 +95,7 @@ export type ConversationPrompt = {
   linkedDocumentArrival: number;
   evidenceSummary: string[];
   contextField: ClarificationQuestion["field"] | null;
+  relatedArrivalId: number | null;
 };
 
 export type MemberUtterance = {
@@ -97,6 +109,8 @@ export type MemberDirectionCommand =
   | { type: "rejectContextField"; field: ClarificationQuestion["field"] }
   | { type: "setContextField"; field: ClarificationQuestion["field"]; value: string | null }
   | { type: "confirmFilingDecision" }
+  | { type: "keepDocumentLocal" }
+  | { type: "resolveDuplicate"; decision: DuplicateDecision; relatedArrivalId: number }
   | { type: "learnFilingRule" }
   | { type: "decline" };
 

@@ -191,6 +191,8 @@ pub enum ContextField {
 pub enum ConversationPromptPurpose {
     ClarifyContext,
     ConfirmFilingDecision,
+    ChooseCloudAssistance,
+    ResolveDuplicate,
     LearnFilingRule,
 }
 
@@ -199,6 +201,7 @@ pub enum ConversationPromptPurpose {
 pub enum ConversationExpectedResponse {
     Confirmation,
     ContextValue,
+    Choice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +209,11 @@ pub enum ConversationExpectedResponse {
 pub enum ConversationAction {
     Yes,
     No,
+    KeepLocal,
+    KeepBoth,
+    LinkCopies,
+    DiscardNew,
+    UpdatedVersion,
     AlwaysDoThis,
     ReviewDetails,
 }
@@ -222,6 +230,7 @@ pub struct ConversationPrompt {
     pub linked_document_arrival: i64,
     pub evidence_summary: Vec<String>,
     pub context_field: Option<ContextField>,
+    pub related_arrival_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +255,11 @@ pub enum MemberDirectionCommand {
         value: Option<String>,
     },
     ConfirmFilingDecision,
+    KeepDocumentLocal,
+    ResolveDuplicate {
+        decision: DuplicateDecision,
+        related_arrival_id: i64,
+    },
     LearnFilingRule,
     Decline,
 }
@@ -346,6 +360,51 @@ impl MemberDirectionInterpreter for DeterministicMemberDirectionInterpreter {
                 } else {
                     ambiguous("Luna could not tell whether this should become a Filing Rule.")
                 }
+            }
+            ConversationPromptPurpose::ChooseCloudAssistance => {
+                if matches!(
+                    normalized.as_str(),
+                    "keep local" | "keep it local" | "local only" | "stay local"
+                ) || normalized.contains("keep it local")
+                    || normalized.contains("keep local")
+                    || normalized.contains("don't use cloud")
+                    || normalized.contains("do not use cloud")
+                {
+                    confident(MemberDirectionCommand::KeepDocumentLocal)
+                } else {
+                    ambiguous(
+                        "Choose a disclosed provider and consent option below, or say “Keep local”.",
+                    )
+                }
+            }
+            ConversationPromptPurpose::ResolveDuplicate => {
+                let Some(related_arrival_id) = prompt.related_arrival_id else {
+                    return ambiguous("The duplicate question is no longer available.");
+                };
+                let decision = match normalized.as_str() {
+                    "keep both" => Some(DuplicateDecision::KeepBoth),
+                    "link copies" | "link the copies" => Some(DuplicateDecision::LinkCopies),
+                    "discard new" | "discard the new one" | "discard the new copy" => {
+                        Some(DuplicateDecision::DiscardNew)
+                    }
+                    "updated version"
+                    | "mark as updated version"
+                    | "mark it as updated version" => Some(DuplicateDecision::UpdatedVersion),
+                    _ => None,
+                };
+                decision.map_or_else(
+                    || {
+                        ambiguous(
+                            "Say “Keep both”, “Link copies”, “Discard new”, or “Updated version”.",
+                        )
+                    },
+                    |decision| {
+                        confident(MemberDirectionCommand::ResolveDuplicate {
+                            decision,
+                            related_arrival_id,
+                        })
+                    },
+                )
             }
             ConversationPromptPurpose::ClarifyContext => {
                 let Some(field) = prompt.context_field else {
@@ -2110,15 +2169,26 @@ impl<V: CredentialVault> ConversationStore<V> {
     ) -> Result<ConversationTurnOutcome, ConversationError> {
         let (conversation_id, payload) =
             self.load_document_arrival_payload(household_id, arrival_id)?;
-        if conversation_id != utterance.conversation_id {
-            return Err(ConversationError::InvalidMemberDirection);
-        }
         let arrival = self.document_arrival(household_id, arrival_id, conversation_id, payload)?;
         let view = document_conversation_view(&arrival, cabinet_section);
-        let prompt = view
-            .prompt
+        let current_prompt = view.prompt;
+        if conversation_id != utterance.conversation_id {
+            return Ok(safe_conversation_response(
+                arrival,
+                current_prompt,
+                "That answer belongs to a different Conversation, so I did not apply it. Please answer the current question.",
+            ));
+        }
+        let Some(prompt) = current_prompt
+            .clone()
             .filter(|prompt| prompt.id == utterance.linked_prompt)
-            .ok_or(ConversationError::StaleConversationPrompt)?;
+        else {
+            return Ok(safe_conversation_response(
+                arrival,
+                current_prompt,
+                "That answer was linked to an earlier question, so I did not apply it. Please answer the current question.",
+            ));
+        };
         if !self
             .load_conversation_payload(household_id, conversation_id)?
             .deleted
@@ -2167,9 +2237,13 @@ impl<V: CredentialVault> ConversationStore<V> {
                 arrival,
             });
         }
-        let command = valid_commands
-            .pop()
-            .ok_or(ConversationError::InvalidMemberDirection)?;
+        let Some(command) = valid_commands.pop() else {
+            return Ok(safe_conversation_response(
+                arrival,
+                Some(prompt),
+                "I could not safely apply that answer to the current question. Please answer it another way.",
+            ));
+        };
 
         let updated = match &command {
             MemberDirectionCommand::ConfirmContextField { .. }
@@ -2206,6 +2280,19 @@ impl<V: CredentialVault> ConversationStore<V> {
                 )?;
                 self.file_document(household_id, arrival_id, cabinet_root)?
             }
+            MemberDirectionCommand::KeepDocumentLocal => {
+                self.keep_document_local(household_id, arrival_id)?
+            }
+            MemberDirectionCommand::ResolveDuplicate {
+                decision,
+                related_arrival_id,
+            } => self.resolve_duplicate(
+                household_id,
+                arrival_id,
+                *related_arrival_id,
+                *decision,
+                false,
+            )?,
             MemberDirectionCommand::LearnFilingRule => {
                 self.learn_filing_rule(household_id, arrival_id)?
             }
@@ -2216,7 +2303,9 @@ impl<V: CredentialVault> ConversationStore<V> {
                 ConversationPromptPurpose::LearnFilingRule => {
                     self.decline_filing_rule(household_id, arrival_id)?
                 }
-                ConversationPromptPurpose::ClarifyContext => {
+                ConversationPromptPurpose::ClarifyContext
+                | ConversationPromptPurpose::ChooseCloudAssistance
+                | ConversationPromptPurpose::ResolveDuplicate => {
                     return Err(ConversationError::InvalidMemberDirection);
                 }
             },
@@ -2229,6 +2318,9 @@ impl<V: CredentialVault> ConversationStore<V> {
                 ConversationTurnStatus::ActionCompleted
             }
             MemberDirectionCommand::LearnFilingRule => ConversationTurnStatus::ActionCompleted,
+            MemberDirectionCommand::ResolveDuplicate { .. } => {
+                ConversationTurnStatus::ActionCompleted
+            }
             MemberDirectionCommand::Decline => ConversationTurnStatus::ActionRefused,
             _ => ConversationTurnStatus::AcceptedDirection,
         };
@@ -3272,6 +3364,20 @@ impl<V: CredentialVault> ConversationStore<V> {
     }
 }
 
+fn safe_conversation_response(
+    arrival: DocumentArrival,
+    current_prompt: Option<ConversationPrompt>,
+    message: &str,
+) -> ConversationTurnOutcome {
+    ConversationTurnOutcome {
+        status: ConversationTurnStatus::ClarificationRequired,
+        accepted_direction: None,
+        message: message.to_owned(),
+        next_prompt: current_prompt,
+        arrival,
+    }
+}
+
 fn safe_cabinet_destination(
     cabinet_root: &Path,
     cabinet_destination: &str,
@@ -3550,6 +3656,74 @@ fn document_conversation_view(
     cabinet_section: &str,
 ) -> DocumentConversationView {
     let understanding = document_understanding(arrival);
+    if matches!(
+        arrival.processing_state,
+        DocumentProcessingState::NeedsCloudConsent
+            | DocumentProcessingState::WaitingForCloudAssistance
+    ) {
+        let message = format!(
+            "{understanding}\n\nLocal Evidence is not enough to interpret this Document safely. Review the disclosed Intelligence Provider and consent choices below, or say “Keep local”."
+        );
+        return DocumentConversationView {
+            understanding,
+            prompt: Some(ConversationPrompt {
+                id: conversation_prompt_id(arrival.id, "choose-cloud-assistance", &message),
+                purpose: ConversationPromptPurpose::ChooseCloudAssistance,
+                subject: arrival.original_name.clone(),
+                message,
+                expected_response: ConversationExpectedResponse::Choice,
+                allowed_actions: vec![
+                    ConversationAction::KeepLocal,
+                    ConversationAction::ReviewDetails,
+                ],
+                linked_document_arrival: arrival.id,
+                evidence_summary: evidence_summary(arrival),
+                context_field: None,
+                related_arrival_id: None,
+            }),
+            completion_message: None,
+        };
+    }
+
+    if arrival.processing_state == DocumentProcessingState::PossibleDuplicate {
+        if let Some(candidate) = arrival
+            .duplicate_review
+            .as_ref()
+            .and_then(|review| review.candidates.first())
+        {
+            let duplicate_kind = match candidate.kind {
+                DuplicateKind::Exact => "an exact byte duplicate",
+                DuplicateKind::Possible => "a possible duplicate with changed bytes",
+            };
+            let message = format!(
+                "{understanding}\n\nThis may be {duplicate_kind} of {}. Say “Keep both”, “Link copies”, “Discard new”, or “Updated version”.",
+                candidate.original_name
+            );
+            return DocumentConversationView {
+                understanding,
+                prompt: Some(ConversationPrompt {
+                    id: conversation_prompt_id(arrival.id, "resolve-duplicate", &message),
+                    purpose: ConversationPromptPurpose::ResolveDuplicate,
+                    subject: arrival.original_name.clone(),
+                    message,
+                    expected_response: ConversationExpectedResponse::Choice,
+                    allowed_actions: vec![
+                        ConversationAction::KeepBoth,
+                        ConversationAction::LinkCopies,
+                        ConversationAction::DiscardNew,
+                        ConversationAction::UpdatedVersion,
+                        ConversationAction::ReviewDetails,
+                    ],
+                    linked_document_arrival: arrival.id,
+                    evidence_summary: evidence_summary(arrival),
+                    context_field: None,
+                    related_arrival_id: Some(candidate.arrival_id),
+                }),
+                completion_message: None,
+            };
+        }
+    }
+
     if arrival.processing_state == DocumentProcessingState::Filed {
         let destination = arrival
             .filed_original
@@ -3579,6 +3753,7 @@ fn document_conversation_view(
                     linked_document_arrival: arrival.id,
                     evidence_summary: evidence_summary(arrival),
                     context_field: None,
+                    related_arrival_id: None,
                 }),
                 completion_message: None,
             };
@@ -3650,6 +3825,7 @@ fn document_conversation_view(
                     linked_document_arrival: arrival.id,
                     evidence_summary: evidence_summary(arrival),
                     context_field: Some(question.field),
+                    related_arrival_id: None,
                 }),
                 completion_message: None,
             };
@@ -3713,6 +3889,7 @@ fn filing_confirmation_view(
             linked_document_arrival: arrival.id,
             evidence_summary: evidence_summary(arrival),
             context_field: None,
+            related_arrival_id: None,
         }),
         completion_message: None,
     }
@@ -3913,6 +4090,15 @@ fn validate_direction_for_prompt(
         }
         MemberDirectionCommand::ConfirmFilingDecision => {
             prompt.purpose == ConversationPromptPurpose::ConfirmFilingDecision
+        }
+        MemberDirectionCommand::KeepDocumentLocal => {
+            prompt.purpose == ConversationPromptPurpose::ChooseCloudAssistance
+        }
+        MemberDirectionCommand::ResolveDuplicate {
+            related_arrival_id, ..
+        } => {
+            prompt.purpose == ConversationPromptPurpose::ResolveDuplicate
+                && prompt.related_arrival_id == Some(*related_arrival_id)
         }
         MemberDirectionCommand::LearnFilingRule => {
             prompt.purpose == ConversationPromptPurpose::LearnFilingRule
