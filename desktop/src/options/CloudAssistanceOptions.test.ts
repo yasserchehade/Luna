@@ -97,7 +97,7 @@ test("provider key setup waits for automatically provisioned Luna access", () =>
     }),
     {
       enabled: false,
-      statusLabel: "Luna access unavailable",
+      statusLabel: "Provider setup unavailable",
     },
   );
 });

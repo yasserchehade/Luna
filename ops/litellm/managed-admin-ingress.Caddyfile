@@ -1,0 +1,14 @@
+{
+	auto_https off
+	admin off
+}
+
+:8081 {
+	@managedAdministrationRoute path /health/liveliness /key/delete /key/generate /team/new /team/update
+
+	handle @managedAdministrationRoute {
+		reverse_proxy gateway:4000
+	}
+
+	respond 404
+}

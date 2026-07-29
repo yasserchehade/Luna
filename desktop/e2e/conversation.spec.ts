@@ -7,29 +7,80 @@ import { Key } from "webdriverio";
 import { onboardTestHousehold } from "./onboardTestHousehold";
 import { testHousehold } from "./testHousehold";
 
+async function sendKeyboardKey(key: "tab" | "enter" | "space") {
+  if (process.platform === "win32") {
+    // WebView2's test driver sends text but does not perform every native key action.
+    // SendKeys exercises the foreground installed application with real keyboard input.
+    const sendKeysValue = {
+      tab: "{TAB}",
+      enter: "{ENTER}",
+      space: " ",
+    }[key];
+    execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${sendKeysValue}')`,
+      ],
+      { windowsHide: true },
+    );
+    await browser.pause(50);
+    return;
+  }
+  await browser.keys({ tab: Key.Tab, enter: Key.Enter, space: Key.Space }[key]);
+}
+
 describe("Luna Conversation desk", () => {
+  it("sends with Enter and keeps Shift+Enter for a new line", async () => {
+    await onboardTestHousehold();
+    const composer = await $("#message-composer");
+    await composer.click();
+    await expect($("#message-composer-hint")).toHaveText("Enter to send. Shift+Enter for a new line.");
+    await expect(composer).toHaveAttribute("aria-describedby", "message-composer-hint");
+    await composer.setValue("composing text");
+
+    const compositionEnterAllowsNativeEdit = await browser.execute(() => {
+      const composer = document.querySelector("#message-composer");
+      if (!composer) return false;
+      return composer.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+        key: "Enter",
+      }));
+    });
+    expect(compositionEnterAllowsNativeEdit).toBe(true);
+    await expect($$(".member-message")).toBeElementsArrayOfSize(0);
+    await expect(composer).toHaveValue("composing text");
+
+    await composer.setValue("First line");
+
+    const shiftEnterAllowsNativeEdit = await browser.execute(() => {
+      const composer = document.querySelector("#message-composer");
+      if (!composer) return false;
+      return composer.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+        shiftKey: true,
+      }));
+    });
+    expect(shiftEnterAllowsNativeEdit).toBe(true);
+    await expect($$(".member-message")).toBeElementsArrayOfSize(0);
+
+    await composer.addValue("\nSecond line");
+    await expect(composer).toHaveValue("First line\nSecond line");
+    await browser.keys(Key.Enter);
+
+    await expect($$(".member-message")).toBeElementsArrayOfSize(1);
+    await expect($(".member-message p")).toHaveText("First line\nSecond line");
+    await expect(composer).toHaveValue("");
+  });
+
   it("keeps document work consistent between Conversation and To do", async () => {
     await onboardTestHousehold();
-    const sendKeyboardKey = async (key: "tab" | "enter" | "space") => {
-      if (process.platform === "win32") {
-        // WebView2's test driver sends text but does not perform Tab's native focus movement.
-        // SendKeys exercises the foreground installed application with real keyboard input.
-        const sendKeysValue = { tab: "{TAB}", enter: "{ENTER}", space: " " }[key];
-        execFileSync(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${sendKeysValue}')`,
-          ],
-          { windowsHide: true },
-        );
-        await browser.pause(50);
-        return;
-      }
-      await browser.keys({ tab: Key.Tab, enter: Key.Enter, space: Key.Space }[key]);
-    };
     const focusByTab = async (selector: string) => {
       await $("#message-composer").click();
       for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -56,7 +107,7 @@ describe("Luna Conversation desk", () => {
     await expect(composer).toHaveValue(message);
     await $("button[aria-label='Send message']").click();
 
-    await expect($(".member-message p")).toHaveText(message);
+    await expect($(".member-message:last-of-type p")).toHaveText(message);
 
     await openConversationActions();
     await $("button=Rename").click();
@@ -186,6 +237,16 @@ describe("Luna Conversation desk", () => {
     await expect($(".filed-originals p")).toHaveText(
       "Bills & Services/12 Seabreeze Avenue/AGL/2026/2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf",
     );
+    const cabinetLayout = await browser.execute(() => {
+      const cabinet = document.querySelector(".cabinet-view");
+      const cards = [...document.querySelectorAll<HTMLElement>(".filed-originals article")];
+      return {
+        horizontalOverflow: (cabinet?.scrollWidth ?? 0) - (cabinet?.clientWidth ?? 0),
+        overflowingCards: cards.filter((card) => card.scrollWidth > card.clientWidth + 1).length,
+      };
+    });
+    expect(cabinetLayout.horizontalOverflow).toBeLessThanOrEqual(1);
+    expect(cabinetLayout.overflowingCards).toBe(0);
     await $("button[aria-label='History']").click();
     const filingHistory = $(".history-event:not(.cloud-history-event):not(.duplicate-history-event):not(.rule-history-event)");
     await expect(filingHistory.$("strong")).toHaveText("Document filed");
@@ -288,7 +349,7 @@ describe("Luna Conversation desk", () => {
     const recoveredMessage = "The recovered conversation is writable.";
     await $("#message-composer").setValue(recoveredMessage);
     await $("button[aria-label='Send message']").click();
-    await expect($(".member-message p")).toHaveText(recoveredMessage);
+    await expect($(".member-message:last-of-type p")).toHaveText(recoveredMessage);
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $("button=Open Conversation item").click();

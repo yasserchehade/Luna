@@ -45,7 +45,7 @@ jobs:
           workspaces: "desktop/src-tauri -> target"
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
-      - run: node --test ops/litellm/canary.test.mjs ops/litellm/byok-canary.test.mjs
+      - run: node --test ops/litellm/canary.test.mjs ops/litellm/byok-canary.test.mjs ops/litellm/provision-managed-canary.test.mjs
       - name: Validate pinned LiteLLM deployment
         env:
           OPENAI_API_KEY: sk-ci-placeholder

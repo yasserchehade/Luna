@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import type { AccountService, HouseholdSession } from "./account/accountService";
-import { synchronizeManagedIntelligenceAccess } from "./account/managedIntelligenceCoordinator";
+import {
+  postTrustSynchronizationNotice,
+  settlePostTrustSynchronization,
+  synchronizeManagedIntelligenceAccess,
+} from "./account/managedIntelligenceCoordinator";
 import { AccountFlow } from "./account/AccountFlow";
 import { TrustedDeviceFlow, TrustedDeviceUnlock } from "./trusted-device/TrustedDeviceFlow";
 import type { TrustedDeviceService } from "./trusted-device/trustedDeviceService";
@@ -131,19 +135,21 @@ export default function App({ accountService, cabinetService, conversationServic
           activatedKeyEpoch: device.activatedKeyEpoch!,
           revokedAfter: device.revokedAfter,
         }));
-      if (trustedDevices.length > 0) {
-        await conversationService.synchronizePortableMemory(
-          unlockedSession.householdId,
-          trustedDevices,
-        );
-      }
-      await synchronizeManagedIntelligenceAccess(
-        accountService,
-        conversationService,
-        trustedDeviceService,
-        unlockedSession,
-      );
-      setCoordinationNotice("");
+      const postTrustResult = await settlePostTrustSynchronization({
+        portableMemory: () => trustedDevices.length > 0
+          ? conversationService.synchronizePortableMemory(
+            unlockedSession.householdId,
+            trustedDevices,
+          )
+          : Promise.resolve(),
+        managedAccess: () => synchronizeManagedIntelligenceAccess(
+          accountService,
+          conversationService,
+          trustedDeviceService,
+          unlockedSession,
+        ),
+      });
+      setCoordinationNotice(postTrustSynchronizationNotice(postTrustResult));
     } catch {
       setCoordinationNotice(
         "Luna is working offline. Trusted Device changes will be checked when the connection returns.",
@@ -220,7 +226,7 @@ export default function App({ accountService, cabinetService, conversationServic
       trustedDeviceService,
       session,
     ).catch(() => setCoordinationNotice(
-      "Luna is working offline. Trusted Device changes will be checked when the connection returns.",
+      "Luna could not prepare Cloud Assistance on this Trusted Device. Local work remains available and Luna will retry automatically.",
     ));
     const renewalTimer = window.setInterval(renewManagedAccess, 30 * 60 * 1_000);
     return () => window.clearInterval(renewalTimer);
@@ -515,7 +521,7 @@ export default function App({ accountService, cabinetService, conversationServic
               <small>{event.outcome}{event.candidateDisposition ? ` · candidate ${event.candidateDisposition}` : ""} · {event.authority} · {event.occurredAt}</small>
             </article>)}</>}
         </section>
-      </main> : <>
+      </main> : <div className="workspace-stack">
         {coordinationNotice && <p role="status" className="session-notice">{coordinationNotice}</p>}
         {cabinetUnavailable && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna will keep local work staged and will not redirect it. Open Cabinet to choose the remembered location again.</p>}
         <ConversationWorkspace
@@ -532,7 +538,7 @@ export default function App({ accountService, cabinetService, conversationServic
           onOpenConversation={() => setActiveDestination("Luna")}
           onTodoCountChange={setTodoCount}
         />
-      </>}
+      </div>}
 
     </div>
   );

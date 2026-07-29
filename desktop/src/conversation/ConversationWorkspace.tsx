@@ -1160,8 +1160,21 @@ export function ConversationWorkspace({
     </div>
     <form className="composer" onSubmit={submitMessage}>
       <label htmlFor="message-composer">Message Luna</label>
-      <textarea id="message-composer" onChange={(event) => setDraft(event.target.value)} placeholder="Message Luna or attach a document" rows={1} value={draft} />
+      <textarea
+        aria-describedby="message-composer-hint"
+        id="message-composer"
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+          event.preventDefault();
+          event.currentTarget.form?.requestSubmit();
+        }}
+        placeholder="Message Luna or attach a document"
+        rows={1}
+        value={draft}
+      />
       <button type="submit" aria-label="Send message">↑</button>
+      <small id="message-composer-hint">Enter to send. Shift+Enter for a new line.</small>
     </form>
   </main>;
 }

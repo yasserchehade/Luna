@@ -290,6 +290,35 @@ test("generated LiteLLM access is device-attributed, route-limited, rate-limited
   assert.doesNotMatch(String(requests[1].init?.body), /master-secret|provider|document|email/i);
 });
 
+test("managed gateway administration authenticates through the protected ingress", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const client = createLiteLlmManagedAccessClient({
+    adminEndpoint: "https://gateway-admin.luna.test",
+    endpoint: "https://gateway.luna.test/v1/chat/completions",
+    masterKey: "sk-litellm-master-secret",
+    accessClientId: "luna-supabase.access",
+    accessClientSecret: "cloudflare-service-secret",
+    durationHours: 24,
+    requestTimeoutMs: 10_000,
+    rpmLimit: 6,
+    tpmLimit: 8_000,
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.revokeGatewayAccessByAlias("luna-managed-device");
+
+  const headers = new Headers(requests[0].init?.headers);
+  assert.equal(headers.get("authorization"), "Bearer sk-litellm-master-secret");
+  assert.equal(headers.get("cf-access-client-id"), "luna-supabase.access");
+  assert.equal(headers.get("cf-access-client-secret"), "cloudflare-service-secret");
+});
+
 test("managed gateway credentials cannot exceed the 24-hour safety bound", () => {
   assert.throws(() => createLiteLlmManagedAccessClient({
     adminEndpoint: "https://gateway-admin.luna.test",

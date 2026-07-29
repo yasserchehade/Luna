@@ -75,7 +75,7 @@ export function providerSetupAvailability(
       ? "Connected"
       : status.gatewayConfigured
       ? "Not connected"
-      : "Luna access unavailable",
+      : "Provider setup unavailable",
   };
 }
 
@@ -86,9 +86,9 @@ function managedAccessStatus(
   if (!access) return "Managed access unavailable";
   switch (access.entitlementState) {
     case "checkoutPending": return "Checkout pending";
-    case "entitled": return access.deviceState === "ready" && providerConfigured
-      ? "Managed access ready"
-      : "Preparing this Trusted Device";
+    case "entitled":
+      if (access.deviceState !== "ready") return "Preparing this Trusted Device";
+      return providerConfigured ? "Managed access ready" : "Connecting managed provider";
     case "paymentProblem": return "Payment needs attention";
     case "ended": return "Managed access ended";
     default: return "Managed access not included";

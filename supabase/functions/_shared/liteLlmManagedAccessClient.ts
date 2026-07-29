@@ -4,6 +4,8 @@ type ManagedAccessConfiguration = {
   adminEndpoint: string;
   endpoint: string;
   masterKey: string;
+  accessClientId?: string;
+  accessClientSecret?: string;
   durationHours: number;
   requestTimeoutMs: number;
   rpmLimit: number;
@@ -18,6 +20,9 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
   const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
   validateSecureEndpoint(chatEndpoint, loopbackHosts, "managed gateway");
   validateSecureEndpoint(adminEndpoint, loopbackHosts, "managed gateway administration");
+  if (Boolean(configuration.accessClientId) !== Boolean(configuration.accessClientSecret)) {
+    throw new Error("The managed gateway ingress credential is incomplete.");
+  }
   if (!chatEndpoint.pathname.endsWith("/v1/chat/completions")) {
     throw new Error("The managed gateway endpoint is invalid.");
   }
@@ -47,6 +52,12 @@ export function createLiteLlmManagedAccessClient(configuration: ManagedAccessCon
       method,
       headers: {
         authorization: `Bearer ${configuration.masterKey}`,
+        ...(configuration.accessClientId
+          ? {
+            "cf-access-client-id": configuration.accessClientId,
+            "cf-access-client-secret": configuration.accessClientSecret!,
+          }
+          : {}),
         ...(body ? { "content-type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),

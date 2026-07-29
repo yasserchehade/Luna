@@ -91,6 +91,17 @@ describe("Luna account access", () => {
 
     await expect($("h1=New conversation")).toBeDisplayed();
     await expect($("[role='status']")).toHaveText(expect.stringContaining("working offline"));
+    const offlineLayout = await browser.execute(() => {
+      const sidebar = document.querySelector(".sidebar")?.getBoundingClientRect();
+      const workspace = document.querySelector(".conversation-workspace")?.getBoundingClientRect();
+      return {
+        sidebarRight: sidebar?.right ?? 0,
+        workspaceLeft: workspace?.left ?? 0,
+        workspaceWidth: workspace?.width ?? 0,
+      };
+    });
+    expect(offlineLayout.workspaceLeft).toBeGreaterThanOrEqual(offlineLayout.sidebarRight);
+    expect(offlineLayout.workspaceWidth).toBeGreaterThan(offlineLayout.sidebarRight);
     await browser.execute(() => {
       (window as typeof window & {
         __LUNA_E2E_ACCOUNT__: { setCoordinationAvailable(available: boolean): void };

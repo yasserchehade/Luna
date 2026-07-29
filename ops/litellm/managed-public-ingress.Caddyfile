@@ -1,0 +1,14 @@
+{
+	auto_https off
+	admin off
+}
+
+:8080 {
+	@managedClientRoute path /v1/chat/completions /v1/models
+
+	handle @managedClientRoute {
+		reverse_proxy gateway:4000
+	}
+
+	respond 404
+}
