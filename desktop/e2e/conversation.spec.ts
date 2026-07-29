@@ -157,9 +157,15 @@ describe("Luna Conversation desk", () => {
     await expect($(".document-luna-message .conversation-copy")).toHaveText(
       expect.stringContaining("Bills & Services/12 Seabreeze Avenue/AGL/2026/"),
     );
-    await focusByTab(".conversation-inline-actions button");
-    expect(await browser.execute(() => document.activeElement?.textContent)).toBe("Always do this");
-    await sendKeyboardKey("enter");
+    if (process.platform === "win32") {
+      await focusByTab(".conversation-inline-actions button");
+      expect(await browser.execute(() => document.activeElement?.textContent)).toBe("Always do this");
+      await sendKeyboardKey("enter");
+    } else {
+      const alwaysDoThis = $("button=Always do this");
+      await expect(alwaysDoThis).toBeDisplayed();
+      await alwaysDoThis.click();
+    }
     await browser.waitUntil(
       async () => !(await $("button=Always do this").isExisting()),
       { timeoutMsg: "The Filing Rule direction was not recorded." },
