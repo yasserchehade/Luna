@@ -6,7 +6,7 @@ The first prototype accepts no live payments. It supports bounded complimentary 
 
 On 29 July 2026, the linked `luna-beta` project was migrated through `202607280014`. One designated internal beta Household received an operator-granted complimentary entitlement capped at USD 5 and expiring on 2 September 2026. The grant targets only the server-side Household identifier; no member identity or allowlist is present in the desktop or public source.
 
-The entitlement is active but its Trusted Device remains in provisioning until issue #53 completes the named Cloudflare Tunnel, protected administration hostname, managed gateway secrets and narrow device credential provisioning. Do not describe the Household as having usable Luna-managed Intelligence until that provisioning succeeds.
+The named Cloudflare Tunnel, separate public and administration hostnames, Service Auth policy, managed gateway secrets and two Supabase administration functions are now live. The entitlement is active, but its Trusted Device still has to obtain and exercise its narrow gateway credential through `managed-intelligence-provisioning`. Do not describe the Household as having usable Luna-managed Intelligence until that installed-device request and revocation check succeed.
 
 ## Server-only configuration
 

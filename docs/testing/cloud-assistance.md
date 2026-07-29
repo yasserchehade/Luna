@@ -44,6 +44,14 @@ Tests use the approved local-core, boundary-contract and installed-application s
 
 The OpenAI/LiteLLM canary is an explicit release-environment check, not an automated-suite dependency. For prototype acceptance it may run through the pinned, operator-run loopback deployment using only the fixed synthetic request and disposable credentials. On 28 July 2026 the real OpenAI `gpt-4.1-mini` canary passed through the exact `openai/gpt-4.1-mini` LiteLLM route with a strict structured result and privacy-safe usage of 397 input, 214 output and 611 total tokens. The disposable virtual key was revoked and proved unusable; the synthetic marker, upstream key, master key and database password were absent from container logs; the encrypted handoff, containers, networks and volume were removed. Privacy-safe evidence is attached to issue #13 and PR #33.
 
+On 29 July 2026, the persistent internal-beta gateway repeated that contract with
+the newly created Luna-funded project key: 399 input, 216 output and 615 total
+tokens. The disposable key was revoked, and a content-blind scan of the gateway,
+BYOK gateway, database, both Caddy ingress containers and cloudflared found no
+synthetic marker or checked credential. The public hostname separately proved
+key enforcement and route restriction, while the administration hostname
+returned Cloudflare Access HTTP 403 without its Supabase-held service token.
+
 A remote host is not required to merge the prototype. Issue #53 owns the separate pre-production gate. ADR 0018 selects a no-separate-host-cost named Cloudflare Tunnel from the operator-controlled prototype machine for the internal beta; the machine must be running, and authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and remote log verification must exist before external testers use Luna-managed Intelligence.
 
 The standard branch checks run the Rust suite, Options component tests, server-contract tests, TypeScript checking, Supabase schema lint and account-service contract. Paddle is sandbox-only and all server-contract tests use deterministic transports; no real charge or paid provider call is made.

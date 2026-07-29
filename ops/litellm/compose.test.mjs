@@ -64,6 +64,7 @@ test("pre-production ingress keeps gateway ports on loopback and the tunnel toke
     assert.equal(ingress.ports, undefined);
     assert.equal(ingress.read_only, true);
     assert.deepEqual(ingress.cap_drop, ["ALL"]);
+    assert.deepEqual(ingress.cap_add, ["NET_BIND_SERVICE"]);
     assert.deepEqual(Object.keys(ingress.networks), ["ingress"]);
   }
 

@@ -11,6 +11,11 @@ The deployment uses the digest-pinned `ops/litellm/compose.yaml` services plus `
 - a separate administration ingress that forwards only the LiteLLM health, team and key-management routes;
 - a Cloudflare Access Service Auth policy on the administration hostname.
 
+The Caddy image is still run with a read-only root filesystem, `no-new-privileges`
+and every capability dropped except `NET_BIND_SERVICE`. The official Caddy binary
+carries that file capability; dropping it as well causes Linux to reject the binary
+at `exec` before either Caddyfile is read.
+
 The public customer hostname is authenticated by each Trusted Device's narrow, attributable LiteLLM virtual key. The administration hostname additionally requires a revocable Cloudflare Access service token held only by the Supabase functions, and LiteLLM still requires its master key. No desktop receives either administrative credential.
 
 The base LiteLLM ports remain bound to `127.0.0.1`. Cloudflare terminates public TLS and `cloudflared` initiates outbound-only connectivity, so the operator does not open router or firewall ingress ports.

@@ -56,7 +56,7 @@ In Cloudflare Zero Trust:
 
 The customer hostname is protected by the Trusted Device's narrow LiteLLM bearer key and the local public ingress forwards only `/v1/chat/completions` and `/v1/models`. The administration hostname is a separate defence-in-depth boundary: Cloudflare Access authenticates the Supabase service token, the local ingress forwards only the allowlisted team/key/health routes, and LiteLLM still requires the master key.
 
-The pre-production overlay pins Cloudflare Tunnel `2026.7.2` and Caddy `2.10.2` by multi-platform digest. Caddy access logging is not enabled. The tunnel token is read from a file outside the repository rather than appearing in the container command. Point `LUNA_CLOUDFLARE_TUNNEL_TOKEN_FILE` at the operator-secret-store handoff, then render and start both Compose files:
+The pre-production overlay pins Cloudflare Tunnel `2026.7.2` and Caddy `2.10.2` by multi-platform digest. Caddy access logging is not enabled. Both Caddy services use a read-only root filesystem, `no-new-privileges`, `cap_drop: ALL` and then restore only `NET_BIND_SERVICE`, which the official Caddy binary carries as a file capability and therefore requires even though Luna's listeners use unprivileged ports. The tunnel token is read from a file outside the repository rather than appearing in the container command. Point `LUNA_CLOUDFLARE_TUNNEL_TOKEN_FILE` at the operator-secret-store handoff, then render and start both Compose files:
 
 ```powershell
 docker compose `
@@ -80,6 +80,36 @@ Configure the Supabase function secret store with:
 - the existing LiteLLM master, duration, request-limit and reconciliation values.
 
 The two administration functions attach the Cloudflare service-token headers only to LiteLLM administration calls. The desktop and customer chat-completions requests never receive them.
+
+### Internal-beta deployment evidence
+
+On 29 July 2026, `silikin.com` became the authoritative internal-beta domain for
+the healthy `luna-beta-gateway` tunnel. The public route is
+`https://intelligence-beta.silikin.com` and the Access-protected administration
+route is `https://intelligence-admin-beta.silikin.com`. The administration
+application has one Service Auth policy whose only include rule is the
+`luna-supabase-beta` service token; unauthenticated administration receives HTTP
+403. Public `/v1/models` requires a LiteLLM key and the public ingress returns 404
+for the administration health path.
+
+The `luna-beta` Supabase secret store contains the two endpoint URLs, Cloudflare
+service-token credentials, the LiteLLM master key, reconciliation secret and
+bounded duration, timeout, RPM and TPM settings. Both
+`managed-intelligence-provisioning` and
+`reconcile-managed-intelligence-access` are active. The complete pinned Docker
+stack is healthy on the operator machine.
+
+A bounded synthetic `gpt-4.1-mini` call passed through the running managed
+gateway using the exact `openai/gpt-4.1-mini` route and strict structured-result
+contract. It used 399 input, 216 output and 615 total tokens; its disposable
+virtual key was revoked. A content-blind scan of all six container logs found
+neither `LUNA_SYNTHETIC_CANARY_53` nor any checked provider, gateway, database or
+tunnel credential.
+
+This is internal-beta infrastructure evidence, not production readiness. Issue
+#53 remains open until the designated Trusted Device provisions through the
+deployed Edge Function, completes a managed request through the public hostname
+and proves entitlement/key revocation.
 
 ## Local and CI testing
 
