@@ -106,7 +106,41 @@ async function startGateway({ responseModel = "gpt-4.1-mini" } = {}) {
   };
 }
 
-function runCanary(endpoint) {
+async function startAdminProxy(upstreamEndpoint) {
+  const observations = [];
+  const upstreamOrigin = new URL("/", upstreamEndpoint);
+  const server = createServer(async (request, response) => {
+    const body = await readJson(request);
+    observations.push({
+      method: request.method,
+      path: request.url,
+      authorization: request.headers.authorization,
+      accessClientId: request.headers["cf-access-client-id"],
+      accessClientSecret: request.headers["cf-access-client-secret"],
+      body,
+    });
+    const upstream = await fetch(new URL(request.url, upstreamOrigin), {
+      method: request.method,
+      headers: {
+        authorization: request.headers.authorization ?? "",
+        "content-type": "application/json",
+      },
+      body: request.method === "GET" ? undefined : JSON.stringify(body),
+    });
+    response.writeHead(upstream.status, { "content-type": "application/json" });
+    response.end(await upstream.text());
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    observations,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+function runCanary(endpoint, environment = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["ops/litellm/canary.mjs"], {
       cwd: new URL("../..", import.meta.url),
@@ -114,6 +148,7 @@ function runCanary(endpoint) {
         ...process.env,
         LUNA_MANAGED_INTELLIGENCE_URL: endpoint,
         LITELLM_MASTER_KEY: MASTER_KEY,
+        ...environment,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -174,6 +209,29 @@ test("canary proves the exact route, structured result, usage, and revocation", 
     assert.deepEqual(gateway.observations[2].body.fallbacks, []);
     assert.equal(gateway.observations[2].body.response_format.json_schema.strict, true);
   } finally {
+    await gateway.close();
+  }
+});
+
+test("remote canary separates protected administration from customer traffic", async () => {
+  const gateway = await startGateway();
+  const admin = await startAdminProxy(gateway.endpoint);
+  try {
+    const result = await runCanary(gateway.endpoint, {
+      LITELLM_ADMIN_URL: admin.endpoint,
+      CLOUDFLARE_ACCESS_CLIENT_ID: "luna-canary.access",
+      CLOUDFLARE_ACCESS_CLIENT_SECRET: "cloudflare-service-secret",
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(
+      admin.observations.map(({ method, path }) => `${method} ${path}`),
+      ["POST /key/generate", "POST /key/delete"],
+    );
+    assert.equal(admin.observations[0].accessClientId, "luna-canary.access");
+    assert.equal(admin.observations[0].accessClientSecret, "cloudflare-service-secret");
+  } finally {
+    await admin.close();
     await gateway.close();
   }
 });

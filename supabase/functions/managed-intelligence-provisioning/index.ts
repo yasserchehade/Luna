@@ -10,6 +10,8 @@ const gateway = createLiteLlmManagedAccessClient({
   adminEndpoint: requiredEnvironment("LITELLM_ADMIN_URL"),
   endpoint: requiredEnvironment("LUNA_MANAGED_INTELLIGENCE_URL"),
   masterKey: requiredEnvironment("LITELLM_MASTER_KEY"),
+  accessClientId: requiredEnvironment("CLOUDFLARE_ACCESS_CLIENT_ID"),
+  accessClientSecret: requiredEnvironment("CLOUDFLARE_ACCESS_CLIENT_SECRET"),
   durationHours: Number(Deno.env.get("LITELLM_DEVICE_KEY_DURATION_HOURS") ?? "24"),
   requestTimeoutMs: Number(Deno.env.get("LITELLM_ADMIN_REQUEST_TIMEOUT_MS") ?? "10000"),
   rpmLimit: Number(Deno.env.get("LITELLM_HOUSEHOLD_RPM_LIMIT") ?? "6"),

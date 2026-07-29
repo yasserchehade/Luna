@@ -6,7 +6,7 @@ The first prototype accepts no live payments. It supports bounded complimentary 
 
 On 29 July 2026, the linked `luna-beta` project was migrated through `202607280014`. One designated internal beta Household received an operator-granted complimentary entitlement capped at USD 5 and expiring on 2 September 2026. The grant targets only the server-side Household identifier; no member identity or allowlist is present in the desktop or public source.
 
-The entitlement is active but its Trusted Device remains in provisioning until issue #53 deploys the authenticated remote LiteLLM gateway and its managed secrets. Do not describe the Household as having usable Luna-managed Intelligence until narrow device credential provisioning succeeds.
+The entitlement is active but its Trusted Device remains in provisioning until issue #53 completes the named Cloudflare Tunnel, protected administration hostname, managed gateway secrets and narrow device credential provisioning. Do not describe the Household as having usable Luna-managed Intelligence until that provisioning succeeds.
 
 ## Server-only configuration
 
@@ -18,6 +18,7 @@ Configure these values as Supabase Edge Function secrets, never in a desktop env
 - `PADDLE_MANAGED_MAX_BUDGET_USD` — the Household-level sandbox entitlement budget;
 - `LITELLM_ADMIN_URL` — remote HTTPS LiteLLM administration endpoint;
 - `LITELLM_MASTER_KEY` — LiteLLM administrative key;
+- `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET` — revocable Service Auth credentials for the protected administration hostname;
 - `LUNA_MANAGED_INTELLIGENCE_URL` — customer-facing remote HTTPS chat-completions endpoint;
 - `LITELLM_DEVICE_KEY_DURATION_HOURS` — virtual-key lifetime, defaulting to 24 hours and rejected unless it is an integer from 2 through 24;
 - `LITELLM_ADMIN_REQUEST_TIMEOUT_MS` — each LiteLLM administration call, defaulting to 10 seconds and rejected above 15 seconds so the complete mint path remains well inside the two-minute provisioning lease;

@@ -39,6 +39,48 @@ docker compose -f ops/litellm/compose.yaml ps
 
 The managed and BYOK gateways bind only to `127.0.0.1` ports 4000 and 4001 by default. Keep those bindings for the operator-run prototype canary. A remote staging host must put authenticated TLS ingress in front of them; ingress must omit request bodies and authorisation headers from access and error logs. Do not publish either port directly.
 
+## No-host-cost beta ingress
+
+ADR 0018 selects a named Cloudflare Tunnel on the Free plan as the internal-beta bridge. It uses the operator-controlled Windows prototype machine, so it has no separate monthly host charge and is available only while that machine, Docker Desktop and the tunnel are running. It is not production hosting.
+
+Cloudflare must be authoritative for the beta domain on the Free plan. Review existing DNS records before changing nameservers and handle existing DNSSEC exactly as the registrar and Cloudflare onboarding screens require.
+
+In Cloudflare Zero Trust:
+
+1. create a remotely managed tunnel named `luna-beta-gateway`;
+2. add `intelligence-beta.<domain>` with service `http://managed-public-ingress:8080`;
+3. add `intelligence-admin-beta.<domain>` with service `http://managed-admin-ingress:8081`;
+4. create a self-hosted Access application for the complete administration hostname;
+5. create a Service Auth policy that includes only a service token named `luna-supabase-beta`; do not add an Everyone, Allow or Bypass policy;
+6. retain the service-token client ID and one-time secret only in the Supabase Edge Function secret store.
+
+The customer hostname is protected by the Trusted Device's narrow LiteLLM bearer key and the local public ingress forwards only `/v1/chat/completions` and `/v1/models`. The administration hostname is a separate defence-in-depth boundary: Cloudflare Access authenticates the Supabase service token, the local ingress forwards only the allowlisted team/key/health routes, and LiteLLM still requires the master key.
+
+The pre-production overlay pins Cloudflare Tunnel `2026.7.2` and Caddy `2.10.2` by multi-platform digest. Caddy access logging is not enabled. The tunnel token is read from a file outside the repository rather than appearing in the container command. Point `LUNA_CLOUDFLARE_TUNNEL_TOKEN_FILE` at the operator-secret-store handoff, then render and start both Compose files:
+
+```powershell
+docker compose `
+  -f ops/litellm/compose.yaml `
+  -f ops/litellm/compose.cloudflare.yaml `
+  config --quiet
+
+docker compose `
+  -f ops/litellm/compose.yaml `
+  -f ops/litellm/compose.cloudflare.yaml `
+  up -d
+```
+
+Do not create a repository `.env` file. The OpenAI key, LiteLLM master key, database password, database URL and tunnel-token file must be injected from the operator's protected local secret store. The tunnel token handoff must be readable only by the operator and removed when the deployment is retired.
+
+Configure the Supabase function secret store with:
+
+- `LUNA_MANAGED_INTELLIGENCE_URL=https://intelligence-beta.<domain>/v1/chat/completions`;
+- `LITELLM_ADMIN_URL=https://intelligence-admin-beta.<domain>`;
+- `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET`;
+- the existing LiteLLM master, duration, request-limit and reconciliation values.
+
+The two administration functions attach the Cloudflare service-token headers only to LiteLLM administration calls. The desktop and customer chat-completions requests never receive them.
+
 ## Local and CI testing
 
 Standard tests use `DeterministicIntelligenceGateway` or a mock HTTP transport. They do not require LiteLLM, a provider key or a paid call.
@@ -83,7 +125,7 @@ node --test ops/litellm/compose.test.mjs
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ops/litellm/run-local-canary.test.ps1
 ```
 
-Live paid calls are manual evaluation evidence and are not part of the standard suite.
+For the remote canary, additionally set `LITELLM_ADMIN_URL`, `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET`. `canary.mjs` refuses a non-loopback deployment unless customer traffic and protected administration have separate endpoints. Live paid calls are manual evaluation evidence and are not part of the standard suite.
 
 Issue #53 owns the remote pre-production deployment and its authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and ingress-log verification. That deployment is required before external testing, not before the prototype contract can be accepted.
 

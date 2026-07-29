@@ -13,11 +13,16 @@ function requiredEnvironment(name) {
   return value;
 }
 
-async function requestJson(label, url, { bearer, body, acceptedStatuses = [200] } = {}) {
+async function requestJson(
+  label,
+  url,
+  { bearer, body, acceptedStatuses = [200], ingressHeaders = {} } = {},
+) {
   const response = await fetch(url, {
     method: body === undefined ? "GET" : "POST",
     headers: {
       authorization: `Bearer ${bearer}`,
+      ...ingressHeaders,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -186,6 +191,8 @@ function requireUsage(response) {
 
 async function main() {
   const chatEndpoint = new URL(requiredEnvironment("LUNA_MANAGED_INTELLIGENCE_URL"));
+  const configuredAdminEndpoint = process.env.LITELLM_ADMIN_URL?.trim();
+  const adminEndpoint = new URL(configuredAdminEndpoint || endpointAt(chatEndpoint, "/"));
   if (!chatEndpoint.pathname.endsWith("/v1/chat/completions")) {
     throw new Error("LUNA_MANAGED_INTELLIGENCE_URL must end with /v1/chat/completions.");
   }
@@ -195,10 +202,27 @@ async function main() {
       "LUNA_MANAGED_INTELLIGENCE_URL must use HTTPS unless it is a loopback preflight.",
     );
   }
+  if (adminEndpoint.protocol !== "https:" && !loopbackHosts.has(adminEndpoint.hostname)) {
+    throw new Error("LITELLM_ADMIN_URL must use HTTPS unless it is a loopback preflight.");
+  }
+  const accessClientId = process.env.CLOUDFLARE_ACCESS_CLIENT_ID?.trim();
+  const accessClientSecret = process.env.CLOUDFLARE_ACCESS_CLIENT_SECRET?.trim();
+  if (Boolean(accessClientId) !== Boolean(accessClientSecret)) {
+    throw new Error("The protected administration ingress credential is incomplete.");
+  }
+  if (!loopbackHosts.has(chatEndpoint.hostname) && (!configuredAdminEndpoint || !accessClientId)) {
+    throw new Error("A remote canary requires separate protected administration ingress.");
+  }
+  const ingressHeaders = accessClientId
+    ? {
+      "cf-access-client-id": accessClientId,
+      "cf-access-client-secret": accessClientSecret,
+    }
+    : {};
   const masterKey = requiredEnvironment("LITELLM_MASTER_KEY");
-  const generateUrl = endpointAt(chatEndpoint, "/key/generate");
+  const generateUrl = endpointAt(adminEndpoint, "/key/generate");
   const modelsUrl = endpointAt(chatEndpoint, "/v1/models");
-  const deleteUrl = endpointAt(chatEndpoint, "/key/delete");
+  const deleteUrl = endpointAt(adminEndpoint, "/key/delete");
   let virtualKey;
   let virtualKeyRevoked = false;
 
@@ -215,6 +239,7 @@ async function main() {
         tpm_limit: 4_000,
         metadata: { purpose: "issue-53-synthetic-canary" },
       },
+      ingressHeaders,
     });
     virtualKey = generated?.key;
     if (typeof virtualKey !== "string" || !virtualKey.trim()) {
@@ -249,6 +274,7 @@ async function main() {
     await requestJson("Virtual-key revocation", deleteUrl, {
       bearer: masterKey,
       body: { keys: [virtualKey] },
+      ingressHeaders,
     });
     const revokedResponse = await requestJson("Revoked-key check", modelsUrl, {
       bearer: virtualKey,
@@ -276,6 +302,7 @@ async function main() {
         await requestJson("Virtual-key cleanup", deleteUrl, {
           bearer: masterKey,
           body: { keys: [virtualKey] },
+          ingressHeaders,
         });
       } catch {
         process.stderr.write("Canary failed and automatic virtual-key cleanup also failed.\n");
