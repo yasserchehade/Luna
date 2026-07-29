@@ -29,13 +29,13 @@ const validDays = boundedInteger(argumentsByName.validDays ?? "14", "valid-days"
 const supabaseUrl = `https://${projectRef}.supabase.co`;
 if (!/^[a-z0-9]{20}$/u.test(projectRef)) fail("--project-ref is not a valid Supabase project reference.");
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) fail("--email is not a valid account email.");
-if (process.platform !== "win32") fail("This canary provisioner currently requires Windows DPAPI.");
 if (
   credentialPath === repositoryRoot
   || credentialPath.startsWith(`${repositoryRoot}${path.sep}`)
 ) {
   fail("--credential-path must be outside the public repository.");
 }
+if (process.platform !== "win32") fail("This canary provisioner currently requires Windows DPAPI.");
 assertLinkedProject(projectRef);
 
 const apiKeys = readProjectApiKeys(projectRef);
