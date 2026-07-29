@@ -5,7 +5,7 @@ This review document decomposes [specification issue #1](https://github.com/yass
 - Status: approved and published
 - Tracker: private GitHub repository
 - Interaction model: conversation-first under ADR 0010
-- Delivery status: tickets 08–13 (#9–#14) and conversation-first stabilization (#29) are implemented locally and are being published as stacked draft pull requests; GitHub Actions verification remains required before merge when credits are restored
+- Delivery status: conversation-first stabilization (#29) is published in PR [#59](https://github.com/yasserchehade/Luna/pull/59) on current `main`; final GitHub Actions verification remains required before merge
 - Development strategy: complete the unfamiliar-document-to-learned-automation path depth-first, implementing only dependencies that genuinely block it
 
 ## Dependency chart
@@ -338,15 +338,15 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 
 ### Acceptance criteria
 
-- [ ] A Household Member delegates document handling and answers Luna through the conversation composer.
-- [ ] Complete local Evidence produces one Filing Decision confirmation; incomplete Evidence produces one focused clarification at a time.
-- [ ] Negative, ambiguous, unsupported and stale replies cannot execute consequential actions.
-- [ ] Direction Interpretation submits typed candidates through owning-domain validation.
-- [ ] Local Inspection and authorised Cloud Assistance remain Evidence, never authority.
-- [ ] Review details exposes evidence and corrections without owning separate Document Handling state.
-- [ ] Filing Rule learning is a separate explicit Member Direction after filing.
-- [ ] Conversation deletion does not delete Document Handling, Filing Rules or Audit Events.
-- [ ] Keyboard and accessibility coverage includes the composer, inline actions and Review details.
+- [x] A Household Member delegates document handling and answers Luna through the conversation composer.
+- [x] Complete local Evidence produces one Filing Decision confirmation; incomplete Evidence produces one focused clarification at a time.
+- [x] Negative, ambiguous, unsupported and stale replies cannot execute consequential actions.
+- [x] Direction Interpretation submits typed candidates through owning-domain validation.
+- [x] Local Inspection and authorised Cloud Assistance remain Evidence, never authority.
+- [x] Review details exposes evidence and corrections without owning separate Document Handling state.
+- [x] Filing Rule learning is a separate explicit Member Direction after filing.
+- [x] Conversation deletion does not delete Document Handling, Filing Rules or Audit Events.
+- [x] Keyboard and accessibility coverage includes the composer, inline actions and Review details.
 
 ## Execution guidance
 
