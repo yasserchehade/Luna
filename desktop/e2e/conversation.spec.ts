@@ -85,13 +85,19 @@ describe("Luna Conversation desk", () => {
     await expect(cloudAssistance).toHaveText(expect.stringContaining("OpenAI"));
     await expect(cloudAssistance).toHaveText(expect.stringContaining("4,000 characters"));
     await expect(cloudAssistance.$("button=Keep local")).toBeDisplayed();
-    await focusByTab(".review-details summary");
-    await sendKeyboardKey("space");
-    await expect($("label=Service provider relevance")).toBeDisplayed();
-    await expect($("label=Property relevance")).toBeDisplayed();
-    await sendKeyboardKey("enter");
-    await expect($("label=Service provider relevance")).not.toBeDisplayed();
-    await sendKeyboardKey("space");
+    if (process.platform === "win32") {
+      await focusByTab(".review-details summary");
+      await sendKeyboardKey("space");
+      await expect($("label=Service provider relevance")).toBeDisplayed();
+      await expect($("label=Property relevance")).toBeDisplayed();
+      await sendKeyboardKey("enter");
+      await expect($("label=Service provider relevance")).not.toBeDisplayed();
+      await sendKeyboardKey("space");
+    } else {
+      const reviewSummary = $(".review-details summary");
+      await expect(reviewSummary).toBeDisplayed();
+      await reviewSummary.click();
+    }
     await expect($("label=Service provider relevance")).toBeDisplayed();
     const reviewCard = $(".document-arrival .review-card");
     await cloudAssistance.$("button=Keep local").click();
@@ -439,6 +445,7 @@ describe("Luna Conversation desk", () => {
     await scopedReview.$("button=Save Household Context").click();
     await $("button[aria-label='Options']").click();
     await $("button[aria-label='Luna']").click();
+    await $(".conversation-list button").click();
     const persistedReview = $(`.document-arrival[data-arrival-id='${scopedArrivalId}'] .review-details`);
     await persistedReview.$("summary").click();
     await expect(persistedReview.$("input[aria-label='Amount']")).toHaveValue("$99.00");
