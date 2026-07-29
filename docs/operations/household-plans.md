@@ -2,6 +2,12 @@
 
 The first prototype accepts no live payments. It supports bounded complimentary beta access and Paddle sandbox sessions so Luna can prove the complete Household Plan lifecycle without charging a Household.
 
+## Beta deployment status
+
+On 29 July 2026, the linked `luna-beta` project was migrated through `202607280014`. One designated internal beta Household received an operator-granted complimentary entitlement capped at USD 5 and expiring on 2 September 2026. The grant targets only the server-side Household identifier; no member identity or allowlist is present in the desktop or public source.
+
+The entitlement is active but its Trusted Device remains in provisioning until issue #53 deploys the authenticated remote LiteLLM gateway and its managed secrets. Do not describe the Household as having usable Luna-managed Intelligence until narrow device credential provisioning succeeds.
+
 ## Server-only configuration
 
 Configure these values as Supabase Edge Function secrets, never in a desktop environment, repository file, Cabinet or local database:

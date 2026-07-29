@@ -311,9 +311,11 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 ## 15 — Verify the complete cross-platform golden path
 
 **GitHub:** [#16](https://github.com/yasserchehade/Luna/issues/16)
-**Blocked by:** 11 / #12, 12 / #13, 13 / #14, 14 / #15 and 16 / #29.
+**Blocked by:** 11 / #12, 12 / #13, 13 / #14, 14 / #15, 16 / #29 and remote managed-access gate #53. Household entitlement infrastructure #57 is complete.
 
 **What it delivers:** Luna's conversation-first document competency is proven dependable on Windows and macOS before adjacent beta features expand.
+
+**Delivery status (29 July 2026):** issue #29 is merged. The linked beta account database is migrated through `202607280014`, and the designated internal beta Household has a bounded, expiring complimentary Managed Intelligence Entitlement through the operator-only server path. Usable managed access remains blocked by #53's remote gateway and Trusted Device credential provisioning. The composer keyboard slice is implemented locally on `codex/issue-16-golden-path`; Windows installed-app evidence covers Enter, Shift+Enter's editable path, IME safety and the visible keyboard hint. Cross-platform CI and signed beta artifacts remain pending.
 
 ### Acceptance criteria
 
@@ -327,6 +329,8 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 - [ ] No provider fallback occurs without consent.
 - [ ] No credential or plaintext key appears in cabinet records, portable events, logs or crash output.
 - [ ] Keyboard and accessibility checks pass for attachment, the conversation composer, inline actions, Review details, To do and Cabinet selection.
+- [ ] In Conversation, `Enter` sends, `Shift+Enter` inserts a newline and IME composition never submits early.
+- [ ] The designated founder/test Household receives complimentary capped Managed Intelligence through server-side entitlement and Trusted Device provisioning; no account identity, provider credential or entitlement secret is hard-coded in the desktop or public source.
 - [ ] Signed installable beta artifacts and smoke-test evidence exist for both operating systems.
 
 ## 16 — Make Conversation the primary document interface
