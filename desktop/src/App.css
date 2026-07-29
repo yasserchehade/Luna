@@ -33,6 +33,9 @@ button { cursor: pointer; }
 
 .luna-shell { display: grid; grid-template-columns: 224px minmax(480px, 1fr); min-height: 100vh; background: #fffefa; }
 .sidebar { display: flex; flex-direction: column; padding: 20px 14px 14px; border-right: 1px solid #dfe2da; background: #f1f2ec; }
+.workspace-stack { display: flex; min-width: 0; height: 100vh; flex-direction: column; overflow: hidden; }
+.workspace-stack > .conversation { min-height: 0; flex: 1; }
+.session-notice { margin: 0; padding: 10px 20px; color: #684f1f; background: #fff8e6; font-size: 12px; line-height: 1.45; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; font-size: 19px; }
 .brand > span, .luna-message > span { display: grid; place-items: center; color: #fff; background: #355f4a; font-family: Georgia, serif; }
 .brand > span { width: 32px; height: 32px; border-radius: 10px 10px 10px 4px; }
@@ -75,7 +78,9 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .cabinet-summary { display: grid; gap: 24px; padding: 32px; }
 .cabinet-summary > p { display: grid; gap: 6px; overflow-wrap: anywhere; }
 .cabinet-summary > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
-.cabinet-summary article { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid #d8dbd2; border-radius: 12px; background: #fffdf8; }
+.cabinet-summary article { display: flex; min-width: 0; align-items: center; gap: 12px; padding: 18px; border: 1px solid #d8dbd2; border-radius: 12px; background: #fffdf8; }
+.filed-originals article { display: grid; align-content: start; align-items: start; gap: 8px; }
+.filed-originals article > * { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 
 .filing-rules { display: grid; gap: 14px; margin-top: 28px; padding-top: 28px; border-top: 1px solid #dfe2da; }
 .filing-rules > p { max-width: 760px; color: #687068; font-size: 12px; line-height: 1.6; }

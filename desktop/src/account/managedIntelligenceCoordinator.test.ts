@@ -1,9 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AccountService, HouseholdIntelligenceAccess, HouseholdSession } from "./accountService";
-import { synchronizeManagedIntelligenceAccess } from "./managedIntelligenceCoordinator";
+import {
+  postTrustSynchronizationNotice,
+  settlePostTrustSynchronization,
+  synchronizeManagedIntelligenceAccess,
+} from "./managedIntelligenceCoordinator";
 import type { ConversationService } from "../conversation/conversationService";
 import type { TrustedDeviceService } from "../trusted-device/trustedDeviceService";
+
+test("managed access still synchronizes when portable memory recovery fails", async () => {
+  let managedAccessAttempted = false;
+
+  const result = await settlePostTrustSynchronization({
+    async portableMemory() {
+      throw new Error("protected portable memory could not be opened");
+    },
+    async managedAccess() {
+      managedAccessAttempted = true;
+    },
+  });
+
+  assert.equal(managedAccessAttempted, true);
+  assert.deepEqual(result, {
+    portableMemory: "failed",
+    managedAccess: "synchronized",
+  });
+  assert.match(postTrustSynchronizationNotice(result), /without blocking Cloud Assistance/);
+});
+
+test("managed provisioning failures are not mislabeled as a general offline state", () => {
+  const notice = postTrustSynchronizationNotice({
+    portableMemory: "synchronized",
+    managedAccess: "failed",
+  });
+
+  assert.match(notice, /could not prepare Cloud Assistance/);
+  assert.doesNotMatch(notice, /working offline/i);
+});
 
 const session = {
   accountId: "account" as never,

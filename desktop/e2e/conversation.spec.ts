@@ -237,6 +237,16 @@ describe("Luna Conversation desk", () => {
     await expect($(".filed-originals p")).toHaveText(
       "Bills & Services/12 Seabreeze Avenue/AGL/2026/2026-07-15 - AGL - Electricity bill - Sam Rivera.pdf",
     );
+    const cabinetLayout = await browser.execute(() => {
+      const cabinet = document.querySelector(".cabinet-view");
+      const cards = [...document.querySelectorAll<HTMLElement>(".filed-originals article")];
+      return {
+        horizontalOverflow: (cabinet?.scrollWidth ?? 0) - (cabinet?.clientWidth ?? 0),
+        overflowingCards: cards.filter((card) => card.scrollWidth > card.clientWidth + 1).length,
+      };
+    });
+    expect(cabinetLayout.horizontalOverflow).toBeLessThanOrEqual(1);
+    expect(cabinetLayout.overflowingCards).toBe(0);
     await $("button[aria-label='History']").click();
     const filingHistory = $(".history-event:not(.cloud-history-event):not(.duplicate-history-event):not(.rule-history-event)");
     await expect(filingHistory.$("strong")).toHaveText("Document filed");

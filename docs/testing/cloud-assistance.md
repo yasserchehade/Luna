@@ -35,6 +35,10 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Consent conversation | `desktop/e2e/conversation.spec.ts` names OpenAI, explains the exact reusable scope before consent, and exercises allow-once, reusable consent, reuse, revocation, and Keep local |
 | Customer-only setup boundary | the installed Options scenario proves managed access status is visible while no password field or manual Luna gateway-credential control is exposed |
 | Partial protected-state failure and customer-safe copy | `CloudAssistanceOptions.test.ts` proves provider setup remains available, older unreadable Consent Grants are not reused, implementation details stay hidden and provider-key links remain unambiguous |
+| Independent post-trust recovery | `managed access still synchronizes when portable memory recovery fails` proves unreadable protected portable memory cannot prevent an eligible Trusted Device from attempting managed credential provisioning |
+| Accurate managed-access failure copy | `managed provisioning failures are not mislabeled as a general offline state` keeps local availability distinct from Cloud Assistance preparation and preserves automatic retry |
+| Offline shell geometry | the installed account E2E measures the real sidebar and Conversation bounds while coordination is unavailable, proving notices cannot auto-place the workspace beneath the sidebar |
+| Cabinet overflow | the installed Conversation E2E proves the Cabinet surface and every filed-Original card retain zero horizontal overflow for long destinations and checksums |
 | Operational canary runner | `node --test ops/litellm/canary.test.mjs` proves exact model scoping, the strict structured-result contract, LiteLLM route-identity handling, usage evidence, revocation, secret-free output and separation of customer traffic from Cloudflare Access-protected administration through the public HTTP and CLI seams; `run-local-canary.test.ps1` locks down Windows PowerShell native stderr/exit-code handling |
 | Household entitlement boundary | `desktop/account-contract/supabaseAccountService.test.ts` proves operator-only complimentary grants, ordered/idempotent Paddle state, short-lived Trusted Device proof, one-use challenge consumption and entitlement revocation |
 | Billing server boundary | `desktop/server-contract/householdBillingSession.test.ts` and `paddleWebhook.test.ts` prove authenticated checkout/portal sessions, minimal Paddle checkout data, raw-body signature rejection and exact-price enforcement |
@@ -51,6 +55,19 @@ BYOK gateway, database, both Caddy ingress containers and cloudflared found no
 synthetic marker or checked credential. The public hostname separately proved
 key enforcement and route restriction, while the administration hostname
 returned Cloudflare Access HTTP 403 without its Supabase-held service token.
+
+Founder review of the first live-enabled desktop on 29 July exposed two
+presentation regressions and one coordination coupling. An offline status node
+was a separate child of the two-column shell grid, which auto-placed
+Conversation and To do beneath the sidebar; filed-Original flex rows also let
+long destinations and checksums expand Cabinet horizontally. The repaired
+installed-app checks measure both failures directly. The same review showed
+that portable-memory recovery and managed-access provisioning shared one
+sequential failure boundary. They now settle independently after Trusted
+Device authorization, so a protected-memory recovery failure remains visible
+and retryable without suppressing managed provisioning. Live Trusted Device
+provisioning and revocation still require review-build evidence before issue
+#53 can close.
 
 A remote host is not required to merge the prototype. Issue #53 owns the separate pre-production gate. ADR 0018 selects a no-separate-host-cost named Cloudflare Tunnel from the operator-controlled prototype machine for the internal beta; the machine must be running, and authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and remote log verification must exist before external testers use Luna-managed Intelligence.
 

@@ -2,6 +2,40 @@ import type { AccountService, HouseholdSession } from "./accountService";
 import type { ConversationService } from "../conversation/conversationService";
 import type { TrustedDeviceService } from "../trusted-device/trustedDeviceService";
 
+export type PostTrustSynchronizationResult = {
+  portableMemory: "synchronized" | "failed";
+  managedAccess: "synchronized" | "failed";
+};
+
+export async function settlePostTrustSynchronization(tasks: {
+  portableMemory(): Promise<unknown>;
+  managedAccess(): Promise<unknown>;
+}): Promise<PostTrustSynchronizationResult> {
+  const [portableMemory, managedAccess] = await Promise.allSettled([
+    tasks.portableMemory(),
+    tasks.managedAccess(),
+  ]);
+  return {
+    portableMemory: portableMemory.status === "fulfilled" ? "synchronized" : "failed",
+    managedAccess: managedAccess.status === "fulfilled" ? "synchronized" : "failed",
+  };
+}
+
+export function postTrustSynchronizationNotice(
+  result: PostTrustSynchronizationResult,
+): string {
+  if (result.portableMemory === "synchronized" && result.managedAccess === "synchronized") {
+    return "";
+  }
+  if (result.portableMemory === "failed" && result.managedAccess === "synchronized") {
+    return "Some protected Household memory could not be refreshed. Luna will retry it without blocking Cloud Assistance.";
+  }
+  if (result.portableMemory === "synchronized" && result.managedAccess === "failed") {
+    return "Luna could not prepare Cloud Assistance on this Trusted Device. Local work remains available and Luna will retry automatically.";
+  }
+  return "Luna could not refresh some protected Household memory or prepare Cloud Assistance. Local work remains available and Luna will retry automatically.";
+}
+
 export async function synchronizeManagedIntelligenceAccess(
   accountService: AccountService,
   conversationService: ConversationService,
