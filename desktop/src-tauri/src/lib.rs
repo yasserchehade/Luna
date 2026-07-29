@@ -34,13 +34,14 @@ pub use document_intelligence::{
 pub use intelligence::{
     AdditionalIntelligenceEvidence, CandidateDirectionInterpretation, CandidateDisposition,
     CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
-    CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
-    DocumentContentExcerpt, IntelligenceCapability, IntelligenceEvidence,
-    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceGateway,
-    IntelligenceModelDescriptor, IntelligenceProviderDescriptor, IntelligenceProviderStatus,
-    IntelligenceRequest, IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection,
-    IntelligenceUsage, UntrustedIntelligenceResult, MANAGED_INTELLIGENCE_MODEL_ID,
-    MANAGED_INTELLIGENCE_PROVIDER_ID,
+    CloudIntelligenceStore, ConsentGrantKind, ConversationIntelligenceResult,
+    DeterministicIntelligenceGateway, DocumentContentExcerpt, IntelligenceCapability,
+    IntelligenceEvidence, IntelligenceExecutionConstraints, IntelligenceFailure,
+    IntelligenceGateway, IntelligenceModelDescriptor, IntelligenceProviderDescriptor,
+    IntelligenceProviderStatus, IntelligenceRequest, IntelligenceResponseSchema,
+    IntelligenceResult, IntelligenceSelection, IntelligenceUsage, UntrustedIntelligenceResult,
+    CONVERSATION_REPLY_PURPOSE, CURRENT_MESSAGE_FIELD, DOCUMENT_DEFAULT_PERMISSION_FIELDS,
+    DOCUMENT_EVALUATION_PURPOSE, MANAGED_INTELLIGENCE_MODEL_ID, MANAGED_INTELLIGENCE_PROVIDER_ID,
 };
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
@@ -96,6 +97,52 @@ type IntelligenceState = CloudIntelligenceStore<E2eCredentialVault>;
 type PortableState = PortableMemoryStore<OsCredentialVault>;
 #[cfg(feature = "e2e")]
 type PortableState = PortableMemoryStore<E2eCredentialVault>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DefaultIntelligenceProvider {
+    provider_id: String,
+    model_id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    invalid: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrdinaryConversationSubmission {
+    member_message: ConversationMessage,
+    reply: Option<ConversationMessage>,
+    failure: Option<ConversationIntelligenceFailure>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationIntelligenceFailure {
+    code: ConversationIntelligenceFailureCode,
+    provider_id: Option<String>,
+    provider_name: Option<String>,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConversationIntelligenceFailureCode {
+    NotConfigured,
+    Configuration,
+    ConsentRequired,
+    Unavailable,
+    InvalidResult,
+    InvalidCredential,
+    RequestRejected,
+    Unexpected,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum DefaultIntelligencePermission {
+    Conversation,
+    Document,
+}
 
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
@@ -484,6 +531,258 @@ fn list_intelligence_provider_statuses(
 }
 
 #[tauri::command]
+fn get_default_intelligence_provider(
+    settings: State<'_, SettingsStore>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+) -> Result<Option<DefaultIntelligenceProvider>, String> {
+    current_household_actor(sessions.inner(), &household_id)?;
+    read_saved_default_intelligence_provider(settings.inner(), &household_id)
+}
+
+#[tauri::command]
+fn set_default_intelligence_provider(
+    settings: State<'_, SettingsStore>,
+    intelligence: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    provider_id: String,
+    model_id: String,
+) -> Result<DefaultIntelligenceProvider, String> {
+    current_household_actor(sessions.inner(), &household_id)?;
+    let selected = DefaultIntelligenceProvider {
+        provider_id,
+        model_id,
+        invalid: false,
+    };
+    if !selected_provider_is_available(intelligence.inner(), &household_id, &selected)? {
+        return Err(
+            "Connect the exact Intelligence Provider and model before making it the default."
+                .to_owned(),
+        );
+    }
+    let previous = read_saved_default_intelligence_provider(settings.inner(), &household_id)?;
+    if previous.as_ref() != Some(&selected) {
+        if let Some(previous) = previous.as_ref() {
+            revoke_default_intelligence_permissions(intelligence.inner(), &household_id, previous)?;
+        }
+        revoke_default_intelligence_permissions(intelligence.inner(), &household_id, &selected)?;
+    }
+    let value = serde_json::to_string(&selected)
+        .map_err(|_| "Default Intelligence settings are invalid.".to_owned())?;
+    settings
+        .set(&default_intelligence_key(&household_id), &value)
+        .map_err(|_| "Default Intelligence settings could not be saved.".to_owned())?;
+    Ok(selected)
+}
+
+#[tauri::command]
+fn clear_default_intelligence_provider(
+    settings: State<'_, SettingsStore>,
+    intelligence: State<'_, IntelligenceState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+) -> Result<(), String> {
+    current_household_actor(sessions.inner(), &household_id)?;
+    if let Some(selected) =
+        read_saved_default_intelligence_provider(settings.inner(), &household_id)?
+    {
+        revoke_default_intelligence_permissions(intelligence.inner(), &household_id, &selected)?;
+    }
+    settings
+        .delete(&default_intelligence_key(&household_id))
+        .map_err(|_| "Default Intelligence settings could not be cleared.".to_owned())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn set_default_intelligence_permission(
+    settings: State<'_, SettingsStore>,
+    intelligence: State<'_, IntelligenceState>,
+    conversations: State<'_, ConversationState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    permission: DefaultIntelligencePermission,
+    enabled: bool,
+) -> Result<(), String> {
+    let granted_by = current_household_actor(sessions.inner(), &household_id)?;
+    let selected =
+        load_default_intelligence_provider(settings.inner(), intelligence.inner(), &household_id)?
+            .ok_or_else(|| "Choose a default Intelligence Provider in Options.".to_owned())?;
+    let matching = intelligence
+        .list_consent_scopes(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|scope| default_permission_matches(scope, &selected, permission))
+        .collect::<Vec<_>>();
+    if enabled && matching.is_empty() {
+        let (capability, purpose, fields) = match permission {
+            DefaultIntelligencePermission::Conversation => (
+                IntelligenceCapability::ConversationReply,
+                CONVERSATION_REPLY_PURPOSE,
+                vec![CURRENT_MESSAGE_FIELD.to_owned()],
+            ),
+            DefaultIntelligencePermission::Document => (
+                IntelligenceCapability::DirectionInterpretation,
+                DOCUMENT_EVALUATION_PURPOSE,
+                DOCUMENT_DEFAULT_PERMISSION_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect(),
+            ),
+        };
+        intelligence
+            .grant_scope(
+                &household_id,
+                &IntelligenceSelection {
+                    provider_id: selected.provider_id,
+                    model_id: selected.model_id,
+                },
+                capability,
+                purpose,
+                fields,
+                Vec::new(),
+                &granted_by,
+            )
+            .map_err(|error| error.to_string())?;
+    } else if !enabled {
+        for scope in matching {
+            intelligence
+                .revoke_scope(&household_id, scope.id)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    capture_portable_state(
+        portable.inner(),
+        conversations.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )
+}
+
+#[tauri::command]
+fn submit_ordinary_conversation_message(
+    intelligence: State<'_, IntelligenceState>,
+    settings: State<'_, SettingsStore>,
+    conversations: State<'_, ConversationState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    conversation_id: i64,
+    body: String,
+) -> Result<OrdinaryConversationSubmission, String> {
+    let granted_by = current_household_actor(sessions.inner(), &household_id)?;
+    let member_message = conversations
+        .add_member_message(&household_id, conversation_id, &body)
+        .map_err(|error| error.to_string())?;
+    let selected = match load_default_intelligence_provider(
+        settings.inner(),
+        intelligence.inner(),
+        &household_id,
+    ) {
+        Ok(Some(selected)) => selected,
+        Ok(None) => {
+            return Ok(OrdinaryConversationSubmission {
+                member_message,
+                reply: None,
+                failure: Some(ConversationIntelligenceFailure {
+                    code: ConversationIntelligenceFailureCode::NotConfigured,
+                    provider_id: None,
+                    provider_name: None,
+                    detail: "Choose a default Intelligence Provider in Options.".to_owned(),
+                }),
+            });
+        }
+        Err(detail) => {
+            return Ok(OrdinaryConversationSubmission {
+                member_message,
+                reply: None,
+                failure: Some(ConversationIntelligenceFailure {
+                    code: ConversationIntelligenceFailureCode::Configuration,
+                    provider_id: None,
+                    provider_name: None,
+                    detail,
+                }),
+            });
+        }
+    };
+    let provider_name = intelligence
+        .providers()
+        .into_iter()
+        .find(|provider| provider.id == selected.provider_id)
+        .map(|provider| provider.name);
+    let permission = intelligence
+        .list_consent_scopes(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|scope| {
+            default_permission_matches(
+                scope,
+                &selected,
+                DefaultIntelligencePermission::Conversation,
+            )
+        });
+    let Some(permission) = permission else {
+        return Ok(OrdinaryConversationSubmission {
+            member_message,
+            reply: None,
+            failure: Some(ConversationIntelligenceFailure {
+                code: ConversationIntelligenceFailureCode::ConsentRequired,
+                provider_id: Some(selected.provider_id),
+                provider_name,
+                detail: "Enable Conversation permission in Options.".to_owned(),
+            }),
+        });
+    };
+    let provider_id = selected.provider_id.clone();
+    let result: Result<ConversationIntelligenceResult, IntelligenceFailure> = intelligence
+        .reply_to_conversation(
+            &household_id,
+            IntelligenceSelection {
+                provider_id: selected.provider_id,
+                model_id: selected.model_id,
+            },
+            conversation_id,
+            member_message.id,
+            &member_message.body,
+            &granted_by,
+            permission.id,
+        );
+    match result {
+        Ok(result) => {
+            match conversations.add_luna_message(&household_id, conversation_id, &result.reply) {
+                Ok(reply) => Ok(OrdinaryConversationSubmission {
+                    member_message,
+                    reply: Some(reply),
+                    failure: None,
+                }),
+                Err(_) => Ok(OrdinaryConversationSubmission {
+                    member_message,
+                    reply: None,
+                    failure: Some(ConversationIntelligenceFailure {
+                        code: ConversationIntelligenceFailureCode::Unexpected,
+                        provider_id: Some(result.provider_id),
+                        provider_name,
+                        detail: "Luna received a reply but could not save it safely.".to_owned(),
+                    }),
+                }),
+            }
+        }
+        Err(error) => Ok(OrdinaryConversationSubmission {
+            member_message,
+            reply: None,
+            failure: Some(conversation_intelligence_failure(
+                error,
+                Some(provider_id),
+                provider_name,
+            )),
+        }),
+    }
+}
+
+#[tauri::command]
 fn test_and_set_intelligence_provider_credential(
     store: State<'_, IntelligenceState>,
     sessions: State<'_, AccountSessionManager>,
@@ -566,6 +865,196 @@ fn current_household_actor(
         return Err("The Luna Account session does not belong to this Household.".to_owned());
     }
     Ok(session.account_id)
+}
+
+fn default_intelligence_key(household_id: &str) -> String {
+    format!("luna.intelligence.default.{household_id}")
+}
+
+fn read_saved_default_intelligence_provider(
+    settings: &SettingsStore,
+    household_id: &str,
+) -> Result<Option<DefaultIntelligenceProvider>, String> {
+    let Some(value) = settings
+        .get(&default_intelligence_key(household_id))
+        .map_err(|_| "Default Intelligence settings are unavailable.".to_owned())?
+    else {
+        return Ok(None);
+    };
+    let selected =
+        serde_json::from_str::<DefaultIntelligenceProvider>(&value).unwrap_or_else(|_| {
+            let recoverable = serde_json::from_str::<serde_json::Value>(&value).ok();
+            DefaultIntelligenceProvider {
+                provider_id: recoverable
+                    .as_ref()
+                    .and_then(|value| value.get("providerId"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                model_id: recoverable
+                    .as_ref()
+                    .and_then(|value| value.get("modelId"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                invalid: true,
+            }
+        });
+    Ok(Some(selected))
+}
+
+fn selected_provider_is_available(
+    intelligence: &IntelligenceState,
+    household_id: &str,
+    selected: &DefaultIntelligenceProvider,
+) -> Result<bool, String> {
+    intelligence
+        .provider_statuses(household_id)
+        .map_err(|error| error.to_string())
+        .map(|statuses| {
+            statuses.into_iter().any(|status| {
+                status.configured
+                    && status.descriptor.id == selected.provider_id
+                    && status
+                        .descriptor
+                        .models
+                        .iter()
+                        .any(|model| model.id == selected.model_id)
+            })
+        })
+}
+
+fn load_default_intelligence_provider(
+    settings: &SettingsStore,
+    intelligence: &IntelligenceState,
+    household_id: &str,
+) -> Result<Option<DefaultIntelligenceProvider>, String> {
+    let Some(selected) = read_saved_default_intelligence_provider(settings, household_id)? else {
+        return Ok(None);
+    };
+    if selected.invalid {
+        return Err("The saved default Intelligence settings are invalid.".to_owned());
+    }
+    if !selected_provider_is_available(intelligence, household_id, &selected)? {
+        return Err(
+            "The saved default Intelligence Provider or model is unavailable on this Trusted Device."
+                .to_owned(),
+        );
+    }
+    Ok(Some(selected))
+}
+
+fn default_permission_matches(
+    scope: &CloudConsentScope,
+    selected: &DefaultIntelligenceProvider,
+    permission: DefaultIntelligencePermission,
+) -> bool {
+    if scope.revoked
+        || !scope.default_permission
+        || scope.kind != ConsentGrantKind::Reusable
+        || scope.provider_id != selected.provider_id
+        || scope.model_id != selected.model_id
+    {
+        return false;
+    }
+    match permission {
+        DefaultIntelligencePermission::Conversation => {
+            scope.capability == IntelligenceCapability::ConversationReply
+                && scope.purpose == CONVERSATION_REPLY_PURPOSE
+                && scope.fields == [CURRENT_MESSAGE_FIELD.to_owned()]
+        }
+        DefaultIntelligencePermission::Document => {
+            scope.capability == IntelligenceCapability::DirectionInterpretation
+                && scope.purpose == DOCUMENT_EVALUATION_PURPOSE
+                && scope.fields.len() == DOCUMENT_DEFAULT_PERMISSION_FIELDS.len()
+                && DOCUMENT_DEFAULT_PERMISSION_FIELDS
+                    .iter()
+                    .all(|field| scope.fields.iter().any(|allowed| allowed == field))
+        }
+    }
+}
+
+fn revoke_default_intelligence_permissions(
+    intelligence: &IntelligenceState,
+    household_id: &str,
+    selected: &DefaultIntelligenceProvider,
+) -> Result<(), String> {
+    for scope in intelligence
+        .list_consent_scopes(household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|scope| {
+            !scope.revoked
+                && !selected.provider_id.is_empty()
+                && scope.provider_id == selected.provider_id
+                && ((scope.capability == IntelligenceCapability::ConversationReply
+                    && scope.purpose == CONVERSATION_REPLY_PURPOSE)
+                    || (scope.capability == IntelligenceCapability::DirectionInterpretation
+                        && scope.purpose == DOCUMENT_EVALUATION_PURPOSE))
+        })
+    {
+        intelligence
+            .revoke_scope(household_id, scope.id)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn conversation_intelligence_failure(
+    error: IntelligenceFailure,
+    provider_id: Option<String>,
+    provider_name: Option<String>,
+) -> ConversationIntelligenceFailure {
+    let (code, detail) = match error {
+        IntelligenceFailure::ConsentRequired
+        | IntelligenceFailure::ConsentRevoked
+        | IntelligenceFailure::ConsentConsumed
+        | IntelligenceFailure::LocalOnlyPolicy => (
+            ConversationIntelligenceFailureCode::ConsentRequired,
+            "Conversation permission is not active.".to_owned(),
+        ),
+        IntelligenceFailure::AuthenticationUnavailable => (
+            ConversationIntelligenceFailureCode::NotConfigured,
+            "Managed Intelligence is not ready on this Trusted Device.".to_owned(),
+        ),
+        IntelligenceFailure::ProviderAuthenticationUnavailable => (
+            ConversationIntelligenceFailureCode::InvalidCredential,
+            "The selected Intelligence Provider credential is missing, invalid, or revoked."
+                .to_owned(),
+        ),
+        IntelligenceFailure::ProviderUnavailable
+        | IntelligenceFailure::GatewayUnavailable
+        | IntelligenceFailure::RateLimited
+        | IntelligenceFailure::TimedOut => (
+            ConversationIntelligenceFailureCode::Unavailable,
+            "The selected Intelligence Provider could not complete the request.".to_owned(),
+        ),
+        IntelligenceFailure::InvalidStructuredResult => (
+            ConversationIntelligenceFailureCode::InvalidResult,
+            "Luna rejected an invalid Intelligence Provider reply.".to_owned(),
+        ),
+        IntelligenceFailure::ProviderRejectedRequest => (
+            ConversationIntelligenceFailureCode::RequestRejected,
+            "The selected Intelligence Provider rejected the request.".to_owned(),
+        ),
+        IntelligenceFailure::UnsupportedSelection
+        | IntelligenceFailure::UnsupportedCapability
+        | IntelligenceFailure::ProtectedStateUnavailable
+        | IntelligenceFailure::StorageUnavailable => (
+            ConversationIntelligenceFailureCode::Configuration,
+            "The saved Intelligence configuration is unavailable.".to_owned(),
+        ),
+        IntelligenceFailure::RequestCancelled => (
+            ConversationIntelligenceFailureCode::Unexpected,
+            "The Intelligence request was cancelled.".to_owned(),
+        ),
+    };
+    ConversationIntelligenceFailure {
+        code,
+        provider_id,
+        provider_name,
+        detail,
+    }
 }
 
 fn capture_portable_state(
@@ -692,6 +1181,55 @@ fn evaluate_document_with_cloud_assistance(
         input.consent,
         &granted_by,
         input.existing_consent_grant_id,
+    );
+    capture_portable_state(
+        portable.inner(),
+        conversations.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &household_id,
+    )?;
+    result.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_document_with_default_intelligence_provider(
+    conversations: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    settings: State<'_, SettingsStore>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
+    sessions: State<'_, AccountSessionManager>,
+    household_id: String,
+    arrival_id: i64,
+) -> Result<CloudAssistanceResolution, String> {
+    let granted_by = current_household_actor(sessions.inner(), &household_id)?;
+    let selected =
+        load_default_intelligence_provider(settings.inner(), intelligence.inner(), &household_id)?
+            .ok_or_else(|| "Choose a default Intelligence Provider in Options.".to_owned())?;
+    let permission = intelligence
+        .list_consent_scopes(&household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|scope| {
+            default_permission_matches(scope, &selected, DefaultIntelligencePermission::Document)
+        })
+        .ok_or_else(|| "Enable Document permission in Options.".to_owned())?;
+    let result = DocumentIntelligenceService::new(
+        conversations.inner().clone(),
+        intelligence.inner().clone(),
+    )
+    .evaluate_document(
+        &household_id,
+        arrival_id,
+        IntelligenceSelection {
+            provider_id: selected.provider_id,
+            model_id: selected.model_id,
+        },
+        CloudConsentDecision::UseExistingScope,
+        &granted_by,
+        Some(permission.id),
     );
     capture_portable_state(
         portable.inner(),
@@ -1670,7 +2208,13 @@ pub fn run() {
                 DeterministicIntelligenceGateway::new(
                     MANAGED_INTELLIGENCE_PROVIDER_ID,
                     MANAGED_INTELLIGENCE_MODEL_ID,
-                    std::collections::BTreeMap::from([("amount".to_owned(), "$184.72".to_owned())]),
+                    std::collections::BTreeMap::from([(
+                        "amount".to_owned(),
+                        "$184.72".to_owned(),
+                    )]),
+                )
+                .with_conversation_reply(
+                    "Start with the household task that is both urgent and blocks the most other work.",
                 ),
                 intelligence::provider_catalog(),
             )?);
@@ -1708,11 +2252,17 @@ pub fn run() {
         list_duplicate_audit_events,
         list_intelligence_providers,
         list_intelligence_provider_statuses,
+        get_default_intelligence_provider,
+        set_default_intelligence_provider,
+        clear_default_intelligence_provider,
+        set_default_intelligence_permission,
+        submit_ordinary_conversation_message,
         test_and_set_intelligence_provider_credential,
         clear_intelligence_provider_credential,
         set_managed_intelligence_gateway_credential,
         clear_managed_intelligence_gateway_credential,
         evaluate_document_with_cloud_assistance,
+        evaluate_document_with_default_intelligence_provider,
         list_cloud_consent_scopes,
         revoke_cloud_consent_scope,
         list_cloud_assistance_audit_events,

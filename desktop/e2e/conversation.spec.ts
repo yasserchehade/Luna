@@ -79,19 +79,68 @@ describe("Luna Conversation desk", () => {
     await expect(composer).toHaveValue("");
   });
 
+  it("uses the exact managed default and Conversation permission without a per-message prompt", async () => {
+    await onboardTestHousehold();
+    await $("button[aria-label='Options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+
+    const defaultProvider = $("select[aria-label='Default Intelligence Provider and model']");
+    await expect(defaultProvider).toBeDisplayed();
+    await defaultProvider.selectByAttribute("value", "openai::gpt-4.1-mini");
+    await $("button=Save default").click();
+    await expect($("section[aria-label='Default intelligence settings']")).toHaveText(
+      expect.stringContaining("OpenAI · gpt-4.1-mini"),
+    );
+    const conversationPermission = $("input[aria-label='Allow Conversation replies by default']");
+    if (!await conversationPermission.isSelected()) {
+      await conversationPermission.click();
+    }
+    await expect(conversationPermission).toBeChecked();
+
+    await $("button[aria-label='Luna']").click();
+    await $("button[aria-label='New conversation']").click();
+    await expect($("h1=New conversation")).toBeDisplayed();
+    const managedComposer = $("#message-composer");
+    await managedComposer.click();
+    await managedComposer.setValue("Help me choose the next household task.");
+    await browser.keys(Key.Enter);
+
+    await expect($("[aria-label='Conversation intelligence consent']")).not.toBeExisting();
+    await browser.waitUntil(async () => (
+      await $(".member-message p").isExisting()
+      || await $("[role='alert']").isExisting()
+    ), { timeoutMsg: "Conversation submission produced neither a message nor a visible failure." });
+    if (await $("[role='alert']").isExisting()) {
+      throw new Error(`Conversation submission failed: ${await $("[role='alert']").getText()}`);
+    }
+    await expect($(".member-message p")).toHaveText(
+      "Help me choose the next household task.",
+    );
+    await expect($(".luna-message:last-of-type .conversation-copy")).toHaveText(
+      "Start with the household task that is both urgent and blocks the most other work.",
+    );
+    await expect($(".conversation-intelligence-notice")).not.toBeExisting();
+  });
+
   it("keeps document work consistent between Conversation and To do", async () => {
     await onboardTestHousehold();
-    const focusByTab = async (selector: string) => {
-      await $("#message-composer").click();
-      for (let attempt = 0; attempt < 80; attempt += 1) {
-        await sendKeyboardKey("tab");
-        const matched = await browser.execute((targetSelector) => (
-          document.activeElement?.matches(targetSelector) ?? false
-        ), selector);
-        if (matched) return;
-      }
-      throw new Error(`Keyboard Tab navigation did not reach ${selector}.`);
-    };
+    await $("button[aria-label='Options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    const defaultProvider = $("select[aria-label='Default Intelligence Provider and model']");
+    await defaultProvider.selectByAttribute("value", "openai::gpt-4.1-mini");
+    await $("button=Save default").click();
+    await expect($("section[aria-label='Default intelligence settings']")).toHaveText(
+      expect.stringContaining("OpenAI · gpt-4.1-mini"),
+    );
+    const documentPermission = $("input[aria-label='Allow Document evaluations by default']");
+    if (!await documentPermission.isSelected()) {
+      await documentPermission.click();
+    }
+    await expect(documentPermission).toBeChecked();
+    await $("button[aria-label='Luna']").click();
+    await $("button[aria-label='New conversation']").click();
+    await expect($("h1=New conversation")).toBeDisplayed();
+
     const openConversationActions = async () => {
       await $("button[aria-label='Conversation actions']").click();
     };
@@ -107,7 +156,7 @@ describe("Luna Conversation desk", () => {
     await expect(composer).toHaveValue(message);
     await $("button[aria-label='Send message']").click();
 
-    await expect($(".member-message:last-of-type p")).toHaveText(message);
+    await expect($(".member-message p")).toHaveText(message);
 
     await openConversationActions();
     await $("button=Rename").click();
@@ -133,26 +182,18 @@ describe("Luna Conversation desk", () => {
     await expect($(".filing-decision-form")).not.toBeDisplayed();
     const cloudAssistance = $("section[aria-label='Cloud assistance for this document']");
     await expect(cloudAssistance).toBeDisplayed();
-    await expect(cloudAssistance).toHaveText(expect.stringContaining("OpenAI"));
+    await expect(cloudAssistance).toHaveText(expect.stringContaining("Default: OpenAI GPT-4.1 mini"));
     await expect(cloudAssistance).toHaveText(expect.stringContaining("4,000 characters"));
-    await expect(cloudAssistance.$("button=Keep local")).toBeDisplayed();
-    if (process.platform === "win32") {
-      await focusByTab(".review-details summary");
-      await sendKeyboardKey("space");
-      await expect($("label=Service provider relevance")).toBeDisplayed();
-      await expect($("label=Property relevance")).toBeDisplayed();
-      await sendKeyboardKey("enter");
-      await expect($("label=Service provider relevance")).not.toBeDisplayed();
-      await sendKeyboardKey("space");
-    } else {
-      const reviewSummary = $(".review-details summary");
-      await expect(reviewSummary).toBeDisplayed();
-      await reviewSummary.click();
-    }
+    await expect(cloudAssistance.$("select")).not.toBeExisting();
+    await expect(cloudAssistance.$("button=Allow once")).not.toBeExisting();
+    await expect(cloudAssistance.$("button=Ask default Intelligence Provider")).toBeDisplayed();
+    const reviewSummary = $(".review-details summary");
+    await expect(reviewSummary).toBeDisplayed();
+    await reviewSummary.click();
     await expect($("label=Service provider relevance")).toBeDisplayed();
     const reviewCard = $(".document-arrival .review-card");
-    await cloudAssistance.$("button=Keep local").click();
-    await expect(cloudAssistance).toHaveText(expect.stringContaining("Kept local"));
+    await cloudAssistance.$("button=Ask default Intelligence Provider").click();
+    await expect(cloudAssistance).toHaveText(expect.stringContaining("suggested amount"));
     await expect($("label=Service provider relevance")).toBeDisplayed();
     await expect($("label=Property relevance")).toBeDisplayed();
     await expect(reviewCard.$$("input[aria-label='Amount']")).toBeElementsArrayOfSize(1);
@@ -208,15 +249,9 @@ describe("Luna Conversation desk", () => {
     await expect($(".document-luna-message .conversation-copy")).toHaveText(
       expect.stringContaining("Bills & Services/12 Seabreeze Avenue/AGL/2026/"),
     );
-    if (process.platform === "win32") {
-      await focusByTab(".conversation-inline-actions button");
-      expect(await browser.execute(() => document.activeElement?.textContent)).toBe("Always do this");
-      await sendKeyboardKey("enter");
-    } else {
-      const alwaysDoThis = $("button=Always do this");
-      await expect(alwaysDoThis).toBeDisplayed();
-      await alwaysDoThis.click();
-    }
+    const alwaysDoThis = $("button=Always do this");
+    await expect(alwaysDoThis).toBeDisplayed();
+    await alwaysDoThis.click();
     await browser.waitUntil(
       async () => !(await $("button=Always do this").isExisting()),
       { timeoutMsg: "The Filing Rule direction was not recorded." },
@@ -226,7 +261,7 @@ describe("Luna Conversation desk", () => {
     }
     await expect($("[aria-label='Learned filing rule']")).toBeDisplayed();
     await expect($(".review-transparency")).toHaveText(expect.stringContaining("Member Direction"));
-    await expect($(".review-transparency")).toHaveText(expect.stringContaining("Member chose Keep local"));
+    await expect($(".review-transparency")).toHaveText(expect.stringContaining("existing scoped consent"));
     await expect($(".review-transparency")).toHaveText(expect.stringContaining("Verified Original filed"));
     await $("button[aria-label='To do']").click();
     await expect($(".empty-state")).toHaveText("Nothing needs your attention.");
@@ -320,16 +355,16 @@ describe("Luna Conversation desk", () => {
 
     await openConversationActions();
     await $("button=Archive").click();
-    await expect($("h1=Conversations")).toBeDisplayed();
+    await browser.waitUntil(
+      async () => await $(".conversation-title").getText() !== "AGL electricity bill",
+      { timeoutMsg: "The archived Conversation remained selected." },
+    );
     await openConversationActions();
     await $("label=Show archived").$("input").click();
-    await expect($("button=Restore")).toBeDisplayed();
-    await $("label=Show archived").$("input").click();
-    await expect($("h1=Conversations")).toBeDisplayed();
-    await $("label=Show archived").$("input").click();
-    await expect($("h1=AGL electricity bill")).toBeDisplayed();
-
     const search = await $("input[aria-label='Search Conversations']");
+    await search.setValue("AGL");
+    await expect($("h1=AGL electricity bill")).toBeDisplayed();
+    await expect($("button=Restore")).toBeDisplayed();
     await search.setValue("No matching Conversation");
     await expect($("h1=Conversations")).toBeDisplayed();
     await search.setValue("AGL");
@@ -345,11 +380,12 @@ describe("Luna Conversation desk", () => {
     await $("button[aria-label='Attach document']").click();
     await openConversationActions();
     await $("button=Delete").click();
+    await $("button[aria-label='New conversation']").click();
     await expect($("h1=New conversation")).toBeDisplayed();
     const recoveredMessage = "The recovered conversation is writable.";
     await $("#message-composer").setValue(recoveredMessage);
     await $("button[aria-label='Send message']").click();
-    await expect($(".member-message:last-of-type p")).toHaveText(recoveredMessage);
+    await expect($(".member-message p")).toHaveText(recoveredMessage);
     await $("button[aria-label='To do']").click();
     await expect($$(".todo-list article")).toBeElementsArrayOfSize(1);
     await $("button=Open Conversation item").click();
@@ -444,8 +480,21 @@ describe("Luna Conversation desk", () => {
     await expect($(".duplicate-history-event small")).toHaveText(expect.stringContaining("kept both Originals"));
   });
 
-  it("completes one-time, reusable, revoked, and local-only consent choices", async () => {
+  it("uses and revokes the default Document permission while retaining plan and BYOK controls", async () => {
     await onboardTestHousehold();
+    await $("button[aria-label='Options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    const defaultProvider = $("select[aria-label='Default Intelligence Provider and model']");
+    await defaultProvider.selectByAttribute("value", "openai::gpt-4.1-mini");
+    await $("button=Save default").click();
+    await expect($("section[aria-label='Default intelligence settings']")).toHaveText(
+      expect.stringContaining("OpenAI · gpt-4.1-mini"),
+    );
+    const documentPermission = $("input[aria-label='Allow Document evaluations by default']");
+    if (!await documentPermission.isSelected()) {
+      await documentPermission.click();
+    }
+    await expect(documentPermission).toBeChecked();
     await $("button[aria-label='Luna']").click();
     await $("button[aria-label='New conversation']").click();
 
@@ -492,37 +541,12 @@ describe("Luna Conversation desk", () => {
       return arrival;
     };
 
-    let arrival = await attach("cloud-scope");
-    let assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
-    await expect(assistance).toHaveText(expect.stringContaining(
-      "Reusable scope: future difficult application/pdf Documents with the same currently displayed local context values and disclosed fields.",
-    ));
-    await $("#message-composer").setValue("Allow this scoped future use");
-    await $("button[aria-label='Send message']").click();
-    await expect($(".document-arrival[data-focused='true'] .turn-message")).toHaveText(
-      expect.stringContaining("suggested amount"),
-    );
-    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
-    await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
-    const scopedArrivalId = await $(".document-arrival[data-focused='true']")
-      .getAttribute("data-arrival-id");
-    const scopedReview = $(".document-arrival[data-focused='true'] .review-details");
-    await scopedReview.$("summary").click();
-    await scopedReview.$("input[aria-label='Amount']").setValue("$99.00");
-    await scopedReview.$("button=Save Household Context").click();
-    await $("button[aria-label='Options']").click();
-    await $("button[aria-label='Luna']").click();
-    await $(".conversation-list button").click();
-    const persistedReview = $(`.document-arrival[data-arrival-id='${scopedArrivalId}'] .review-details`);
-    await persistedReview.$("summary").click();
-    await expect(persistedReview.$("input[aria-label='Amount']")).toHaveValue("$99.00");
-
-    arrival = await attach("cloud-reuse");
-    assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
-    await expect(assistance.$("button=Use existing Consent Grant")).toBeDisplayed();
-    await $("#message-composer").setValue("Use existing Consent Grant");
-    await $("button[aria-label='Send message']").click();
-    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
+    const arrival = await attach("cloud-scope");
+    const assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
+    await expect(assistance).toHaveText(expect.stringContaining("Default: OpenAI GPT-4.1 mini"));
+    await expect(assistance.$("select")).not.toBeExisting();
+    await expect(assistance.$("button=Allow once")).not.toBeExisting();
+    await assistance.$("button=Ask default Intelligence Provider").click();
     await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
 
     await browser.execute(() => {
@@ -577,26 +601,42 @@ describe("Luna Conversation desk", () => {
     await expect(byokConnection).toHaveText(expect.stringContaining("Connected"));
     await byokConnection.$("button=Remove key").click();
     await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
-    const reusableGrant = $(".consent-scope-list li");
-    await expect(reusableGrant).toHaveText(expect.stringContaining("Active"));
-    await reusableGrant.$("button=Revoke").click();
-    await expect(reusableGrant).toHaveText(expect.stringContaining("Revoked"));
+    const activeDocumentPermission = $("input[aria-label='Allow Document evaluations by default']");
+    await expect(activeDocumentPermission).toBeChecked();
+    await activeDocumentPermission.click();
+    await expect(activeDocumentPermission).not.toBeChecked();
 
     await $("button[aria-label='Luna']").click();
-    arrival = await attach("cloud-once");
-    assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
-    await expect(assistance).toBeDisplayed();
-    await $("#message-composer").setValue("Allow once");
-    await $("button[aria-label='Send message']").click();
-    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
-    await expect(assistance).toHaveText(expect.stringContaining("suggested amount"));
+    const permissionlessArrival = await attach("cloud-local");
+    const permissionlessAssistance = permissionlessArrival.$(
+      "section[aria-label='Cloud assistance for this document']",
+    );
+    await expect(permissionlessAssistance).toHaveText(
+      expect.stringContaining("Enable Document evaluations by default"),
+    );
+    await expect(
+      permissionlessAssistance.$("button=Ask default Intelligence Provider"),
+    ).toBeDisabled();
 
-    arrival = await attach("cloud-local");
-    assistance = arrival.$("section[aria-label='Cloud assistance for this document']");
-    await expect(assistance).toBeDisplayed();
-    await $("#message-composer").setValue("Keep local");
+    await $("button[aria-label='Options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    await $("button=Disable default").click();
+    const defaultSettings = $("section[aria-label='Default intelligence settings']");
+    await expect(defaultSettings).toHaveText(expect.stringContaining("Disabled"));
+    await expect(
+      defaultSettings.$("input[aria-label='Allow Conversation replies by default']"),
+    ).not.toBeChecked();
+    await expect(
+      defaultSettings.$("input[aria-label='Allow Document evaluations by default']"),
+    ).not.toBeChecked();
+
+    await $("button[aria-label='Luna']").click();
+    await $("button[aria-label='New conversation']").click();
+    await $("#message-composer").setValue("Keep this message local.");
     await $("button[aria-label='Send message']").click();
-    assistance = $(".document-arrival[data-focused='true'] section[aria-label='Cloud assistance for this document']");
-    await expect(assistance).toHaveText(expect.stringContaining("Kept local"));
+    await expect($(".member-message p")).toHaveText("Keep this message local.");
+    await expect($(".conversation-intelligence-notice")).toHaveText(
+      expect.stringContaining("Choose a default Intelligence Provider"),
+    );
   });
 });

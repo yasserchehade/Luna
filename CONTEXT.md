@@ -227,8 +227,16 @@ Permission-gated use of an external intelligence provider when local inspection 
 _Avoid_: Cloud processing
 
 **Consent Grant**:
-An explicit, revocable permission for a named intelligence provider to receive document content once or within a clearly described future scope.
+An explicit, revocable permission for a named Intelligence Provider and exact model to receive an enumerated set of content for one declared capability, once or within a clearly described future scope.
 _Avoid_: Do not ask again, global consent
+
+**Default Intelligence Provider**:
+The exact Intelligence Provider and model a Household Organiser selects for Luna to use when a separate capability-specific default permission is active. Changing or disabling it revokes those permissions; Luna never transfers them to another route.
+_Avoid_: Automatic provider, fallback provider
+
+**Default Intelligence Permission**:
+A separate, revocable Household permission for either ordinary Conversation replies or member-initiated Document evaluations through the Default Intelligence Provider. Conversation permission discloses only each newly submitted message; Document permission discloses only its enumerated review fields.
+_Avoid_: Global consent, blanket AI access
 
 **Luna-managed Intelligence**:
 Cloud assistance supplied and supported under a Household's eligible paid plan using a tested intelligence provider, with provider usage billed to Luna.

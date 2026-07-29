@@ -5,6 +5,9 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Requirement | Evidence |
 | --- | --- |
 | Explicit provider and model | `luna_sends_the_explicit_provider_and_model_through_the_gateway_contract` |
+| Current-message-only Conversation disclosure | `conversation_reply_sends_only_the_new_message_through_the_selected_route` |
+| Conversation reply has no tools or authority | `conversation_adapter_requests_a_reply_without_tools_or_authority` |
+| Default Document permission spans Documents without per-Document consent | `default_document_permission_applies_without_per_document_scope_matching` |
 | Provider-specific consent | `consent_for_one_intelligence_provider_cannot_authorise_another` |
 | Local scope, model and disclosed-field changes invalidate consent | `reusable_consent_cannot_expand_to_new_local_scope_response_fields_or_models` |
 | Allow once is not reusable | `allow_once_consent_is_persisted_consumed_and_cannot_be_reused` |
@@ -46,6 +49,7 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Managed device provisioning | `desktop/server-contract/managedIntelligenceProvisioning.test.ts` proves device proof reaches only narrow credential generation, rejects configuration and returned expiries above 24 hours, revokes an unsafe generated key, bounds gateway calls inside the reservation lease, records failed mints for durable cleanup, stops minting after concurrent entitlement loss, and proves exact route/model, expiry, shared Household budget, rate/token caps, opaque attribution and alias revocation. The account contract proves stale budget authorization and stale readiness are rejected, an in-flight alias cannot be cleared prematurely and an expired reservation remains queued for deletion. |
 | Missed-event recovery | `desktop/server-contract/paddleReconciliation.test.ts` proves reconciliation reuses the ordered Paddle event seam |
 | Installed Household Plan states | `desktop/e2e/conversation.spec.ts` proves the free checkout prompt and complimentary-ready state in the rebuilt desktop |
+| Installed default-route experience | `desktop/e2e/conversation.spec.ts` selects the exact managed default, enables separate Conversation and Document permissions, proves Enter produces a deterministic current-message-only reply without a per-message prompt, and proves a Document Review Card uses that default without provider/model or per-Document consent selectors |
 
 The OpenAI/LiteLLM canary is an explicit release-environment check, not an automated-suite dependency. For prototype acceptance it may run through the pinned, operator-run loopback deployment using only the fixed synthetic request and disposable credentials. On 28 July 2026 the real OpenAI `gpt-4.1-mini` canary passed through the exact `openai/gpt-4.1-mini` LiteLLM route with a strict structured result and privacy-safe usage of 397 input, 214 output and 611 total tokens. The disposable virtual key was revoked and proved unusable; the synthetic marker, upstream key, master key and database password were absent from container logs; the encrypted handoff, containers, networks and volume were removed. Privacy-safe evidence is attached to issue #13 and PR #33.
 

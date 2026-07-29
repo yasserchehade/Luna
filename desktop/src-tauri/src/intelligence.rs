@@ -20,6 +20,7 @@ use crate::{
     portable_memory::{
         PortableConsentDetails, PortableConsentField, PortableConsentGrantKind,
         PortableConsentProvider, PortableConsentScope, PortableConsentState,
+        PortableIntelligenceCapability,
     },
     trusted_device::{
         CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
@@ -30,6 +31,20 @@ use crate::{
 pub const MANAGED_INTELLIGENCE_PROVIDER_ID: &str = "openai";
 pub const MANAGED_INTELLIGENCE_MODEL_ID: &str = "gpt-4.1-mini";
 pub const BYOK_OPENAI_PROVIDER_ID: &str = "openai-byok";
+pub const CONVERSATION_REPLY_PURPOSE: &str = "conversation-reply";
+pub const DOCUMENT_EVALUATION_PURPOSE: &str = "document-evaluation";
+pub const CURRENT_MESSAGE_FIELD: &str = "currentMessage";
+pub const DOCUMENT_DEFAULT_PERMISSION_FIELDS: &[&str] = &[
+    "mediaType",
+    "documentType",
+    "serviceProvider",
+    "addressee",
+    "property",
+    "account",
+    "amount",
+    "relevantDates",
+    "contentExcerpt:locally extracted text",
+];
 const MAX_SAFE_RETRY_ATTEMPTS: usize = 2;
 const MAX_FIELD_VALUE_CHARS: usize = 1_024;
 const MAX_EVIDENCE_ITEMS: usize = 32;
@@ -72,6 +87,7 @@ pub struct IntelligenceSelection {
 #[serde(rename_all = "camelCase")]
 pub enum IntelligenceCapability {
     DirectionInterpretation,
+    ConversationReply,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +118,7 @@ pub struct CloudConsentScope {
     pub document_arrival_id: Option<String>,
     pub future_scope: Option<String>,
     pub fields: Vec<String>,
+    pub default_permission: bool,
     pub kind: ConsentGrantKind,
     pub granted_by: String,
     pub created_at: String,
@@ -215,6 +232,17 @@ pub struct IntelligenceResult {
     pub evidence: Vec<AdditionalIntelligenceEvidence>,
     pub source_references: Vec<String>,
     pub candidate_direction: Option<CandidateDirectionInterpretation>,
+    pub usage: IntelligenceUsage,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationIntelligenceResult {
+    pub request_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub consent_grant_id: i64,
+    pub reply: String,
     pub usage: IntelligenceUsage,
 }
 
@@ -335,6 +363,7 @@ pub struct DeterministicIntelligenceGateway {
     provider_id: String,
     model_id: String,
     fields: Arc<BTreeMap<String, String>>,
+    conversation_reply: Arc<Option<String>>,
     requests: Arc<Mutex<Vec<IntelligenceRequest>>>,
     failures: Arc<Mutex<VecDeque<IntelligenceFailure>>>,
 }
@@ -349,6 +378,7 @@ impl DeterministicIntelligenceGateway {
             provider_id: provider_id.into(),
             model_id: model_id.into(),
             fields: Arc::new(fields),
+            conversation_reply: Arc::new(None),
             requests: Arc::new(Mutex::new(Vec::new())),
             failures: Arc::new(Mutex::new(VecDeque::new())),
         }
@@ -358,6 +388,11 @@ impl DeterministicIntelligenceGateway {
         if let Ok(mut failures) = self.failures.lock() {
             failures.push_back(failure);
         }
+    }
+
+    pub fn with_conversation_reply(mut self, reply: impl Into<String>) -> Self {
+        self.conversation_reply = Arc::new(Some(reply.into()));
+        self
     }
 
     pub fn requests(&self) -> Vec<IntelligenceRequest> {
@@ -395,12 +430,21 @@ impl IntelligenceGateway for DeterministicIntelligenceGateway {
         {
             return Err(failure);
         }
+        let fields = if request.capability == IntelligenceCapability::ConversationReply {
+            self.conversation_reply
+                .as_ref()
+                .as_ref()
+                .map(|reply| BTreeMap::from([("reply".to_owned(), reply.clone())]))
+                .unwrap_or_default()
+        } else {
+            self.fields.as_ref().clone()
+        };
         Ok(UntrustedIntelligenceResult {
             request_id: request.request_id.clone(),
             document_arrival_id: request.document_arrival_id.clone(),
             provider_id: self.provider_id.clone(),
             model_id: self.model_id.clone(),
-            fields: self.fields.as_ref().clone(),
+            fields,
             evidence: Vec::new(),
             source_references: Vec::new(),
             usage: IntelligenceUsage::default(),
@@ -764,8 +808,22 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                 PortableConsentProvider::Anthropic => "anthropic-byok".to_owned(),
             },
             model_id: details.model_id.clone(),
-            capability: IntelligenceCapability::DirectionInterpretation,
-            purpose: capability_purpose(IntelligenceCapability::DirectionInterpretation).to_owned(),
+            capability: match details.capability {
+                PortableIntelligenceCapability::DirectionInterpretation => {
+                    IntelligenceCapability::DirectionInterpretation
+                }
+                PortableIntelligenceCapability::ConversationReply => {
+                    IntelligenceCapability::ConversationReply
+                }
+            },
+            purpose: match details.purpose {
+                crate::portable_memory::PortableConsentPurpose::DocumentEvaluation => {
+                    DOCUMENT_EVALUATION_PURPOSE.to_owned()
+                }
+                crate::portable_memory::PortableConsentPurpose::ConversationReply => {
+                    CONVERSATION_REPLY_PURPOSE.to_owned()
+                }
+            },
             document_arrival_id: None,
             future_scope: scope.future_scope.clone(),
             future_scope_evidence: scope
@@ -829,7 +887,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         granted_by: &str,
     ) -> Result<CloudConsentScope, IntelligenceFailure> {
         self.require_selection(selection)?;
-        let future_scope = reusable_scope_description(&future_scope_evidence);
+        let future_scope = reusable_scope_description(capability, &future_scope_evidence);
         self.insert_consent(
             household_id,
             ConsentPayload {
@@ -873,9 +931,6 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         self.require_selection(&selection)?;
         if request.provider_id != selection.provider_id || request.model_id != selection.model_id {
             return Err(IntelligenceFailure::UnsupportedSelection);
-        }
-        if request.capability != IntelligenceCapability::DirectionInterpretation {
-            return Err(IntelligenceFailure::UnsupportedCapability);
         }
         if consent == CloudConsentDecision::KeepLocal {
             self.record_event(
@@ -1002,7 +1057,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
                         Some(&grant),
                         &grant.granted_by,
                         CloudAssistanceOutcome::Completed,
-                        "Cloud Assistance returned validated Evidence and a candidate Direction Interpretation.",
+                        completed_history_reason(request.capability),
                         result.usage.clone(),
                     )?;
                     return Ok(result);
@@ -1024,6 +1079,74 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             last_failure.clone(),
         )?;
         Err(last_failure)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn reply_to_conversation(
+        &self,
+        household_id: &str,
+        selection: IntelligenceSelection,
+        conversation_id: i64,
+        member_message_id: i64,
+        current_message: &str,
+        granted_by: &str,
+        consent_grant_id: i64,
+    ) -> Result<ConversationIntelligenceResult, IntelligenceFailure> {
+        let current_message = current_message.trim();
+        if current_message.is_empty() {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+        let request_id = format!(
+            "conversation-{conversation_id}-message-{member_message_id}-{}",
+            now()
+        );
+        let provider_id = selection.provider_id.clone();
+        let model_id = selection.model_id.clone();
+        let result = self.evaluate_document(
+            household_id,
+            selection,
+            IntelligenceRequest {
+                request_id: request_id.clone(),
+                document_arrival_id: format!(
+                    "conversation-{conversation_id}-message-{member_message_id}"
+                ),
+                capability: IntelligenceCapability::ConversationReply,
+                provider_id,
+                model_id,
+                evidence: Vec::new(),
+                content_excerpts: vec![DocumentContentExcerpt {
+                    source: CURRENT_MESSAGE_FIELD.to_owned(),
+                    text: current_message.to_owned(),
+                }],
+                expected_response: IntelligenceResponseSchema {
+                    allowed_fields: vec!["reply".to_owned()],
+                    allow_candidate_direction: false,
+                },
+                consent_grant_id: None,
+                constraints: IntelligenceExecutionConstraints {
+                    timeout_ms: 30_000,
+                    max_output_tokens: 512,
+                },
+            },
+            CloudConsentDecision::UseExistingScope,
+            granted_by,
+            Some(consent_grant_id),
+        )?;
+        let reply = result
+            .fields
+            .get("reply")
+            .map(|reply| reply.trim())
+            .filter(|reply| !reply.is_empty())
+            .ok_or(IntelligenceFailure::InvalidStructuredResult)?
+            .to_owned();
+        Ok(ConversationIntelligenceResult {
+            request_id,
+            provider_id: result.provider_id,
+            model_id: result.model_id,
+            consent_grant_id: result.consent_grant_id,
+            reply,
+            usage: result.usage,
+        })
     }
 
     pub fn record_candidate_disposition(
@@ -1123,10 +1246,13 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         let same_selection = payload.provider_id == selection.provider_id
             && payload.model_id == selection.model_id
             && payload.capability == request.capability;
-        let same_document_or_future_scope = payload.document_arrival_id.as_ref().map_or_else(
-            || same_scope_evidence(&payload.future_scope_evidence, &request.evidence),
-            |arrival| arrival == &request.document_arrival_id,
-        );
+        let default_document_scope = is_default_permission_payload(payload)
+            && payload.capability == IntelligenceCapability::DirectionInterpretation;
+        let same_document_or_future_scope = default_document_scope
+            || payload.document_arrival_id.as_ref().map_or_else(
+                || same_scope_evidence(&payload.future_scope_evidence, &request.evidence),
+                |arrival| arrival == &request.document_arrival_id,
+            );
         let requested = disclosed_fields(request);
         let fields_allowed = requested
             .iter()
@@ -1228,7 +1354,9 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             provider_id: request.provider_id.clone(),
             model_id: request.model_id.clone(),
             capability: request.capability,
-            purpose: capability_purpose(request.capability).to_owned(),
+            purpose: grant
+                .map(|scope| scope.purpose.clone())
+                .unwrap_or_else(|| capability_purpose(request.capability).to_owned()),
             consent,
             consent_grant_id: grant.map(|scope| scope.id),
             granted_by: granted_by.trim().to_owned(),
@@ -1392,6 +1520,7 @@ pub(crate) fn managed_provider_catalog() -> Vec<IntelligenceProviderDescriptor> 
 }
 
 fn consent_scope(household_id: &str, id: i64, payload: ConsentPayload) -> CloudConsentScope {
+    let default_permission = is_default_permission_payload(&payload);
     CloudConsentScope {
         id,
         household_id: household_id.to_owned(),
@@ -1402,6 +1531,7 @@ fn consent_scope(household_id: &str, id: i64, payload: ConsentPayload) -> CloudC
         document_arrival_id: payload.document_arrival_id,
         future_scope: payload.future_scope,
         fields: payload.fields,
+        default_permission,
         kind: payload.kind,
         granted_by: payload.granted_by,
         created_at: payload.created_at,
@@ -1411,13 +1541,36 @@ fn consent_scope(household_id: &str, id: i64, payload: ConsentPayload) -> CloudC
     }
 }
 
+fn is_default_permission_payload(payload: &ConsentPayload) -> bool {
+    if payload.document_arrival_id.is_some() || !payload.future_scope_evidence.is_empty() {
+        return false;
+    }
+    match payload.capability {
+        IntelligenceCapability::ConversationReply => {
+            payload.purpose == CONVERSATION_REPLY_PURPOSE
+                && payload.fields == [CURRENT_MESSAGE_FIELD.to_owned()]
+        }
+        IntelligenceCapability::DirectionInterpretation => {
+            payload.purpose == DOCUMENT_EVALUATION_PURPOSE
+                && payload.fields.len() == DOCUMENT_DEFAULT_PERMISSION_FIELDS.len()
+                && DOCUMENT_DEFAULT_PERMISSION_FIELDS
+                    .iter()
+                    .all(|field| payload.fields.iter().any(|allowed| allowed == field))
+        }
+    }
+}
+
 fn capability_purpose(capability: IntelligenceCapability) -> &'static str {
     match capability {
         IntelligenceCapability::DirectionInterpretation => "direction-interpretation",
+        IntelligenceCapability::ConversationReply => CONVERSATION_REPLY_PURPOSE,
     }
 }
 
 fn disclosed_fields(request: &IntelligenceRequest) -> Vec<String> {
+    if request.capability == IntelligenceCapability::ConversationReply {
+        return vec![CURRENT_MESSAGE_FIELD.to_owned()];
+    }
     normalized_fields(
         request
             .evidence
@@ -1444,7 +1597,13 @@ fn normalized_fields(fields: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn reusable_scope_description(evidence: &[IntelligenceEvidence]) -> String {
+fn reusable_scope_description(
+    capability: IntelligenceCapability,
+    evidence: &[IntelligenceEvidence],
+) -> String {
+    if capability == IntelligenceCapability::ConversationReply {
+        return "Each newly submitted ordinary Conversation message; no earlier messages, Documents, or Household state.".to_owned();
+    }
     let media_type = evidence
         .iter()
         .find(|item| item.field == "mediaType")
@@ -1454,6 +1613,17 @@ fn reusable_scope_description(evidence: &[IntelligenceEvidence]) -> String {
     format!(
         "Future difficult {media_type} Documents with the same currently displayed local context values and disclosed fields."
     )
+}
+
+fn completed_history_reason(capability: IntelligenceCapability) -> &'static str {
+    match capability {
+        IntelligenceCapability::DirectionInterpretation => {
+            "Cloud Assistance returned validated Evidence and a candidate Direction Interpretation."
+        }
+        IntelligenceCapability::ConversationReply => {
+            "Cloud Assistance returned a validated Conversation reply using only the newly submitted message."
+        }
+    }
 }
 
 fn same_scope_evidence(
@@ -1746,6 +1916,155 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].provider_id, "openai");
         assert_eq!(requests[0].model_id, "gpt-4.1-mini");
+    }
+
+    #[test]
+    fn conversation_reply_sends_only_the_new_message_through_the_selected_route() {
+        let gateway =
+            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new())
+                .with_conversation_reply("Start with the task that blocks the most other work.");
+        let store = store_with_gateway(gateway.clone());
+        let selection = IntelligenceSelection {
+            provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+            model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+        };
+        let permission = store
+            .grant_scope(
+                "household",
+                &selection,
+                IntelligenceCapability::ConversationReply,
+                "conversation-reply",
+                vec!["currentMessage".to_owned()],
+                Vec::new(),
+                "organiser-1",
+            )
+            .expect("grant Conversation permission");
+
+        let result = store
+            .reply_to_conversation(
+                "household",
+                selection,
+                7,
+                42,
+                "What should I do first?",
+                "organiser-1",
+                permission.id,
+            )
+            .expect("reply to current message");
+
+        assert_eq!(
+            result.reply,
+            "Start with the task that blocks the most other work."
+        );
+        let requests = gateway.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].capability,
+            IntelligenceCapability::ConversationReply
+        );
+        assert!(requests[0].evidence.is_empty());
+        assert_eq!(
+            requests[0].content_excerpts,
+            vec![DocumentContentExcerpt {
+                source: "currentMessage".to_owned(),
+                text: "What should I do first?".to_owned(),
+            }]
+        );
+        assert_eq!(
+            requests[0].expected_response.allowed_fields,
+            vec!["reply".to_owned()]
+        );
+    }
+
+    #[test]
+    fn default_document_permission_applies_without_per_document_scope_matching() {
+        let gateway = DeterministicIntelligenceGateway::new(
+            "openai",
+            "gpt-4.1-mini",
+            BTreeMap::from([("documentType".to_owned(), "electricity bill".to_owned())]),
+        );
+        let store = store_with_gateway(gateway.clone());
+        let selection = IntelligenceSelection {
+            provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+            model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+        };
+        let permission = store
+            .grant_scope(
+                "household",
+                &selection,
+                IntelligenceCapability::DirectionInterpretation,
+                DOCUMENT_EVALUATION_PURPOSE,
+                DOCUMENT_DEFAULT_PERMISSION_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect(),
+                Vec::new(),
+                "organiser-1",
+            )
+            .expect("grant default Document permission");
+        assert!(permission.default_permission);
+
+        let result = store
+            .evaluate_document(
+                "household",
+                selection,
+                authorised_request("a-different-document"),
+                CloudConsentDecision::UseExistingScope,
+                "organiser-1",
+                Some(permission.id),
+            )
+            .expect("evaluate through the default Document permission");
+
+        assert_eq!(
+            result.fields.get("documentType"),
+            Some(&"electricity bill".to_owned())
+        );
+        assert_eq!(gateway.requests().len(), 1);
+    }
+
+    #[test]
+    fn document_specific_grant_is_not_treated_as_default_permission() {
+        let gateway = DeterministicIntelligenceGateway::new(
+            "openai",
+            "gpt-4.1-mini",
+            BTreeMap::from([("documentType".to_owned(), "electricity bill".to_owned())]),
+        );
+        let store = store_with_gateway(gateway.clone());
+        let selection = IntelligenceSelection {
+            provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+            model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+        };
+        let scoped_request = authorised_request("scoped-document");
+        let grant = store
+            .grant_scope(
+                "household",
+                &selection,
+                IntelligenceCapability::DirectionInterpretation,
+                DOCUMENT_EVALUATION_PURPOSE,
+                DOCUMENT_DEFAULT_PERMISSION_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect(),
+                scoped_request.evidence,
+                "organiser-1",
+            )
+            .expect("grant document-specific scope");
+        assert!(!grant.default_permission);
+
+        let mut different_request = authorised_request("different-document");
+        different_request.evidence[0].value = "image/png".to_owned();
+        assert_eq!(
+            store.evaluate_document(
+                "household",
+                selection,
+                different_request,
+                CloudConsentDecision::UseExistingScope,
+                "organiser-1",
+                Some(grant.id),
+            ),
+            Err(IntelligenceFailure::ConsentRequired)
+        );
+        assert!(gateway.requests().is_empty());
     }
 
     #[test]

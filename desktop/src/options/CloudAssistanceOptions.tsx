@@ -7,13 +7,22 @@ import type {
 import type {
   CloudConsentScope,
   ConversationService,
+  DefaultIntelligenceProvider,
   IntelligenceProviderStatus,
+} from "../conversation/conversationService";
+import {
+  conversationIntelligenceFields,
+  conversationIntelligencePurpose,
+  documentIntelligenceFields,
+  documentIntelligencePurpose,
 } from "../conversation/conversationService";
 import type { TrustedDeviceService } from "../trusted-device/trustedDeviceService";
 
 type CloudAssistanceDataService = Pick<
   ConversationService,
-  "listIntelligenceProviderStatuses" | "listCloudConsentScopes"
+  | "listIntelligenceProviderStatuses"
+  | "listCloudConsentScopes"
+  | "getDefaultIntelligenceProvider"
 >;
 
 type CloudAssistanceAccountService = Pick<
@@ -32,23 +41,28 @@ export async function loadCloudAssistanceOptionsData(
   access: HouseholdIntelligenceAccess | null;
   providers: IntelligenceProviderStatus[];
   scopes: CloudConsentScope[];
+  defaultProvider: DefaultIntelligenceProvider | null;
   accessError: string;
   providerError: string;
   consentError: string;
+  defaultError: string;
 }> {
-  const [accessResult, providersResult, scopesResult] = await Promise.allSettled([
+  const [accessResult, providersResult, scopesResult, defaultResult] = await Promise.allSettled([
     trustedDeviceService.currentDevicePublicKey(householdId)
       .then((devicePublicKey) => accountService.getHouseholdIntelligenceAccess(devicePublicKey)),
     conversationService.listIntelligenceProviderStatuses(householdId),
     conversationService.listCloudConsentScopes(householdId),
+    conversationService.getDefaultIntelligenceProvider(householdId),
   ]);
   return {
     access: accessResult.status === "fulfilled" ? accessResult.value : null,
     providers: providersResult.status === "fulfilled" ? providersResult.value : [],
     scopes: scopesResult.status === "fulfilled" ? scopesResult.value : [],
+    defaultProvider: defaultResult.status === "fulfilled" ? defaultResult.value : null,
     accessError: accessResult.status === "rejected" ? String(accessResult.reason) : "",
     providerError: providersResult.status === "rejected" ? String(providersResult.reason) : "",
     consentError: scopesResult.status === "rejected" ? String(scopesResult.reason) : "",
+    defaultError: defaultResult.status === "rejected" ? String(defaultResult.reason) : "",
   };
 }
 
@@ -109,6 +123,8 @@ export function CloudAssistanceOptions({
   const [access, setAccess] = useState<HouseholdIntelligenceAccess | null>(null);
   const [providers, setProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [scopes, setScopes] = useState<CloudConsentScope[]>([]);
+  const [defaultProvider, setDefaultProvider] = useState<DefaultIntelligenceProvider | null>(null);
+  const [selectedRoute, setSelectedRoute] = useState("");
   const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
   const [busyProviderId, setBusyProviderId] = useState("");
   const [providerError, setProviderError] = useState("");
@@ -128,9 +144,22 @@ export function CloudAssistanceOptions({
     setAccess(data.access);
     setProviders(data.providers);
     setScopes(data.scopes);
+    setDefaultProvider(data.defaultProvider);
+    setSelectedRoute((current) => {
+      if (data.defaultProvider && !data.defaultProvider.invalid) {
+        return `${data.defaultProvider.providerId}::${data.defaultProvider.modelId}`;
+      }
+      if (current) return current;
+      const first = data.providers.find(({ configured }) => configured);
+      const model = first?.descriptor.models[0];
+      return first && model ? `${first.descriptor.id}::${model.id}` : "";
+    });
     setProviderError(data.providerError);
     setConsentError(data.consentError);
     setAccessError(data.accessError);
+    if (data.defaultError) setActionError(
+      "Luna couldn't open the saved default Intelligence settings. You can replace or disable them.",
+    );
   };
 
   useEffect(() => { void refresh(); }, [accountService, conversationService, householdId, trustedDeviceService]);
@@ -194,12 +223,159 @@ export function CloudAssistanceOptions({
     }
   };
 
+  const activeDefaultStatus = providers.find(({ descriptor }) => (
+    !defaultProvider?.invalid
+    && descriptor.id === defaultProvider?.providerId
+    && descriptor.models.some(({ id }) => id === defaultProvider.modelId)
+  ));
+  const activeScopes = scopes.filter((scope) => (
+    !scope.revoked
+    && scope.providerId === defaultProvider?.providerId
+    && scope.modelId === defaultProvider?.modelId
+  ));
+  const conversationPermission = activeScopes.some((scope) => (
+    scope.defaultPermission
+    &&
+    scope.capability === "conversationReply"
+    && scope.purpose === conversationIntelligencePurpose
+    && conversationIntelligenceFields.every((field) => scope.fields.includes(field))
+  ));
+  const documentPermission = activeScopes.some((scope) => (
+    scope.defaultPermission
+    &&
+    scope.capability === "directionInterpretation"
+    && scope.purpose === documentIntelligencePurpose
+    && scope.fields.length === documentIntelligenceFields.length
+    && documentIntelligenceFields.every((field) => scope.fields.includes(field))
+  ));
+
+  const saveDefault = async () => {
+    const [providerId, modelId] = selectedRoute.split("::");
+    if (!providerId || !modelId) return;
+    try {
+      await conversationService.setDefaultIntelligenceProvider(
+        householdId,
+        providerId,
+        modelId,
+      );
+      setActionError("");
+      await refresh();
+    } catch {
+      setActionError("Luna couldn't save that exact Intelligence Provider and model.");
+    }
+  };
+
+  const clearDefault = async () => {
+    try {
+      await conversationService.clearDefaultIntelligenceProvider(householdId);
+      setActionError("");
+      setSelectedRoute("");
+      await refresh();
+    } catch {
+      setActionError("Luna couldn't disable the default Intelligence Provider.");
+    }
+  };
+
+  const setDefaultPermission = async (
+    permission: "conversation" | "document",
+    enabled: boolean,
+  ) => {
+    try {
+      await conversationService.setDefaultIntelligencePermission(
+        householdId,
+        permission,
+        enabled,
+      );
+      setActionError("");
+      await refresh();
+    } catch {
+      setActionError("Luna couldn't update that default permission.");
+    }
+  };
+
   return <section className="cloud-assistance-options" aria-label="Cloud assistance">
     <h2>Cloud assistance</h2>
     <p className="muted">Luna stays local by default. An eligible paid or complimentary beta Household receives Luna-managed Intelligence automatically. Any Household can connect its own supported provider here, or remain local-only.</p>
     <p className="muted">For eligible Household Plans, Luna enables managed access automatically on Trusted Devices. You never need to enter a Luna access key.</p>
     {accessError && <p role="alert" className="error">Luna couldn&apos;t check this Household&apos;s managed access. Bring-your-own provider setup remains available.</p>}
     {providerError && <p role="alert" className="error">{cloudAssistanceLoadErrorMessage("providers", providerError)}</p>}
+    <section className="default-intelligence-settings" aria-label="Default intelligence settings">
+      <div className="section-heading">
+        <div><small>Default for Luna</small><h3>Intelligence Provider and model</h3></div>
+        <span>{activeDefaultStatus
+          ? `${activeDefaultStatus.descriptor.name} · ${defaultProvider?.modelId}`
+          : defaultProvider?.invalid
+          ? "Invalid saved setting"
+          : defaultProvider
+          ? `${defaultProvider.providerId} · ${defaultProvider.modelId} · unavailable`
+          : "Disabled"}</span>
+      </div>
+      <label>
+        Default Intelligence Provider and model
+        <select
+          aria-label="Default Intelligence Provider and model"
+          value={selectedRoute}
+          onChange={(event) => setSelectedRoute(event.target.value)}
+        >
+          <option value="">Choose a connected Intelligence Provider</option>
+          {defaultProvider && !defaultProvider.invalid && !providers.some(({ descriptor }) => (
+            descriptor.id === defaultProvider.providerId
+            && descriptor.models.some(({ id }) => id === defaultProvider.modelId)
+          )) && <option value={`${defaultProvider.providerId}::${defaultProvider.modelId}`} disabled>
+            {defaultProvider.providerId} · {defaultProvider.modelId} · unavailable
+          </option>}
+          {providers.flatMap(({ descriptor, configured }) => descriptor.models.map((model) => (
+            <option
+              key={`${descriptor.id}::${model.id}`}
+              value={`${descriptor.id}::${model.id}`}
+              disabled={!configured}
+            >
+              {descriptor.name} · {model.name}{configured ? "" : " · connect first"}
+            </option>
+          )))}
+        </select>
+      </label>
+      <div className="default-intelligence-actions">
+        <button
+          type="button"
+          disabled={!selectedRoute || !providers.some(({ descriptor, configured }) => (
+            configured
+            && descriptor.models.some(({ id }) => `${descriptor.id}::${id}` === selectedRoute)
+          ))}
+          onClick={() => void saveDefault()}
+        >Save default</button>
+        {defaultProvider && <button type="button" onClick={() => void clearDefault()}>Disable default</button>}
+      </div>
+      <fieldset disabled={!defaultProvider || !activeDefaultStatus?.configured}>
+        <legend>Default permissions</legend>
+        <label className="default-permission">
+          <input
+            aria-label="Allow Conversation replies by default"
+            type="checkbox"
+            checked={conversationPermission}
+            onChange={(event) => void setDefaultPermission("conversation", event.target.checked)}
+          />
+          <span>
+            <strong>Allow Conversation replies by default</strong>
+            <small>Only each newly submitted message is sent. Earlier messages, Documents, and Household state stay local.</small>
+          </span>
+        </label>
+        <label className="default-permission">
+          <input
+            aria-label="Allow Document evaluations by default"
+            type="checkbox"
+            checked={documentPermission}
+            onChange={(event) => void setDefaultPermission("document", event.target.checked)}
+          />
+          <span>
+            <strong>Allow Document evaluations by default</strong>
+            <small>Member-initiated assistance may send: media type, locally extracted text, and the visible review fields. Suggestions remain reviewable.</small>
+          </span>
+        </label>
+      </fieldset>
+      {defaultProvider && activeDefaultStatus && !activeDefaultStatus.configured && <p className="muted">Reconnect this Intelligence Provider before Luna can use the saved default.</p>}
+      {defaultProvider?.invalid && <p className="muted">The saved default is invalid. Choose a replacement or disable it.</p>}
+    </section>
     <div className="cloud-provider-list">
       {providers.filter(({ descriptor }) => descriptor.managedByLuna).map(({ descriptor, configured }) => <article className="cloud-provider-card" key={descriptor.id}>
         <div className="cloud-provider-heading">

@@ -43,7 +43,10 @@ Direct Rust adapters reduce proxy infrastructure but duplicate provider transpor
 ## Provider selection and fallback restrictions
 
 - Luna approves and names the Intelligence Provider and model before invocation.
+- Options persists one exact Default Intelligence Provider and model. Conversation replies and Document evaluations require separate capability-specific Default Intelligence Permissions. Changing or disabling the default revokes both permissions instead of transferring them.
 - A Consent Grant is restricted to that provider, model, capability and disclosed scope. Reusable consent additionally binds the current media type and locally known context values shown to the member; changed scope fails closed and requires a new grant.
+- An ordinary Conversation request contains only the newly submitted message. It never contains earlier messages, Documents, Household state, tools or action authority. A validated reply can only become a Luna-authored Conversation message.
+- A member-initiated Document evaluation uses the approved default route and enumerated Document field set. The Review Card does not offer a second provider/model or per-Document consent selector.
 - One-time consent is persisted and consumed on its first transmission attempt.
 - No LiteLLM router, alias, load balancer or fallback may select another provider or materially different model.
 - Provider or gateway failure leaves Document Handling waiting with the Original and Local Inspection Evidence intact.

@@ -20,7 +20,7 @@ use crate::{
     },
     intelligence::{
         CandidateDisposition, CloudAssistanceOutcome, CloudIntelligenceStore, ConsentGrantKind,
-        IntelligenceFailure,
+        IntelligenceCapability, IntelligenceFailure,
     },
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
@@ -171,6 +171,7 @@ pub enum PortableConsentProvider {
 #[serde(rename_all = "camelCase")]
 pub enum PortableIntelligenceCapability {
     DirectionInterpretation,
+    ConversationReply,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +185,7 @@ pub enum PortableConsentGrantKind {
 #[serde(rename_all = "camelCase")]
 pub enum PortableConsentPurpose {
     DocumentEvaluation,
+    ConversationReply,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1065,8 +1067,22 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
                     },
                     details: PortableConsentDetails {
                         model_id: consent.model_id,
-                        capability: PortableIntelligenceCapability::DirectionInterpretation,
-                        purpose: PortableConsentPurpose::DocumentEvaluation,
+                        capability: match consent.capability {
+                            IntelligenceCapability::DirectionInterpretation => {
+                                PortableIntelligenceCapability::DirectionInterpretation
+                            }
+                            IntelligenceCapability::ConversationReply => {
+                                PortableIntelligenceCapability::ConversationReply
+                            }
+                        },
+                        purpose: match consent.capability {
+                            IntelligenceCapability::DirectionInterpretation => {
+                                PortableConsentPurpose::DocumentEvaluation
+                            }
+                            IntelligenceCapability::ConversationReply => {
+                                PortableConsentPurpose::ConversationReply
+                            }
+                        },
                         kind: match consent.kind {
                             ConsentGrantKind::OneTime => PortableConsentGrantKind::OneTime,
                             ConsentGrantKind::Reusable => PortableConsentGrantKind::Reusable,

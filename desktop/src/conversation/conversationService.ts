@@ -234,6 +234,48 @@ export type IntelligenceSelection = {
   modelId: string;
 };
 
+export const conversationIntelligencePurpose = "conversation-reply" as const;
+export const documentIntelligencePurpose = "document-evaluation" as const;
+export const conversationIntelligenceFields = ["currentMessage"] as const;
+export const documentIntelligenceFields = [
+  "mediaType",
+  "documentType",
+  "serviceProvider",
+  "addressee",
+  "property",
+  "account",
+  "amount",
+  "relevantDates",
+  "contentExcerpt:locally extracted text",
+] as const;
+
+export type DefaultIntelligenceProvider = {
+  providerId: string;
+  modelId: string;
+  invalid?: boolean;
+};
+
+export type ConversationIntelligenceFailure = {
+  code:
+    | "not_configured"
+    | "configuration"
+    | "consent_required"
+    | "unavailable"
+    | "invalid_result"
+    | "invalid_credential"
+    | "request_rejected"
+    | "unexpected";
+  providerId: string | null;
+  providerName: string | null;
+  detail: string;
+};
+
+export type OrdinaryConversationSubmission = {
+  memberMessage: ConversationMessage;
+  reply: ConversationMessage | null;
+  failure: ConversationIntelligenceFailure | null;
+};
+
 export type IntelligenceResult = {
   requestId: string;
   documentArrivalId: string;
@@ -266,11 +308,12 @@ export type CloudConsentScope = {
   householdId: string;
   providerId: string;
   modelId: string;
-  capability: "directionInterpretation";
+  capability: "directionInterpretation" | "conversationReply";
   purpose: string;
   documentArrivalId: string | null;
   futureScope: string | null;
   fields: string[];
+  defaultPermission: boolean;
   kind: "oneTime" | "reusable";
   grantedBy: string;
   createdAt: string;
@@ -286,7 +329,7 @@ export type CloudAssistanceAuditEvent = {
   documentArrivalId: string;
   providerId: string;
   modelId: string;
-  capability: "directionInterpretation";
+  capability: "directionInterpretation" | "conversationReply";
   purpose: string;
   consent: CloudConsentDecision;
   consentGrantId: number | null;
@@ -492,6 +535,23 @@ export interface ConversationService {
   ): Promise<DocumentArrival>;
   listIntelligenceProviders(): Promise<IntelligenceProviderDescriptor[]>;
   listIntelligenceProviderStatuses(householdId: string): Promise<IntelligenceProviderStatus[]>;
+  getDefaultIntelligenceProvider(householdId: string): Promise<DefaultIntelligenceProvider | null>;
+  setDefaultIntelligenceProvider(
+    householdId: string,
+    providerId: string,
+    modelId: string,
+  ): Promise<DefaultIntelligenceProvider>;
+  clearDefaultIntelligenceProvider(householdId: string): Promise<void>;
+  setDefaultIntelligencePermission(
+    householdId: string,
+    permission: "conversation" | "document",
+    enabled: boolean,
+  ): Promise<void>;
+  submitOrdinaryConversationMessage(
+    householdId: string,
+    conversationId: number,
+    body: string,
+  ): Promise<OrdinaryConversationSubmission>;
   testAndSetIntelligenceProviderCredential(
     householdId: string,
     providerId: string,
@@ -508,6 +568,10 @@ export interface ConversationService {
     selection: IntelligenceSelection,
     consent: CloudConsentDecision,
     existingConsentGrantId: number | null,
+  ): Promise<CloudAssistanceResolution>;
+  evaluateDocumentWithDefaultIntelligenceProvider(
+    householdId: string,
+    arrivalId: number,
   ): Promise<CloudAssistanceResolution>;
   recordCloudCandidateDisposition(
     householdId: string,
@@ -663,6 +727,35 @@ export const tauriConversationService: ConversationService = {
   listIntelligenceProviderStatuses(householdId) {
     return invoke<IntelligenceProviderStatus[]>("list_intelligence_provider_statuses", { householdId });
   },
+  getDefaultIntelligenceProvider(householdId) {
+    return invoke<DefaultIntelligenceProvider | null>("get_default_intelligence_provider", {
+      householdId,
+    });
+  },
+  setDefaultIntelligenceProvider(householdId, providerId, modelId) {
+    return invoke<DefaultIntelligenceProvider>("set_default_intelligence_provider", {
+      householdId,
+      providerId,
+      modelId,
+    });
+  },
+  clearDefaultIntelligenceProvider(householdId) {
+    return invoke("clear_default_intelligence_provider", { householdId });
+  },
+  setDefaultIntelligencePermission(householdId, permission, enabled) {
+    return invoke("set_default_intelligence_permission", {
+      householdId,
+      permission,
+      enabled,
+    });
+  },
+  submitOrdinaryConversationMessage(householdId, conversationId, body) {
+    return invoke<OrdinaryConversationSubmission>("submit_ordinary_conversation_message", {
+      householdId,
+      conversationId,
+      body,
+    });
+  },
   testAndSetIntelligenceProviderCredential(householdId, providerId, credential) {
     return invoke("test_and_set_intelligence_provider_credential", {
       householdId,
@@ -695,6 +788,12 @@ export const tauriConversationService: ConversationService = {
         existingConsentGrantId,
       },
     });
+  },
+  evaluateDocumentWithDefaultIntelligenceProvider(householdId, arrivalId) {
+    return invoke<CloudAssistanceResolution>(
+      "evaluate_document_with_default_intelligence_provider",
+      { householdId, arrivalId },
+    );
   },
   recordCloudCandidateDisposition(householdId, arrivalId, requestId, disposition) {
     return invoke("record_cloud_candidate_disposition", {

@@ -27,13 +27,18 @@ test("provider controls remain available when protected Consent Grants cannot be
   }];
   const service: Pick<
     ConversationService,
-    "listIntelligenceProviderStatuses" | "listCloudConsentScopes"
+    | "listIntelligenceProviderStatuses"
+    | "listCloudConsentScopes"
+    | "getDefaultIntelligenceProvider"
   > = {
     async listIntelligenceProviderStatuses() {
       return providers;
     },
     async listCloudConsentScopes(): Promise<CloudConsentScope[]> {
       throw new Error("protected Household intelligence state is unavailable");
+    },
+    async getDefaultIntelligenceProvider() {
+      return null;
     },
   };
 

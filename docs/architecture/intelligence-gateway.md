@@ -24,7 +24,9 @@ flowchart TD
 
 `IntelligenceGateway` receives a Luna-owned `IntelligenceRequest` and returns a Luna-owned `UntrustedIntelligenceResult` or `IntelligenceFailure`. The request carries a safe request identifier, Document Arrival correlation, capability, exact provider/model, selected Local Inspection Evidence, bounded content excerpts, expected response schema, Consent Grant reference and execution constraints.
 
-`DocumentIntelligenceService` is the application seam joining protected Document Handling state to that boundary. The frontend supplies only a Document Arrival identifier, exact selection, consent choice, granting Luna Account and optional existing Consent Grant. It cannot construct an arbitrary provider payload.
+`DocumentIntelligenceService` is the application seam joining protected Document Handling state to that boundary. The frontend supplies only a Document Arrival identifier. The Rust application boundary resolves the saved exact default route and applicable Document permission, then constructs the request; the Review Card cannot construct an arbitrary provider payload or select another route.
+
+Ordinary Conversation uses a separate atomic application command. It first stores the member message, resolves the saved exact default route and Conversation permission, submits only that new message, validates the structured reply, and then stores the reply as a Luna-authored Conversation message. The provider result has no command, tool, consent, filing or Household authority. If configuration, consent, transport or validation fails, the member message remains saved and no provider reply is added.
 
 The production catalogue contains two deliberately separate OpenAI routes:
 
@@ -55,6 +57,10 @@ For prototype acceptance, an operator may run the pinned gateway deployment ephe
 
 ## Minimisation
 
+For ordinary Conversation replies, Luna may transmit only the newly submitted
+message. Earlier Conversation messages, attachments, Documents, Cabinet
+content, Household state, credentials and Filing Rules remain local.
+
 For Direction Interpretation, Luna may transmit:
 
 - media type;
@@ -64,7 +70,17 @@ For Direction Interpretation, Luna may transmit:
 
 Luna does not transmit the Household identifier, Cabinet or source paths, checksum, Filing Rules, duplicate state, History, credentials, the Original file, or complete Household state. Relevance to a Household, property or Service Provider remains Member Direction and is not requested from the provider.
 
-Before Luna offers reusable consent, the Conversation states its concrete future scope: the exact provider/model and capability, the current media type, the same locally known context values and no wider set of disclosed fields. The protected Consent Grant stores that local-scope Evidence and validates it against every attempted reuse. A changed media type, local context value, provider, model, capability or wider disclosed field set requires a new Consent Grant.
+Options shows one exact Default Intelligence Provider and model and two
+independent permissions. Conversation permission is restricted to the
+`currentMessage` field. Document permission is restricted to the enumerated
+Document evaluation fields. Changing or disabling the default revokes both
+permissions. Luna does not silently select a fallback and the Review Card does
+not expose a competing provider/model or per-Document consent selector.
+
+Legacy one-time and narrowly scoped Document consent remains protected by its
+original provider/model, capability, local-scope Evidence and disclosed fields.
+A changed media type, local context value, provider, model, capability or wider
+disclosed field set still requires a new Consent Grant.
 
 ## Validation and authority
 

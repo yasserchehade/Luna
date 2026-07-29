@@ -1385,6 +1385,15 @@ impl<V: CredentialVault> ConversationStore<V> {
         self.add_conversation_message(household_id, conversation_id, "member", body, None)
     }
 
+    pub fn add_luna_message(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        body: &str,
+    ) -> Result<ConversationMessage, ConversationError> {
+        self.add_conversation_message(household_id, conversation_id, "luna", body, None)
+    }
+
     fn add_conversation_message(
         &self,
         household_id: &str,

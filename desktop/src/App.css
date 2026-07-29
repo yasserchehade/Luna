@@ -36,6 +36,7 @@ button { cursor: pointer; }
 .workspace-stack { display: flex; min-width: 0; height: 100vh; flex-direction: column; overflow: hidden; }
 .workspace-stack > .conversation { min-height: 0; flex: 1; }
 .session-notice { margin: 0; padding: 10px 20px; color: #684f1f; background: #fff8e6; font-size: 12px; line-height: 1.45; }
+.conversation-intelligence-notice { margin: 0; padding: 10px clamp(30px, 7vw, 92px); color: #684f1f; background: #fff8e6; font-size: 12px; line-height: 1.45; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; font-size: 19px; }
 .brand > span, .luna-message > span { display: grid; place-items: center; color: #fff; background: #355f4a; font-family: Georgia, serif; }
 .brand > span { width: 32px; height: 32px; border-radius: 10px 10px 10px 4px; }
@@ -122,6 +123,17 @@ nav small { display: grid; width: 19px; height: 19px; place-items: center; borde
 .cloud-assistance-options { display: grid; gap: 14px; margin-top: 0; padding: 30px clamp(30px, 7vw, 92px); }
 .cloud-assistance-options h2, .cloud-assistance-options h3 { margin: 0; font-family: Georgia, serif; font-weight: 500; }
 .cloud-assistance-options .muted { max-width: 620px; color: #687068; font-size: 13px; line-height: 1.5; }
+.default-intelligence-settings { display: grid; gap: 12px; max-width: 620px; padding: 16px; border: 1px solid #cfd8d0; border-radius: 10px; background: #f8faf6; }
+.default-intelligence-settings .section-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+.default-intelligence-settings .section-heading > div { display: grid; gap: 3px; }
+.default-intelligence-settings label { display: grid; gap: 6px; }
+.default-intelligence-settings select { min-height: 40px; padding: 8px 10px; border: 1px solid #ccd2ca; border-radius: 8px; background: #fff; }
+.default-intelligence-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.default-intelligence-actions button { padding: 8px 11px; border: 1px solid #ccd2ca; border-radius: 8px; color: #394139; background: #fff; }
+.default-intelligence-settings fieldset { display: grid; gap: 10px; margin: 0; padding: 12px; border: 1px solid #d7ddd4; border-radius: 8px; }
+.default-permission { grid-template-columns: auto 1fr; align-items: start; gap: 9px; }
+.default-permission span { display: grid; gap: 3px; }
+.default-permission small { color: #687068; line-height: 1.45; }
 .cloud-provider-list { display: grid; gap: 10px; max-width: 620px; }
 .cloud-provider-card { display: grid; gap: 9px; padding: 16px; border: 1px solid #d7ddd4; border-radius: 10px; background: #fbfcf8; }
 .cloud-provider-heading { display: flex; justify-content: space-between; gap: 12px; }

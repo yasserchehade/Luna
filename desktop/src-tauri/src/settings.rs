@@ -42,6 +42,12 @@ impl SettingsStore {
             .optional()
     }
 
+    pub fn delete(&self, key: &str) -> rusqlite::Result<()> {
+        self.connect()?
+            .execute("DELETE FROM device_settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     fn connect(&self) -> rusqlite::Result<Connection> {
         Connection::open(&self.database)
     }

@@ -9,10 +9,11 @@ import {
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   Conversation,
+  ConversationIntelligenceFailure,
   ConversationMessage,
   ConversationService,
-  CloudConsentDecision,
   CloudConsentScope,
+  DefaultIntelligenceProvider,
   ConversationAction,
   DocumentConversationView,
   DocumentContextDirection,
@@ -25,6 +26,32 @@ import type {
   IntelligenceProviderStatus,
   TodoItem,
 } from "./conversationService";
+import {
+  documentIntelligenceFields,
+  documentIntelligencePurpose,
+} from "./conversationService";
+
+const intelligenceFailureNotice = (
+  failure: ConversationIntelligenceFailure | null,
+): string => {
+  if (!failure) return "";
+  const provider = failure.providerName ?? "The selected Intelligence Provider";
+  switch (failure.code) {
+    case "not_configured":
+    case "configuration":
+    case "consent_required":
+      return `${failure.detail} Open Options → Cloud assistance to review the default and Conversation permission.`;
+    case "unavailable":
+      return `${provider} could not complete the request. Your message remains saved in Luna, and no Intelligence Provider reply was added. The request may have reached ${provider}; check the connection and try again.`;
+    case "invalid_result":
+      return `${provider} returned a reply Luna could not safely accept. Your message remains saved, and no Intelligence Provider reply was added.`;
+    case "invalid_credential":
+    case "request_rejected":
+      return `${provider} rejected the request. Your message remains saved, and no Intelligence Provider reply was added. Review the connection in Options.`;
+    default:
+      return "Luna could not complete the Intelligence Provider request. Your message remains saved, and no Intelligence Provider reply was added.";
+  }
+};
 
 type ConversationWorkspaceProps = {
   conversationService: ConversationService;
@@ -205,8 +232,7 @@ function DocumentReviewEditor({
   const [cloudOpen, setCloudOpen] = useState(false);
   const [cloudProviders, setCloudProviders] = useState<IntelligenceProviderStatus[]>([]);
   const [cloudScopes, setCloudScopes] = useState<CloudConsentScope[]>([]);
-  const [cloudProviderId, setCloudProviderId] = useState("");
-  const [cloudModelId, setCloudModelId] = useState("");
+  const [cloudDefaultProvider, setCloudDefaultProvider] = useState<DefaultIntelligenceProvider | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudMessage, setCloudMessage] = useState("");
   const [cloudError, setCloudError] = useState("");
@@ -221,14 +247,23 @@ function DocumentReviewEditor({
   )
     ? arrival.reviewCard.questions.filter(({ field }) => field !== "amount")
     : arrival.reviewCard.questions;
-  const selectedCloudProvider = cloudProviders.find(({ descriptor }) => descriptor.id === cloudProviderId);
-  const selectedCloudModel = selectedCloudProvider?.descriptor.models.find(({ id }) => id === cloudModelId);
+  const selectedCloudProvider = cloudProviders.find(({ descriptor }) => (
+    !cloudDefaultProvider?.invalid
+    && descriptor.id === cloudDefaultProvider?.providerId
+  ));
+  const selectedCloudModel = selectedCloudProvider?.descriptor.models.find(
+    ({ id }) => id === cloudDefaultProvider?.modelId,
+  );
   const existingCloudScope = cloudScopes.find((scope) => (
     !scope.revoked
-    && scope.providerId === cloudProviderId
-    && scope.modelId === cloudModelId
+    && scope.defaultPermission
+    && scope.providerId === cloudDefaultProvider?.providerId
+    && scope.modelId === cloudDefaultProvider?.modelId
     && scope.kind === "reusable"
     && scope.capability === "directionInterpretation"
+    && scope.purpose === documentIntelligencePurpose
+    && scope.fields.length === documentIntelligenceFields.length
+    && documentIntelligenceFields.every((field) => scope.fields.includes(field))
   ));
 
   useEffect(() => {
@@ -246,8 +281,7 @@ function DocumentReviewEditor({
     setCloudOpen(false);
     setCloudProviders([]);
     setCloudScopes([]);
-    setCloudProviderId("");
-    setCloudModelId("");
+    setCloudDefaultProvider(null);
     setCloudMessage("");
     setCloudError("");
     setCloudReadyForMemberDirection(false);
@@ -259,15 +293,14 @@ function DocumentReviewEditor({
     setCloudBusy(true);
     setCloudError("");
     try {
-      const [providers, scopes] = await Promise.all([
+      const [providers, scopes, defaultProvider] = await Promise.all([
         conversationService.listIntelligenceProviderStatuses(householdId),
         conversationService.listCloudConsentScopes(householdId),
+        conversationService.getDefaultIntelligenceProvider(householdId),
       ]);
       setCloudProviders(providers);
       setCloudScopes(scopes);
-      const selected = providers.find(({ configured }) => configured) ?? providers[0];
-      setCloudProviderId((current) => current || selected?.descriptor.id || "");
-      setCloudModelId((current) => current || selected?.descriptor.models[0]?.id || "");
+      setCloudDefaultProvider(defaultProvider);
     } catch (reason) {
       setCloudError(String(reason));
     } finally {
@@ -285,22 +318,14 @@ function DocumentReviewEditor({
     }
   }, [arrival.processingState]);
 
-  const askCloudProvider = useCallback(async (consent: CloudConsentDecision) => {
-    if (!cloudProviderId || !cloudModelId) {
-      const response = "Choose an Intelligence Provider and model first.";
-      setCloudMessage(response);
-      return response;
-    }
+  const askDefaultCloudProvider = useCallback(async () => {
     setCloudBusy(true);
     setCloudError("");
     setCloudMessage("");
     try {
-      const outcome = await conversationService.evaluateDocumentWithCloudAssistance(
+      const outcome = await conversationService.evaluateDocumentWithDefaultIntelligenceProvider(
         householdId,
         arrival.id,
-        { providerId: cloudProviderId, modelId: cloudModelId },
-        consent,
-        consent === "useExistingScope" ? existingCloudScope?.id ?? null : null,
       );
       await onRefresh();
       if (!outcome.result) {
@@ -312,10 +337,6 @@ function DocumentReviewEditor({
       const result = outcome.result;
       const suggestedFields = Object.keys(result.fields);
       setCloudReadyForMemberDirection(true);
-      if (consent === "allowForScope") {
-        const scopes = await conversationService.listCloudConsentScopes(householdId);
-        setCloudScopes(scopes);
-      }
       if (suggestedFields.length === 0) {
         const response = `${selectedCloudProvider?.descriptor.name ?? "The Intelligence Provider"} returned no usable suggestions. Luna kept this review ready for your direction.`;
         setCloudMessage(response);
@@ -323,7 +344,7 @@ function DocumentReviewEditor({
       } else {
         setDirection((current) => applyCloudFields(current, result.fields));
         setCloudSuggestion({ requestId: result.requestId, fields: result.fields });
-        const response = `${selectedCloudProvider?.descriptor.name ?? "The Intelligence Provider"} ${selectedCloudModel?.name ?? cloudModelId} suggested ${suggestedFields.join(", ")}. This is untrusted Evidence; review it before saving Household Context.`;
+        const response = `${selectedCloudProvider?.descriptor.name ?? "The Intelligence Provider"} ${selectedCloudModel?.name ?? ""} suggested ${suggestedFields.join(", ")}. This is untrusted Evidence; review it before saving Household Context.`;
         setCloudMessage(response);
         return response;
       }
@@ -337,10 +358,7 @@ function DocumentReviewEditor({
     }
   }, [
     arrival.id,
-    cloudModelId,
-    cloudProviderId,
     conversationService,
-    existingCloudScope?.id,
     householdId,
     onRefresh,
     selectedCloudModel?.name,
@@ -349,16 +367,18 @@ function DocumentReviewEditor({
 
   useEffect(() => {
     onRegisterCloudConversationHandler(arrival.id, {
-      selection: cloudProviderId && cloudModelId
-        ? { providerId: cloudProviderId, modelId: cloudModelId }
+      selection: cloudDefaultProvider && !cloudDefaultProvider.invalid
+        ? {
+          providerId: cloudDefaultProvider.providerId,
+          modelId: cloudDefaultProvider.modelId,
+        }
         : null,
       existingConsentGrantId: existingCloudScope?.id ?? null,
     });
     return () => onRegisterCloudConversationHandler(arrival.id, null);
   }, [
     arrival.id,
-    cloudModelId,
-    cloudProviderId,
+    cloudDefaultProvider,
     conversationService,
     existingCloudScope,
     householdId,
@@ -458,27 +478,21 @@ function DocumentReviewEditor({
       {!cloudOpen && <button type="button" onClick={() => void openCloudAssistance()}>Review Cloud Assistance</button>}
     </div>
     {cloudOpen && <div className="cloud-assistance-inline-panel">
-      {cloudBusy && <p className="muted">Preparing provider consent…</p>}
+      {cloudBusy && <p className="muted">Preparing the default Intelligence Provider…</p>}
       {!cloudBusy && <>
-        <label>Intelligence Provider<select value={cloudProviderId} onChange={(event) => {
-          const providerId = event.target.value;
-          const provider = cloudProviders.find(({ descriptor }) => descriptor.id === providerId);
-          setCloudProviderId(providerId);
-          setCloudModelId(provider?.descriptor.models[0]?.id ?? "");
-        }}>
-          {cloudProviders.map(({ descriptor, configured }) => <option key={descriptor.id} value={descriptor.id}>{descriptor.name}{configured ? " · connected" : " · not connected"}</option>)}
-        </select></label>
-        <label>Model<select value={cloudModelId} onChange={(event) => setCloudModelId(event.target.value)}>
-          {selectedCloudProvider?.descriptor.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-        </select></label>
-        <p><strong>{selectedCloudProvider?.descriptor.name ?? "The selected Intelligence Provider"} {selectedCloudModel?.name ?? ""}</strong> would receive the media type, the names and currently displayed values of unresolved local fields, and at most 4,000 characters of locally extracted text. Cabinet paths, Household state, credentials, Filing Rules, and the Original file are not sent.</p>
-        <p><strong>Reusable scope:</strong> future difficult {arrival.mediaType} Documents with the same currently displayed local context values and disclosed fields. Reuse remains limited to Direction Interpretation by the selected provider and model.</p>
-        {!selectedCloudProvider?.configured && <p className="muted">Connect this Trusted Device to Luna&apos;s managed gateway in Options before allowing Cloud Assistance.</p>}
+        {selectedCloudProvider && selectedCloudModel
+          ? <p><strong>Default: {selectedCloudProvider.descriptor.name} {selectedCloudModel.name}.</strong> Luna will send only the approved Document fields: media type, the displayed context values, relevant dates, and at most 4,000 characters of locally extracted text. Cabinet paths, Household state, credentials, Filing Rules, prior Conversations, and the Original file are not sent.</p>
+          : <p className="muted">Choose a default Intelligence Provider and model in Options → Cloud assistance.</p>}
+        {selectedCloudProvider && selectedCloudModel && !existingCloudScope
+          && <p className="muted">Enable Document evaluations by default in Options → Cloud assistance.</p>}
+        {selectedCloudProvider && !selectedCloudProvider.configured
+          && <p className="muted">The default Intelligence Provider is not available on this Trusted Device. Review Cloud assistance in Options.</p>}
         <div className="cloud-assistance-inline-actions">
-          {existingCloudScope && <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("useExistingScope")}>Use existing Consent Grant</button>}
-          <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowOnce")}>Allow once</button>
-          <button type="button" disabled={cloudBusy || !selectedCloudProvider?.configured} onClick={() => void askCloudProvider("allowForScope")}>Allow this scoped future use</button>
-          <button type="button" disabled={cloudBusy || !cloudProviderId || !cloudModelId} onClick={() => void askCloudProvider("keepLocal")}>Keep local</button>
+          <button
+            type="button"
+            disabled={cloudBusy || !selectedCloudProvider?.configured || !selectedCloudModel || !existingCloudScope}
+            onClick={() => void askDefaultCloudProvider()}
+          >Ask default Intelligence Provider</button>
           <button type="button" onClick={() => setCloudOpen(false)}>Close</button>
         </div>
       </>}
@@ -615,6 +629,7 @@ export function ConversationWorkspace({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [focusedArrivalId, setFocusedArrivalId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [intelligenceNotice, setIntelligenceNotice] = useState("");
   const [dropReady, setDropReady] = useState(false);
   const initialized = useRef(false);
   const lastNewRequest = useRef(newConversationRequest);
@@ -898,12 +913,17 @@ export function ConversationWorkspace({
       if (promptedArrival) {
         await submitUtterance(promptedArrival.id, messageBody);
       } else {
-        const message = await conversationService.addMemberMessage(
+        const submission = await conversationService.submitOrdinaryConversationMessage(
           householdId,
           selectedConversationId,
           messageBody,
         );
-        setMessages((current) => [...current, message]);
+        setMessages((current) => [
+          ...current,
+          submission.memberMessage,
+          ...(submission.reply ? [submission.reply] : []),
+        ]);
+        setIntelligenceNotice(intelligenceFailureNotice(submission.failure));
       }
       setDraft("");
     } catch {
@@ -1138,6 +1158,9 @@ export function ConversationWorkspace({
       </div>
     </header>
     {error && <p role="alert" className="session-notice">{error}</p>}
+    {intelligenceNotice && <p role="status" className="conversation-intelligence-notice">
+      {intelligenceNotice}
+    </p>}
     <section className="messages" aria-label="Conversation">
       <article className="luna-message"><span aria-hidden="true">L</span><p>What would you like me to take care of?</p></article>
       {messages.map((message) => <Fragment key={message.id}>

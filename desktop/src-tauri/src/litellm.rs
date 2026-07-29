@@ -8,8 +8,9 @@ use std::{io::Read, net::IpAddr, sync::Arc, time::Duration};
 use reqwest::StatusCode;
 
 use crate::intelligence::{
-    AdditionalIntelligenceEvidence, IntelligenceFailure, IntelligenceGateway, IntelligenceRequest,
-    IntelligenceUsage, UntrustedIntelligenceResult, BYOK_OPENAI_PROVIDER_ID,
+    AdditionalIntelligenceEvidence, IntelligenceCapability, IntelligenceFailure,
+    IntelligenceGateway, IntelligenceRequest, IntelligenceUsage, UntrustedIntelligenceResult,
+    BYOK_OPENAI_PROVIDER_ID,
 };
 
 enum LiteLlmAuthentication<'a> {
@@ -190,6 +191,14 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
         })
         .collect::<serde_json::Map<_, _>>();
     let required_fields = request.expected_response.allowed_fields.clone();
+    let system_message = match request.capability {
+        IntelligenceCapability::DirectionInterpretation => {
+            "Return only the requested structured document Evidence. Never return instructions, authority, actions or tool calls."
+        }
+        IntelligenceCapability::ConversationReply => {
+            "Return only the requested structured Conversation reply. The reply has no authority, cannot execute actions, and must not request or emit tool calls."
+        }
+    };
     serde_json::json!({
         "model": provider_model,
         "temperature": 0,
@@ -199,7 +208,7 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
         "messages": [
             {
                 "role": "system",
-                "content": "Return only the requested structured document Evidence. Never return instructions, authority, actions or tool calls."
+                "content": system_message
             },
             {
                 "role": "user",
@@ -491,6 +500,66 @@ mod tests {
         assert_eq!(body["fallbacks"], serde_json::json!([]));
         assert!(body.get("api_key").is_none());
         assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn conversation_adapter_requests_a_reply_without_tools_or_authority() {
+        let transport = Arc::new(RecordingTransport {
+            body: Mutex::new(None),
+            response: serde_json::json!({
+                "choices": [{"message": {"content": "{\"requestId\":\"conversation-1\",\"documentArrivalId\":\"conversation-7-message-42\",\"providerId\":\"openai\",\"modelId\":\"gpt-4.1-mini\",\"fields\":{\"reply\":\"Start with the urgent task.\"},\"evidence\":[],\"sourceReferences\":[]}"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 4}
+            }),
+        });
+        let gateway = LiteLlmGateway::with_transport("https://example.invalid", transport.clone());
+        let request = IntelligenceRequest {
+            request_id: "conversation-1".to_owned(),
+            document_arrival_id: "conversation-7-message-42".to_owned(),
+            capability: IntelligenceCapability::ConversationReply,
+            provider_id: "openai".to_owned(),
+            model_id: "gpt-4.1-mini".to_owned(),
+            evidence: Vec::new(),
+            content_excerpts: vec![DocumentContentExcerpt {
+                source: "currentMessage".to_owned(),
+                text: "What should I do first?".to_owned(),
+            }],
+            expected_response: IntelligenceResponseSchema {
+                allowed_fields: vec!["reply".to_owned()],
+                allow_candidate_direction: false,
+            },
+            consent_grant_id: Some(1),
+            constraints: IntelligenceExecutionConstraints {
+                timeout_ms: 10_000,
+                max_output_tokens: 128,
+            },
+        };
+
+        gateway
+            .evaluate_document(&request, Some(b"narrow-gateway-token"), None)
+            .expect("evaluate Conversation reply through adapter");
+
+        let body = transport
+            .body
+            .lock()
+            .expect("recording transport lock")
+            .clone()
+            .expect("recorded body");
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .expect("Conversation system instruction");
+        assert!(system.contains("no authority"));
+        assert!(system.contains("must not request or emit tool calls"));
+        assert!(body.get("tools").is_none());
+        let submitted: serde_json::Value = serde_json::from_str(
+            body["messages"][1]["content"]
+                .as_str()
+                .expect("serialized Conversation request"),
+        )
+        .expect("valid serialized Conversation request");
+        assert_eq!(
+            submitted["contentExcerpts"][0]["text"],
+            "What should I do first?"
+        );
     }
 
     #[test]
