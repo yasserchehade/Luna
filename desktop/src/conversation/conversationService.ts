@@ -12,6 +12,7 @@ export type ConversationMessage = {
   conversationId: number;
   author: "member" | "luna";
   body: string;
+  linkedDocumentArrival: number | null;
 };
 
 export type DocumentProcessingState =
@@ -62,6 +63,75 @@ export type ClarificationQuestion = {
     | "amount"
     | "relevantDates";
   prompt: string;
+};
+
+export type ConversationPromptPurpose =
+  | "clarifyContext"
+  | "confirmFilingDecision"
+  | "chooseCloudAssistance"
+  | "resolveDuplicate"
+  | "learnFilingRule";
+
+export type ConversationExpectedResponse = "confirmation" | "contextValue" | "choice";
+
+export type ConversationAction =
+  | "yes"
+  | "no"
+  | "keepLocal"
+  | "keepBoth"
+  | "linkCopies"
+  | "discardNew"
+  | "updatedVersion"
+  | "alwaysDoThis"
+  | "reviewDetails";
+
+export type ConversationPrompt = {
+  id: string;
+  purpose: ConversationPromptPurpose;
+  subject: string;
+  message: string;
+  expectedResponse: ConversationExpectedResponse;
+  allowedActions: ConversationAction[];
+  linkedDocumentArrival: number;
+  evidenceSummary: string[];
+  contextField: ClarificationQuestion["field"] | null;
+  relatedArrivalId: number | null;
+};
+
+export type MemberUtterance = {
+  conversationId: number;
+  message: string;
+  linkedPrompt: string;
+};
+
+export type MemberDirectionCommand =
+  | { type: "confirmContextField"; field: ClarificationQuestion["field"] }
+  | { type: "rejectContextField"; field: ClarificationQuestion["field"] }
+  | { type: "setContextField"; field: ClarificationQuestion["field"]; value: string | null }
+  | { type: "confirmFilingDecision" }
+  | { type: "useCloudAssistance"; consent: CloudConsentDecision }
+  | { type: "resolveDuplicate"; decision: DuplicateDecision; relatedArrivalId: number }
+  | { type: "learnFilingRule" }
+  | { type: "decline" };
+
+export type DocumentConversationView = {
+  understanding: string;
+  prompt: ConversationPrompt | null;
+  completionMessage: string | null;
+};
+
+export type ConversationTurnOutcome = {
+  status:
+    | "acceptedDirection"
+    | "actionPrepared"
+    | "clarificationRequired"
+    | "actionCompleted"
+    | "actionRefused";
+  acceptedDirection: MemberDirectionCommand | null;
+  message: string;
+  nextPrompt: ConversationPrompt | null;
+  arrival: DocumentArrival;
+  cloudResult: IntelligenceResult | null;
 };
 
 export type FilingDecisionReview = {
@@ -348,6 +418,11 @@ export type DocumentArrival = {
   filedOriginal: FiledOriginal | null;
   duplicateReview: DuplicateReview | null;
   duplicateResolution: DuplicateResolution | null;
+  authoritySource: "memberDirection" | "filingRule" | null;
+  cloudAssistanceHistory: string[];
+  executionHistory: string[];
+  filingDecisionDeclined: boolean;
+  filingRuleDeclined: boolean;
 };
 
 export type TodoItem = {
@@ -369,6 +444,14 @@ export interface ConversationService {
   listMessages(householdId: string, conversationId: number): Promise<ConversationMessage[]>;
   selectDocumentFiles(): Promise<string[]>;
   attachDocument(householdId: string, conversationId: number, path: string): Promise<DocumentArrival>;
+  getDocumentConversation(householdId: string, arrivalId: number): Promise<DocumentConversationView>;
+  submitMemberUtterance(
+    householdId: string,
+    arrivalId: number,
+    utterance: MemberUtterance,
+    cloudSelection?: IntelligenceSelection | null,
+    existingConsentGrantId?: number | null,
+  ): Promise<ConversationTurnOutcome>;
   resumeDocumentFilings(householdId: string): Promise<void>;
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
   listTodoItems(householdId: string): Promise<TodoItem[]>;
@@ -465,6 +548,29 @@ export const tauriConversationService: ConversationService = {
   },
   attachDocument(householdId, conversationId, path) {
     return invoke<DocumentArrival>("attach_document", { householdId, conversationId, path });
+  },
+  getDocumentConversation(householdId, arrivalId) {
+    return invoke<DocumentConversationView>("get_document_conversation", {
+      householdId,
+      arrivalId,
+    });
+  },
+  submitMemberUtterance(
+    householdId,
+    arrivalId,
+    utterance,
+    cloudSelection = null,
+    existingConsentGrantId = null,
+  ) {
+    return invoke<ConversationTurnOutcome>("submit_member_utterance", {
+      request: {
+        householdId,
+        arrivalId,
+        utterance,
+        cloudSelection,
+        existingConsentGrantId,
+      },
+    });
   },
   resumeDocumentFilings(householdId) {
     return invoke("resume_document_filings", { householdId });

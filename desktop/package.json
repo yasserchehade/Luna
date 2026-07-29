@@ -47,6 +47,7 @@
     "supabase": "^2.109.1",
     "tsx": "^4.23.0",
     "typescript": "^5.6.0",
-    "vite": "^7.0.0"
+    "vite": "^7.0.0",
+    "webdriverio": "^9.0.0"
   }
 }

@@ -4,7 +4,8 @@ This review document decomposes [specification issue #1](https://github.com/yass
 
 - Status: approved and published
 - Tracker: private GitHub repository
-- Triage label: `ready-for-agent`
+- Interaction model: conversation-first under ADR 0010
+- Delivery status: conversation-first stabilization (#29) is published in PR [#59](https://github.com/yasserchehade/Luna/pull/59) on current `main`; final GitHub Actions verification remains required before merge
 - Development strategy: complete the unfamiliar-document-to-learned-automation path depth-first, implementing only dependencies that genuinely block it
 
 ## Dependency chart
@@ -37,9 +38,12 @@ flowchart TD
     T12 --> T15
     T13 --> T15
     T14 --> T15
+
+    T13 --> T16["16 · #29"]
+    T16 --> T15
 ```
 
-The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, duplicate handling, cloud reasoning and resilience. Ticket 14 reunites those branches through portable encrypted memory. Ticket 15 is final cross-platform verification.
+The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, duplicate handling, cloud reasoning and resilience. Ticket 14 reunites those branches through portable encrypted memory. Ticket 16 applies the conversation-first interaction decision, and ticket 15 is final cross-platform verification.
 
 ## Ticket index
 
@@ -59,7 +63,8 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 | 12 | [#13](https://github.com/yasserchehade/Luna/issues/13) | Add consent-gated cloud intelligence | 09 |
 | 13 | [#14](https://github.com/yasserchehade/Luna/issues/14) | Survive offline and unavailable-cabinet conditions | 08 |
 | 14 | [#15](https://github.com/yasserchehade/Luna/issues/15) | Synchronise encrypted portable Luna memory | 03, 10, 11, 12, 13 |
-| 15 | [#16](https://github.com/yasserchehade/Luna/issues/16) | Verify the complete cross-platform golden path | 11, 12, 13, 14 |
+| 15 | [#16](https://github.com/yasserchehade/Luna/issues/16) | Verify the complete cross-platform golden path | 11, 12, 13, 14, 16 |
+| 16 | [#29](https://github.com/yasserchehade/Luna/issues/29) | Make Conversation the primary document interface | 13 |
 
 ## 01 — Bootstrap the clean-sheet Luna desktop
 
@@ -178,10 +183,12 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#9](https://github.com/yasserchehade/Luna/issues/9)
 **Blocked by:** 07 / #8.
 
-**What it delivers:** Luna safely stages, files and verifies the untouched original while Conversation, To do, Cabinet and History report one consistent outcome.
+**What it delivers:** Luna presents one readable conversational confirmation for a complete proposed Household Context and Filing Decision, then safely stages, files and verifies the untouched Original while Conversation, To do, Cabinet and History report one consistent outcome.
 
 ### Acceptance criteria
 
+- [ ] Complete local Evidence produces one conversational confirmation before the first filing; Evidence alone does not authorise it.
+- [ ] An affirmative Member Direction passes owning-domain validation and records the acting authority.
 - [ ] Luna stages the original before a cabinet write.
 - [ ] Generated paths stay inside the cabinet and are valid on Windows and macOS.
 - [ ] Existing files are never overwritten silently.
@@ -195,11 +202,13 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#10](https://github.com/yasserchehade/Luna/issues/10)
 **Blocked by:** 08 / #9.
 
-**What it delivers:** One confirmed filing becomes earned autonomy: Luna shows the learned scope and automatically handles the next genuinely matching document while escalating changed context.
+**What it delivers:** After filing, Luna separately offers to learn the confirmed decision. Only an explicit Member Direction such as **Always do this** creates a Filing Rule; a later genuine match can then be handled automatically.
 
 ### Acceptance criteria
 
-- [ ] Luna presents the learned rule in plain language after filing.
+- [ ] Filing completes without silently creating a Filing Rule.
+- [ ] Luna separately presents the proposed rule in plain language after filing.
+- [ ] A rule is learned only from explicit Member Direction.
 - [ ] A rule can match document type, provider, addressee and property or account.
 - [ ] A second exact contextual match files automatically.
 - [ ] Changed provider, addressee, property, account or document type does not inherit the rule silently.
@@ -211,7 +220,7 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#11](https://github.com/yasserchehade/Luna/issues/11)
 **Blocked by:** 09 / #10.
 
-**What it delivers:** The owner gets a transparent rulebook, while direct cabinet changes become authoritative teaching moments rather than actions Luna reverses.
+**What it delivers:** Household Members get a transparent rulebook in Options while Conversation remains the primary place to direct Luna. Direct Cabinet changes become authoritative teaching moments rather than actions Luna reverses.
 
 ### Acceptance criteria
 
@@ -219,7 +228,8 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 - [ ] The owner can pause, edit and delete a rule.
 - [ ] Rule edits apply prospectively by default.
 - [ ] Historical reorganisation shows an exact preview and requires approval.
-- [ ] A manual document move asks whether it teaches a rule or is a one-off.
+- [ ] A manual Document move prompts a conversational question about whether it teaches a rule or is a one-off.
+- [ ] Review details exposes the supporting rule and evidence without owning separate Document Handling state.
 - [ ] Luna never silently reverses an owner’s move.
 - [ ] Rule and correction decisions appear in History.
 
@@ -228,13 +238,14 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#12](https://github.com/yasserchehade/Luna/issues/12)
 **Blocked by:** 09 / #10.
 
-**What it delivers:** The owner controls the first duplicate decision and Luna can learn a narrow exact-duplicate preference without discarding revisions.
+**What it delivers:** A Household Member controls the first duplicate decision through Conversation, while Review details can expose evidence and relationships. Luna learns a narrow Exact Duplicate preference only through separate explicit direction.
 
 ### Acceptance criteria
 
 - [ ] Exact byte duplicates and likely semantic duplicates are distinguished.
-- [ ] The first duplicate offers keep both, link copies, discard or updated version.
-- [ ] The owner can create a scoped future preference for exact duplicates.
+- [ ] The first duplicate is explained conversationally and offers keep both, link copies, discard or updated version.
+- [ ] Natural-language and inline-action answers submit the same validated duplicate command.
+- [ ] The member can create a separately explicit scoped future preference for Exact Duplicates.
 - [ ] Exact-duplicate preference does not apply to similar files with changed bytes.
 - [ ] Updated versions retain both originals and an explicit relationship.
 - [ ] Duplicate handling never overwrites an existing document.
@@ -245,13 +256,13 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#13](https://github.com/yasserchehade/Luna/issues/13)
 **Blocked by:** 09 / #10.
 
-**What it delivers:** Difficult documents can use one evaluated Luna-managed cloud model without surrendering provider neutrality, local authority or explicit privacy boundaries.
+**What it delivers:** Difficult Documents can use one evaluated Luna-managed Intelligence Provider without surrendering provider neutrality, Luna-owned authority or explicit privacy boundaries. Cloud Assistance produces Evidence or candidate Direction Interpretations, never authority.
 
 ### Acceptance criteria
 
 - [ ] A Luna-owned provider-neutral Intelligence Gateway returns validated Evidence and typed candidate Direction Interpretations without action authority.
 - [ ] OpenAI `gpt-4.1-mini` passes the document evaluation contract through the provisional isolated LiteLLM adapter. For prototype acceptance the real-provider canary may use an ephemeral operator-run loopback deployment; the deterministic test gateway passes the same contract without a paid call.
-- [ ] Luna selects and names the exact provider/model and explains the bounded disclosure before offering Allow once, scoped future consent or Keep local.
+- [ ] Luna selects and names the exact provider/model and conversationally explains the bounded disclosure before offering Allow once, scoped future consent or Keep local.
 - [ ] One-time and reusable Consent Grants bind provider, model, capability, member and disclosed scope; they are inspectable and revocable.
 - [ ] Luna-managed upstream provider credentials remain server-side. Luna automatically provisions the desktop's narrow gateway credential into the operating-system vault; members cannot paste it, and it never enters SQLite, frontend storage, Cabinet content or History.
 - [ ] Provider, model, schema and owning-domain validation treat every external result as untrusted and prevent direct durable-state mutation.
@@ -265,17 +276,17 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#14](https://github.com/yasserchehade/Luna/issues/14)
 **Blocked by:** 08 / #9.
 
-**What it delivers:** Luna continues known local work and recovers safely from connectivity or cabinet failure without guessing, losing originals or redirecting files.
+**What it delivers:** Luna continues known local work, explains waiting and recovery states in Conversation, and recovers safely from connectivity or Cabinet failure without guessing, losing Originals or redirecting files.
 
 ### Acceptance criteria
 
 - [ ] Known learned-rule filing completes offline when the cabinet is available.
-- [ ] An unfamiliar document needing deeper intelligence waits explicitly while offline.
+- [ ] An unfamiliar document needing deeper intelligence waits explicitly and Luna explains the state conversationally while offline.
 - [ ] An unavailable cabinet leaves the untouched Original in the household-owned, checksum-addressed `Incoming` Cabinet folder defined by ADR 0009; protected handling metadata remains encrypted.
 - [ ] Luna never chooses a different cabinet because the configured one is unavailable.
 - [ ] Retry removes staging only after checksum verification and durable Audit Event recording.
-- [ ] Persistent unavailability or time risk creates one clear To do item.
-- [ ] Interrupted filing resumes without duplicate files or missing history.
+- [ ] Persistent unavailability or time risk creates one clear To do item and one coherent conversational status.
+- [ ] Interrupted filing resumes without duplicate files, lost authority context or missing History.
 - [ ] The Review Card exposes checksum-bound recovery evidence without adding a second execution path.
 
 ## 14 — Synchronise encrypted portable Luna memory
@@ -283,14 +294,16 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 **GitHub:** [#15](https://github.com/yasserchehade/Luna/issues/15)
 **Blocked by:** 03 / #4, 10 / #11, 11 / #12, 12 / #13 and 13 / #14.
 
-**What it delivers:** Learned behaviour and history become portable across trusted devices through signed encrypted records beside the cabinet, while every device retains a separate local database.
+**What it delivers:** Durable household behaviour and History become portable across Trusted Devices through signed encrypted records beside the Cabinet, while every device retains a separate local database. Derived prompts and model output do not become household memory.
 
 ### Acceptance criteria
 
 - [ ] The cabinet contains a reserved encrypted portable-memory area.
 - [ ] Portable records are encrypted, signed and append-only.
 - [ ] API keys, tokens, device private keys and plaintext secrets never enter portable memory.
-- [ ] A new trusted device rebuilds rules, relationships and History into its local database.
+- [ ] Portable records include Filing Rules, Document relationships, Member Direction, authority, Consent Grants, execution outcomes, Audit Events and stable references to relevant Conversation messages.
+- [ ] Derived Conversation Prompts, transient Conversation Orchestration state, hidden reasoning and raw Intelligence Provider output are not synchronised.
+- [ ] A new Trusted Device rebuilds rules, relationships and History into its local database.
 - [ ] Duplicate event delivery is idempotent and modified or invalid replayed records are rejected.
 - [ ] Concurrent events produce a detectable, resolvable conflict rather than silent overwrite.
 - [ ] No live database is synchronised through the cabinet.
@@ -298,21 +311,43 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 ## 15 — Verify the complete cross-platform golden path
 
 **GitHub:** [#16](https://github.com/yasserchehade/Luna/issues/16)
-**Blocked by:** 11 / #12, 12 / #13, 13 / #14 and 14 / #15.
+**Blocked by:** 11 / #12, 12 / #13, 13 / #14, 14 / #15 and 16 / #29.
 
-**What it delivers:** The first clean-sheet competency is proven dependable on Windows and macOS before adjacent beta features expand.
+**What it delivers:** Luna's conversation-first document competency is proven dependable on Windows and macOS before adjacent beta features expand.
 
 ### Acceptance criteria
 
-- [ ] The unfamiliar-document-to-learned-automation path passes repeatedly on Windows and macOS.
-- [ ] Changed provider, property and addressee variants return to clarification.
+- [ ] The unfamiliar-document-to-explicitly-learned-automation path passes repeatedly on Windows and macOS through natural conversation.
+- [ ] Complete Evidence produces one readable confirmation; incomplete Evidence produces one focused clarification at a time.
+- [ ] Negative, ambiguous, unsupported and stale replies never execute and recover safely in Conversation.
+- [ ] Changed Service Provider, property and Addressee variants return to clarification.
+- [ ] Filing Rule learning remains a separate explicit Member Direction after filing.
 - [ ] Duplicate resolution, denied cloud permission, provider outage, offline work and cabinet recovery pass through the visible seam.
 - [ ] Interrupted filing never loses or silently overwrites an original.
 - [ ] No provider fallback occurs without consent.
 - [ ] No credential or plaintext key appears in cabinet records, portable events, logs or crash output.
-- [ ] Keyboard and accessibility checks pass for attachment, review cards, To do and cabinet selection.
+- [ ] Keyboard and accessibility checks pass for attachment, the conversation composer, inline actions, Review details, To do and Cabinet selection.
 - [ ] Signed installable beta artifacts and smoke-test evidence exist for both operating systems.
+
+## 16 — Make Conversation the primary document interface
+
+**GitHub:** [#29](https://github.com/yasserchehade/Luna/issues/29)
+**Blocked by:** 13 / #14 as the delivery-stack base.
+
+**What it delivers:** Conversation Orchestration derives the next materially necessary prompt from durable Document Handling state. Natural-language replies become typed candidate directions, owning-domain validation remains authoritative and Review details is optional transparency rather than a form-driven primary workflow.
+
+### Acceptance criteria
+
+- [x] A Household Member delegates document handling and answers Luna through the conversation composer.
+- [x] Complete local Evidence produces one Filing Decision confirmation; incomplete Evidence produces one focused clarification at a time.
+- [x] Negative, ambiguous, unsupported and stale replies cannot execute consequential actions.
+- [x] Direction Interpretation submits typed candidates through owning-domain validation.
+- [x] Local Inspection and authorised Cloud Assistance remain Evidence, never authority.
+- [x] Review details exposes evidence and corrections without owning separate Document Handling state.
+- [x] Filing Rule learning is a separate explicit Member Direction after filing.
+- [x] Conversation deletion does not delete Document Handling, Filing Rules or Audit Events.
+- [x] Keyboard and accessibility coverage includes the composer, inline actions and Review details.
 
 ## Execution guidance
 
-Start with the dependency frontier. Initially only ticket 01 / issue #2 is unblocked. Complete and verify one ticket before moving to the next available frontier item. Do not close or repurpose the parent specification issue.
+Follow the dependency frontier and complete each ticket's full quality gate before merging dependent work. Stacked draft pull requests may expose already implemented local work for review while GitHub Actions credits are unavailable, but they remain draft and their issues remain open until the required CI and review evidence exists. Do not close or repurpose the parent specification issue.

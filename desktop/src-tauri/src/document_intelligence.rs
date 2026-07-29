@@ -47,6 +47,25 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
         }
     }
 
+    pub fn keep_document_local(
+        &self,
+        household_id: &str,
+        arrival_id: i64,
+    ) -> Result<CloudAssistanceResolution, DocumentIntelligenceError> {
+        let arrival = self
+            .conversations
+            .keep_document_local(household_id, arrival_id)?;
+        self.conversations.record_cloud_assistance_event(
+            household_id,
+            arrival_id,
+            "Member chose Keep local; no document information was sent to an Intelligence Provider.",
+        )?;
+        Ok(CloudAssistanceResolution {
+            result: None,
+            processing_state: arrival.processing_state,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn evaluate_document(
         &self,
@@ -64,6 +83,8 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
             .find(|arrival| arrival.id == arrival_id)
             .ok_or(ConversationError::NotFound)?;
         let request = authorised_request(&arrival, &selection)?;
+        let provider_id = selection.provider_id.clone();
+        let model_id = selection.model_id.clone();
 
         if consent == CloudConsentDecision::KeepLocal {
             match self.intelligence.evaluate_document(
@@ -75,13 +96,7 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                 existing_consent_grant_id,
             ) {
                 Err(IntelligenceFailure::LocalOnlyPolicy) => {
-                    let arrival = self
-                        .conversations
-                        .keep_document_local(household_id, arrival_id)?;
-                    return Ok(CloudAssistanceResolution {
-                        result: None,
-                        processing_state: arrival.processing_state,
-                    });
+                    return self.keep_document_local(household_id, arrival_id);
                 }
                 Err(failure) => return Err(failure.into()),
                 Ok(_) => return Err(IntelligenceFailure::InvalidStructuredResult.into()),
@@ -113,6 +128,13 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                             )?;
                             self.conversations
                                 .wait_for_cloud_assistance(household_id, arrival_id)?;
+                            self.conversations.record_cloud_assistance_event(
+                                household_id,
+                                arrival_id,
+                                &format!(
+                                    "{provider_id} {model_id} returned candidate Evidence that failed Luna validation; the Document remains waiting for retry."
+                                ),
+                            )?;
                             return Err(error.into());
                         }
                     }
@@ -120,6 +142,14 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
                 let arrival = self
                     .conversations
                     .complete_cloud_assistance(household_id, arrival_id)?;
+                self.conversations.record_cloud_assistance_event(
+                    household_id,
+                    arrival_id,
+                    &format!(
+                        "{provider_id} {model_id} returned untrusted candidate Evidence under {} consent; Member Direction is still required.",
+                        consent_label(consent),
+                    ),
+                )?;
                 Ok(CloudAssistanceResolution {
                     result: Some(result),
                     processing_state: arrival.processing_state,
@@ -128,9 +158,25 @@ impl<V: CredentialVault> DocumentIntelligenceService<V> {
             Err(failure) => {
                 self.conversations
                     .wait_for_cloud_assistance(household_id, arrival_id)?;
+                self.conversations.record_cloud_assistance_event(
+                    household_id,
+                    arrival_id,
+                    &format!(
+                        "{provider_id} {model_id} Cloud Assistance failed; the Document remains waiting for the same route."
+                    ),
+                )?;
                 Err(failure.into())
             }
         }
+    }
+}
+
+fn consent_label(consent: CloudConsentDecision) -> &'static str {
+    match consent {
+        CloudConsentDecision::AllowOnce => "one-time",
+        CloudConsentDecision::AllowForScope => "reusable scoped",
+        CloudConsentDecision::UseExistingScope => "existing scoped",
+        CloudConsentDecision::KeepLocal => "local-only",
     }
 }
 
@@ -138,13 +184,27 @@ fn authorised_request(
     arrival: &crate::DocumentArrival,
     selection: &IntelligenceSelection,
 ) -> Result<IntelligenceRequest, IntelligenceFailure> {
-    let allowed_fields = arrival
-        .review_card
-        .questions
-        .iter()
-        .filter_map(|question| cloud_field(question.field))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
+    let context = &arrival.review_card.context;
+    let mut allowed_fields = [
+        ("documentType", &context.document_type),
+        ("serviceProvider", &context.service_provider),
+        ("addressee", &context.addressee),
+        ("property", &context.property),
+        ("account", &context.account),
+        ("amount", &context.amount),
+    ]
+    .into_iter()
+    .filter(|(_, field)| field.confidence_state != crate::ConfidenceState::Confirmed)
+    .map(|(field, _)| field.to_owned())
+    .collect::<Vec<_>>();
+    if context.relevant_dates.is_empty()
+        || context
+            .relevant_dates
+            .iter()
+            .any(|field| field.confidence_state != crate::ConfidenceState::Confirmed)
+    {
+        allowed_fields.push("relevantDates".to_owned());
+    }
     if allowed_fields.is_empty() {
         return Err(IntelligenceFailure::UnsupportedCapability);
     }
@@ -194,21 +254,6 @@ fn authorised_request(
             max_output_tokens: 512,
         },
     })
-}
-
-fn cloud_field(field: crate::ContextField) -> Option<&'static str> {
-    match field {
-        crate::ContextField::DocumentType => Some("documentType"),
-        crate::ContextField::ServiceProvider => Some("serviceProvider"),
-        crate::ContextField::Addressee => Some("addressee"),
-        crate::ContextField::Property => Some("property"),
-        crate::ContextField::Account => Some("account"),
-        crate::ContextField::Amount => Some("amount"),
-        crate::ContextField::RelevantDates => Some("relevantDates"),
-        crate::ContextField::ServiceProviderRelevance | crate::ContextField::PropertyRelevance => {
-            None
-        }
-    }
 }
 
 fn review_value(arrival: &crate::DocumentArrival, field: &str) -> Option<String> {

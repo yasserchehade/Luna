@@ -891,7 +891,10 @@ fn synchronization_rebuilds_an_owning_filing_rule_that_handles_a_new_document() 
         .expect("confirm the Filing Decision");
     first_conversations
         .file_document(household_id, arrival.id, cabinet.path())
-        .expect("file and learn the rule");
+        .expect("file the first document");
+    first_conversations
+        .learn_filing_rule(household_id, arrival.id)
+        .expect("explicitly learn the filing rule");
 
     let first_memory = PortableMemoryStore::open(&first_database, first_device)
         .expect("open portable memory on the first device");
