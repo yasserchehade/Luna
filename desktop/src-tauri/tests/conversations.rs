@@ -2107,6 +2107,27 @@ fn conversational_confirmation_files_first_then_learns_only_when_asked() {
     );
 
     let interpreter = DeterministicMemberDirectionInterpreter;
+    let contradictory_filing = store
+        .submit_member_utterance(
+            "rivera-household",
+            arrival.id,
+            MemberUtterance {
+                conversation_id: conversation.id,
+                message: "Yes, but don't file it".to_owned(),
+                linked_prompt: prompt.id.clone(),
+            },
+            &interpreter,
+            &cabinet,
+            "Bills & Services",
+        )
+        .expect("reject contradictory filing direction safely");
+    assert_eq!(
+        contradictory_filing.status,
+        ConversationTurnStatus::ClarificationRequired
+    );
+    assert_eq!(contradictory_filing.accepted_direction, None);
+    assert!(contradictory_filing.arrival.filed_original.is_none());
+
     let filed = store
         .submit_member_utterance(
             "rivera-household",
@@ -2136,6 +2157,30 @@ fn conversational_confirmation_files_first_then_learns_only_when_asked() {
         learning_prompt.purpose,
         ConversationPromptPurpose::LearnFilingRule
     );
+
+    let contradictory_learning = store
+        .submit_member_utterance(
+            "rivera-household",
+            arrival.id,
+            MemberUtterance {
+                conversation_id: conversation.id,
+                message: "That's right, but don't always do this".to_owned(),
+                linked_prompt: learning_prompt.id.clone(),
+            },
+            &interpreter,
+            &cabinet,
+            "Bills & Services",
+        )
+        .expect("reject contradictory Filing Rule direction safely");
+    assert_eq!(
+        contradictory_learning.status,
+        ConversationTurnStatus::ClarificationRequired
+    );
+    assert_eq!(contradictory_learning.accepted_direction, None);
+    assert!(store
+        .list_filing_rules("rivera-household")
+        .expect("list rules after contradictory direction")
+        .is_empty());
 
     let learned = store
         .submit_member_utterance(

@@ -304,7 +304,8 @@ impl MemberDirectionInterpreter for DeterministicMemberDirectionInterpreter {
         let message = utterance.message.trim();
         let normalized = message
             .trim_matches(|character: char| character.is_ascii_punctuation())
-            .to_ascii_lowercase();
+            .to_ascii_lowercase()
+            .replace(['’', '‘'], "'");
         let affirmative = matches!(
             normalized.as_str(),
             "yes" | "yep" | "yeah" | "correct" | "right" | "that's right" | "that is right"
@@ -343,6 +344,27 @@ impl MemberDirectionInterpreter for DeterministicMemberDirectionInterpreter {
         if delegation_request {
             return ambiguous(
                 "I can take care of it, but I still need an answer to the current question.",
+            );
+        }
+        let explicitly_negated = normalized
+            .split(|character: char| !character.is_alphanumeric() && character != '\'')
+            .any(|word| {
+                matches!(
+                    word,
+                    "no" | "not"
+                        | "never"
+                        | "don't"
+                        | "dont"
+                        | "won't"
+                        | "wont"
+                        | "can't"
+                        | "cant"
+                        | "cannot"
+                )
+            });
+        if affirmative && explicitly_negated {
+            return ambiguous(
+                "Luna found both a confirmation and a refusal. Please answer the current question again.",
             );
         }
 
