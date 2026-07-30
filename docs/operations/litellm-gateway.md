@@ -115,6 +115,12 @@ alias; the protected reconciler removed one alias with zero failures before the
 successful retry. The desktop now packages this non-secret public customer URL
 as its beta default instead of requiring a process environment variable.
 
+The rebuilt founder application then independently used the same public route:
+Options reported Managed access ready for the exact GPT-4.1 mini default with
+Conversation permission enabled, and an Enter-submitted synthetic availability
+message received a nonempty managed reply. Separate protected-memory and
+Cabinet recovery warnings remained visible without blocking the gateway call.
+
 This is internal-beta infrastructure evidence, not production readiness. Issue
 #53 remains open until the designated Trusted Device provisions through the
 deployed Edge Function, completes a managed request through the public hostname

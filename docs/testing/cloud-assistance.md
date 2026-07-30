@@ -88,7 +88,11 @@ also exposed two release blockers that mocked tests had missed: a failed alias
 needed reconciliation after the operator gateway restarted, and packaged
 desktop launches fell back to an invalid gateway hostname. The beta endpoint is
 now the non-secret packaged default, while the runtime override remains
-available for operators. Credential revocation still requires evidence before
+available for operators. The rebuilt founder application separately displayed
+Managed access ready with the same exact default and enabled Conversation
+permission, then returned a nonempty reply to a synthetic message submitted by
+Enter. The independent protected-memory and Cabinet recovery warnings remained
+visible without blocking Cloud Assistance. Credential revocation still requires evidence before
 issue #53 can close.
 
 A remote host is not required to merge the prototype. Issue #53 owns the separate pre-production gate. ADR 0018 selects a no-separate-host-cost named Cloudflare Tunnel from the operator-controlled prototype machine for the internal beta; the machine must be running, and authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and remote log verification must exist before external testers use Luna-managed Intelligence.
