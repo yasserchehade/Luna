@@ -299,7 +299,7 @@ function DocumentReviewEditor({
         conversationService.getDefaultIntelligenceProvider(householdId),
       ]);
       setCloudProviders(providers);
-      setCloudScopes(scopes);
+      setCloudScopes(scopes.scopes);
       setCloudDefaultProvider(defaultProvider);
     } catch (reason) {
       setCloudError(String(reason));
@@ -402,7 +402,7 @@ function DocumentReviewEditor({
     setDirection((current) => applyCloudFields(current, result.fields));
     setCloudSuggestion({ requestId: result.requestId, fields: result.fields });
     void conversationService.listCloudConsentScopes(householdId)
-      .then(setCloudScopes)
+      .then((listing) => setCloudScopes(listing.scopes))
       .catch((reason: unknown) => setCloudError(String(reason)));
     return () => window.clearTimeout(consumeTimer);
   }, [

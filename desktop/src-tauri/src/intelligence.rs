@@ -127,6 +127,13 @@ pub struct CloudConsentScope {
     pub revoked: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudConsentScopeListing {
+    pub scopes: Vec<CloudConsentScope>,
+    pub has_unreadable: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PortableConsentExport {
     pub scope: CloudConsentScope,
@@ -753,15 +760,26 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         &self,
         household_id: &str,
     ) -> Result<Vec<CloudConsentScope>, IntelligenceFailure> {
+        Ok(self.consent_scope_listing(household_id)?.scopes)
+    }
+
+    pub fn consent_scope_listing(
+        &self,
+        household_id: &str,
+    ) -> Result<CloudConsentScopeListing, IntelligenceFailure> {
         let mut scopes = Vec::new();
+        let mut has_unreadable = false;
         for (id, protected) in self.consent_rows(household_id)? {
             match self.open_protected::<ConsentPayload>(household_id, &protected) {
                 Ok(payload) => scopes.push(consent_scope(household_id, id, payload)),
-                Err(IntelligenceFailure::ProtectedStateUnavailable) => {}
+                Err(IntelligenceFailure::ProtectedStateUnavailable) => has_unreadable = true,
                 Err(error) => return Err(error),
             }
         }
-        Ok(scopes)
+        Ok(CloudConsentScopeListing {
+            scopes,
+            has_unreadable,
+        })
     }
 
     pub(crate) fn portable_consent_exports(
@@ -2312,6 +2330,15 @@ mod tests {
                 .verified_consent_scopes("household")
                 .expect("list only verified consent"),
             vec![verified.clone()]
+        );
+        assert_eq!(
+            store
+                .consent_scope_listing("household")
+                .expect("list verified consent with warning state"),
+            CloudConsentScopeListing {
+                scopes: vec![verified.clone()],
+                has_unreadable: true,
+            }
         );
         let exports = store
             .portable_consent_exports("household")

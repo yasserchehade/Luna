@@ -144,6 +144,12 @@ enum DefaultIntelligencePermission {
     Document,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefaultIntelligencePermissionUpdate {
+    portable_sync_pending: bool,
+}
+
 #[cfg(feature = "e2e")]
 #[derive(Clone, Default)]
 struct E2eCredentialVault {
@@ -606,7 +612,7 @@ fn set_default_intelligence_permission(
     household_id: String,
     permission: DefaultIntelligencePermission,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<DefaultIntelligencePermissionUpdate, String> {
     let granted_by = current_household_actor(sessions.inner(), &household_id)?;
     let selected =
         load_default_intelligence_provider(settings.inner(), intelligence.inner(), &household_id)?
@@ -654,13 +660,17 @@ fn set_default_intelligence_permission(
                 .map_err(|error| error.to_string())?;
         }
     }
-    capture_portable_state(
+    let portable_sync_pending = capture_portable_state(
         portable.inner(),
         conversations.inner(),
         intelligence.inner(),
         cabinet.inner(),
         &household_id,
     )
+    .is_err();
+    Ok(DefaultIntelligencePermissionUpdate {
+        portable_sync_pending,
+    })
 }
 
 #[tauri::command]
@@ -1245,9 +1255,9 @@ fn evaluate_document_with_default_intelligence_provider(
 fn list_cloud_consent_scopes(
     store: State<'_, IntelligenceState>,
     household_id: String,
-) -> Result<Vec<CloudConsentScope>, String> {
+) -> Result<intelligence::CloudConsentScopeListing, String> {
     store
-        .list_consent_scopes(&household_id)
+        .consent_scope_listing(&household_id)
         .map_err(|error| error.to_string())
 }
 

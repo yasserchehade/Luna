@@ -57,11 +57,15 @@ export async function loadCloudAssistanceOptionsData(
   return {
     access: accessResult.status === "fulfilled" ? accessResult.value : null,
     providers: providersResult.status === "fulfilled" ? providersResult.value : [],
-    scopes: scopesResult.status === "fulfilled" ? scopesResult.value : [],
+    scopes: scopesResult.status === "fulfilled" ? scopesResult.value.scopes : [],
     defaultProvider: defaultResult.status === "fulfilled" ? defaultResult.value : null,
     accessError: accessResult.status === "rejected" ? String(accessResult.reason) : "",
     providerError: providersResult.status === "rejected" ? String(providersResult.reason) : "",
-    consentError: scopesResult.status === "rejected" ? String(scopesResult.reason) : "",
+    consentError: scopesResult.status === "rejected"
+      ? String(scopesResult.reason)
+      : scopesResult.value.hasUnreadable
+      ? "older Consent Grants could not be verified"
+      : "",
     defaultError: defaultResult.status === "rejected" ? String(defaultResult.reason) : "",
   };
 }
@@ -295,15 +299,18 @@ export function CloudAssistanceOptions({
     enabled: boolean,
   ) => {
     try {
-      await conversationService.setDefaultIntelligencePermission(
+      const outcome = await conversationService.setDefaultIntelligencePermission(
         householdId,
         permission,
         enabled,
       );
-      setActionError("");
+      setActionError(outcome.portableSyncPending
+        ? "Permission saved on this device. Luna will retry Household memory synchronisation."
+        : "");
       await refresh();
     } catch {
       setActionError("Luna couldn't update that default permission.");
+      await refresh();
     }
   };
 

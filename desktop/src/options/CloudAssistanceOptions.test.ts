@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   CloudConsentScope,
+  CloudConsentScopeListing,
   ConversationService,
   IntelligenceProviderStatus,
 } from "../conversation/conversationService";
@@ -83,7 +84,7 @@ test("provider controls remain available when protected Consent Grants cannot be
     async listIntelligenceProviderStatuses() {
       return providers;
     },
-    async listCloudConsentScopes(): Promise<CloudConsentScope[]> {
+    async listCloudConsentScopes(): Promise<CloudConsentScopeListing> {
       throw new Error("protected Household intelligence state is unavailable");
     },
     async getDefaultIntelligenceProvider() {
@@ -123,6 +124,71 @@ test("provider controls remain available when protected Consent Grants cannot be
     /protected Household intelligence state is unavailable/,
   );
   assert.equal(result.providerError, "");
+});
+
+test("verified current permissions remain visible beside an unreadable-history warning", async () => {
+  const verifiedScope: CloudConsentScope = {
+    id: 18,
+    householdId: "household",
+    providerId: "openai",
+    modelId: "gpt-4.1-mini",
+    capability: "conversationReply",
+    purpose: "conversation-reply",
+    documentArrivalId: null,
+    futureScope: "default",
+    fields: ["currentMessage"],
+    defaultPermission: true,
+    kind: "reusable",
+    grantedBy: "organiser-1",
+    createdAt: "2026-07-30T00:00:00Z",
+    consumedAt: null,
+    revokedAt: null,
+    revoked: false,
+  };
+  const service: Pick<
+    ConversationService,
+    | "listIntelligenceProviderStatuses"
+    | "listCloudConsentScopes"
+    | "getDefaultIntelligenceProvider"
+  > = {
+    async listIntelligenceProviderStatuses() {
+      return [];
+    },
+    async listCloudConsentScopes() {
+      return { scopes: [verifiedScope], hasUnreadable: true };
+    },
+    async getDefaultIntelligenceProvider() {
+      return null;
+    },
+  };
+
+  const result = await loadCloudAssistanceOptionsData(service, {
+    async getHouseholdIntelligenceAccess() {
+      return {
+        householdId: "household" as never,
+        plan: "managed",
+        entitlementState: "entitled",
+        deviceState: "ready",
+        entitlementSource: "complimentary",
+        maxBudgetUsd: 5,
+        validUntil: null,
+        credentialExpiresAt: null,
+      };
+    },
+    async createManagedIntelligenceCheckoutSession() {
+      return { url: "https://pay.paddle.io/test" };
+    },
+    async createManagedIntelligenceCustomerPortalSession() {
+      return { url: "https://customer-portal.paddle.com/test" };
+    },
+  }, {
+    async currentDevicePublicKey() {
+      return "age1trusteddevice";
+    },
+  }, "household" as never);
+
+  assert.deepEqual(result.scopes, [verifiedScope]);
+  assert.match(result.consentError, /older Consent Grants/);
 });
 
 test("protected-state failures use customer language without exposing implementation details", () => {

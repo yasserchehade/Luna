@@ -322,6 +322,15 @@ export type CloudConsentScope = {
   revoked: boolean;
 };
 
+export type CloudConsentScopeListing = {
+  scopes: CloudConsentScope[];
+  hasUnreadable: boolean;
+};
+
+export type DefaultIntelligencePermissionUpdate = {
+  portableSyncPending: boolean;
+};
+
 export type CloudAssistanceAuditEvent = {
   id: number;
   householdId: string;
@@ -546,7 +555,7 @@ export interface ConversationService {
     householdId: string,
     permission: "conversation" | "document",
     enabled: boolean,
-  ): Promise<void>;
+  ): Promise<DefaultIntelligencePermissionUpdate>;
   submitOrdinaryConversationMessage(
     householdId: string,
     conversationId: number,
@@ -560,7 +569,7 @@ export interface ConversationService {
   clearIntelligenceProviderCredential(householdId: string, providerId: string): Promise<void>;
   setManagedIntelligenceGatewayCredential(householdId: string, credential: string): Promise<void>;
   clearManagedIntelligenceGatewayCredential(householdId: string): Promise<void>;
-  listCloudConsentScopes(householdId: string): Promise<CloudConsentScope[]>;
+  listCloudConsentScopes(householdId: string): Promise<CloudConsentScopeListing>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
   evaluateDocumentWithCloudAssistance(
     householdId: string,
@@ -743,7 +752,7 @@ export const tauriConversationService: ConversationService = {
     return invoke("clear_default_intelligence_provider", { householdId });
   },
   setDefaultIntelligencePermission(householdId, permission, enabled) {
-    return invoke("set_default_intelligence_permission", {
+    return invoke<DefaultIntelligencePermissionUpdate>("set_default_intelligence_permission", {
       householdId,
       permission,
       enabled,
@@ -773,7 +782,7 @@ export const tauriConversationService: ConversationService = {
     return invoke("clear_managed_intelligence_gateway_credential", { householdId });
   },
   listCloudConsentScopes(householdId) {
-    return invoke<CloudConsentScope[]>("list_cloud_consent_scopes", { householdId });
+    return invoke<CloudConsentScopeListing>("list_cloud_consent_scopes", { householdId });
   },
   revokeCloudConsentScope(householdId, scopeId) {
     return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
