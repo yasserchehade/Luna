@@ -7,12 +7,45 @@ import type {
   IntelligenceProviderStatus,
 } from "../conversation/conversationService";
 import {
+  awaitingManagedAccessRefresh,
   cloudAssistanceLoadErrorMessage,
   defaultRouteSelection,
   loadCloudAssistanceOptionsData,
   providerApiKeysLinkLabel,
   providerSetupAvailability,
 } from "./CloudAssistanceOptions";
+
+test("managed access keeps refreshing until the provisioned provider is visible", () => {
+  const access = {
+    householdId: "household" as never,
+    plan: "managed" as const,
+    entitlementState: "entitled" as const,
+    deviceState: "ready" as const,
+    entitlementSource: "complimentary" as const,
+    maxBudgetUsd: 0.25,
+    validUntil: "2026-08-12T00:00:00Z",
+    credentialExpiresAt: "2026-07-31T00:00:00Z",
+  };
+  const managedProvider: IntelligenceProviderStatus = {
+    descriptor: {
+      id: "openai",
+      name: "OpenAI",
+      description: "Luna-managed Cloud Assistance",
+      models: [{ id: "gpt-4.1-mini", name: "GPT-4.1 mini" }],
+      managedByLuna: true,
+      authUrl: null,
+    },
+    gatewayConfigured: false,
+    configured: false,
+  };
+
+  assert.equal(awaitingManagedAccessRefresh(access, [managedProvider]), true);
+  assert.equal(awaitingManagedAccessRefresh(access, [{
+    ...managedProvider,
+    gatewayConfigured: true,
+    configured: true,
+  }]), false);
+});
 
 test("a stale saved default proposes the configured replacement route", () => {
   const providers: IntelligenceProviderStatus[] = [{

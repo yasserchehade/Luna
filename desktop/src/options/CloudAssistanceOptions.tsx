@@ -131,6 +131,15 @@ function managedAccessStatus(
   }
 }
 
+export function awaitingManagedAccessRefresh(
+  access: HouseholdIntelligenceAccess | null,
+  providers: IntelligenceProviderStatus[],
+): boolean {
+  const managedProvider = providers.find(({ descriptor }) => descriptor.managedByLuna);
+  return access?.entitlementState === "entitled"
+    && (access.deviceState !== "ready" || !managedProvider?.configured);
+}
+
 export function CloudAssistanceOptions({
   accountService,
   conversationService,
@@ -181,6 +190,12 @@ export function CloudAssistanceOptions({
   };
 
   useEffect(() => { void refresh(); }, [accountService, conversationService, householdId, trustedDeviceService]);
+
+  useEffect(() => {
+    if (!awaitingManagedAccessRefresh(access, providers)) return;
+    const retry = window.setTimeout(() => void refresh(), 2_000);
+    return () => window.clearTimeout(retry);
+  }, [access, accountService, conversationService, householdId, providers, trustedDeviceService]);
 
   const revoke = async (scopeId: number) => {
     try {

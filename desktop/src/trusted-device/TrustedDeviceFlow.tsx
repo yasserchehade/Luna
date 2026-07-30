@@ -1,10 +1,11 @@
 import { FormEvent, useState } from "react";
 import type { AccountService, HouseholdSession } from "../account/accountService";
 import type { TrustedDeviceEnrollment, TrustedDeviceService } from "./trustedDeviceService";
+import type { TrustedDeviceEnrollmentMode } from "./trustedDeviceCoordinator";
 
 type TrustedDeviceFlowProps = {
   accountService: AccountService;
-  mode: "first" | "recovery";
+  mode: TrustedDeviceEnrollmentMode;
   session: HouseholdSession;
   trustedDeviceService: TrustedDeviceService;
   onTrusted: () => void;
@@ -45,6 +46,20 @@ export function TrustedDeviceFlow({
     const enrollment = await accountService.beginAuthenticatorEnrollment();
     setStep({ kind: "authenticator", ...enrollment });
   }, "We could not start authenticator setup. Check your connection and try again.");
+
+  const beginVerifiedFirstDevice = () => run(async () => {
+    const enrollment = await trustedDeviceService.enrolFirstDevice(session.householdId);
+    const registered = await accountService.registerFirstTrustedDevice({
+      label: "This device",
+      publicKey: enrollment.devicePublicKey,
+      authorizationPublicKey: enrollment.deviceAuthorizationPublicKey,
+      keyEnvelope: enrollment.deviceKeyEnvelope,
+      recoveryEnvelope: enrollment.recoveryEnvelope,
+      recoveryVerificationKey: enrollment.recoveryVerificationKey,
+    });
+    await trustedDeviceService.setCurrentKeyEpoch(session.householdId, registered.keyEpoch);
+    setStep({ kind: "saveRecovery", ...enrollment });
+  }, "We could not finish first-device setup. Verify your identity again, then retry.");
 
   const verifyAuthenticator = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -127,6 +142,12 @@ export function TrustedDeviceFlow({
     if (mode === "recovery") {
       return <TrustCard title="Recover this trusted device" description="Use your Recovery Key to let this device open your existing Household memory.">
         <button type="button" disabled={isSubmitting} onClick={beginRecovery}>Use Recovery Key</button>
+        <TrustError message={error} />
+      </TrustCard>;
+    }
+    if (mode === "firstVerified") {
+      return <TrustCard title="Protect this trusted device" description="Your authenticator is verified. Continue to create this Household's first protected device keys and Recovery Key.">
+        <button type="button" disabled={isSubmitting} onClick={beginVerifiedFirstDevice}>Continue trusted device setup</button>
         <TrustError message={error} />
       </TrustCard>;
     }

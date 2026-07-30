@@ -517,8 +517,9 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         database: impl AsRef<Path>,
         trusted_device: TrustedDeviceManager<V>,
     ) -> Result<Self, IntelligenceFailure> {
-        let endpoint = std::env::var("LUNA_MANAGED_INTELLIGENCE_URL")
-            .unwrap_or_else(|_| "https://intelligence.luna.invalid/v1/chat/completions".to_owned());
+        let endpoint = std::env::var("LUNA_MANAGED_INTELLIGENCE_URL").unwrap_or_else(|_| {
+            "https://intelligence-beta.silikin.com/v1/chat/completions".to_owned()
+        });
         Self::open_with_gateway(
             database,
             trusted_device,

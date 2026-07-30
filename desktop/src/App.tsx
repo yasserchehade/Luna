@@ -9,7 +9,11 @@ import {
 import { AccountFlow } from "./account/AccountFlow";
 import { TrustedDeviceFlow, TrustedDeviceUnlock } from "./trusted-device/TrustedDeviceFlow";
 import type { TrustedDeviceService } from "./trusted-device/trustedDeviceService";
-import { synchronizeTrustedDevice } from "./trusted-device/trustedDeviceCoordinator";
+import {
+  synchronizeTrustedDevice,
+  trustedDeviceEnrollmentMode,
+  type TrustedDeviceEnrollmentMode,
+} from "./trusted-device/trustedDeviceCoordinator";
 import { OptionsWorkspace } from "./options/OptionsWorkspace";
 import { CabinetSetup } from "./cabinet/CabinetSetup";
 import type { CabinetService, CabinetValidation } from "./cabinet/cabinetService";
@@ -26,7 +30,6 @@ import type {
 } from "./conversation/conversationService";
 
 const destinations = ["Luna", "To do", "Cabinet", "History", "Options"] as const;
-type TrustedDeviceMode = "first" | "recovery";
 
 type AppProps = {
   accountService: AccountService;
@@ -48,7 +51,7 @@ export default function App({ accountService, cabinetService, conversationServic
   const [cabinetRecoveryRequest, setCabinetRecoveryRequest] = useState(0);
   const [pendingTrustedSession, setPendingTrustedSession] = useState<{
     session: HouseholdSession;
-    mode: TrustedDeviceMode;
+    mode: TrustedDeviceEnrollmentMode;
   } | null>(null);
   const [pendingUnlockSession, setPendingUnlockSession] = useState<{
     session: HouseholdSession;
@@ -184,9 +187,10 @@ export default function App({ accountService, cabinetService, conversationServic
       return;
     }
     const authenticatorStatus = await accountService.getAuthenticatorStatus();
+    const trustedDevices = await accountService.listTrustedDevices();
     setPendingTrustedSession({
       session: authenticatedSession,
-      mode: authenticatorStatus === "unenrolled" ? "first" : "recovery",
+      mode: trustedDeviceEnrollmentMode(authenticatorStatus, trustedDevices),
     });
   }, [accountService, signOut, synchronizeAfterUnlock, trustedDeviceService]);
 

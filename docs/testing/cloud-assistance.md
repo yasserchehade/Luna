@@ -45,6 +45,7 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Cabinet overflow | the installed Conversation E2E proves the Cabinet surface and every filed-Original card retain zero horizontal overflow for long destinations and checksums |
 | Operational canary runner | `node --test ops/litellm/canary.test.mjs` proves exact model scoping, the strict structured-result contract, LiteLLM route-identity handling, usage evidence, revocation, secret-free output and separation of customer traffic from Cloudflare Access-protected administration through the public HTTP and CLI seams; `run-local-canary.test.ps1` locks down Windows PowerShell native stderr/exit-code handling |
 | Persistent managed canary identity | `ops/litellm/provision-managed-canary.mjs` creates or rotates a normal MFA-protected Household Organiser, grants only its Household a small expiring complimentary budget through the operator function, and stores the login plus authenticator seed in a caller-selected Windows DPAPI file outside the repository |
+| Installed live managed journey | `desktop/e2e-live/managed-access.spec.ts` uses an isolated application-data directory and OS-vault namespace to sign in the persistent MFA canary, enrol its first Trusted Device, wait for automatic provisioning, select `openai/gpt-4.1-mini`, enable Conversation permission, submit with Enter, receive a real reply and verify the completed exact-route audit event. `managed access keeps refreshing until the provisioned provider is visible` locks down the transition that previously left controls stale. |
 | Household entitlement boundary | `desktop/account-contract/supabaseAccountService.test.ts` proves operator-only complimentary grants, ordered/idempotent Paddle state, short-lived Trusted Device proof, one-use challenge consumption and entitlement revocation |
 | Billing server boundary | `desktop/server-contract/householdBillingSession.test.ts` and `paddleWebhook.test.ts` prove authenticated checkout/portal sessions, minimal Paddle checkout data, raw-body signature rejection and exact-price enforcement |
 | Managed device provisioning | `desktop/server-contract/managedIntelligenceProvisioning.test.ts` proves device proof reaches only narrow credential generation, rejects configuration and returned expiries above 24 hours, revokes an unsafe generated key, bounds gateway calls inside the reservation lease, records failed mints for durable cleanup, stops minting after concurrent entitlement loss, and proves exact route/model, expiry, shared Household budget, rate/token caps, opaque attribution and alias revocation. The account contract proves stale budget authorization and stale readiness are rejected, an in-flight alias cannot be cleared prematurely and an expired reservation remains queued for deletion. |
@@ -79,10 +80,16 @@ credential and the revocation reconciler cleared the failed alias with zero
 failures. The app then reported only the independent portable-memory warning.
 The separate `Luna Managed Canary` account is verified with authenticator MFA,
 has no platform-admin flag, and holds a USD 0.25 complimentary entitlement
-through 12 August 2026. It intentionally has no Trusted Device until the
-isolated live canary enrolls one. A real managed Conversation request and the
-subsequent credential revocation still require evidence before issue #53 can
-close.
+through 12 August 2026. On 30 July the isolated installed-app canary enrolled
+its first Trusted Device, provisioned a narrow managed credential, selected the
+exact `openai/gpt-4.1-mini` default, recorded Conversation permission, received
+a real OpenAI reply and verified the completed exact-route audit event. The run
+also exposed two release blockers that mocked tests had missed: a failed alias
+needed reconciliation after the operator gateway restarted, and packaged
+desktop launches fell back to an invalid gateway hostname. The beta endpoint is
+now the non-secret packaged default, while the runtime override remains
+available for operators. Credential revocation still requires evidence before
+issue #53 can close.
 
 A remote host is not required to merge the prototype. Issue #53 owns the separate pre-production gate. ADR 0018 selects a no-separate-host-cost named Cloudflare Tunnel from the operator-controlled prototype machine for the internal beta; the machine must be running, and authenticated TLS ingress, managed secrets, attributable client credentials, abuse controls and remote log verification must exist before external testers use Luna-managed Intelligence.
 

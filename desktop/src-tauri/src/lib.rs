@@ -287,7 +287,16 @@ async fn select_cabinet_folder(_app: tauri::AppHandle) -> Result<Option<String>,
         Ok(Some(folder.to_string_lossy().into_owned()))
     }
 
-    #[cfg(not(feature = "e2e"))]
+    #[cfg(feature = "live-canary")]
+    {
+        let folder = std::env::var_os("LUNA_LIVE_CANARY_CABINET_DIR")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "LUNA_LIVE_CANARY_CABINET_DIR is required.".to_owned())?;
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        Ok(Some(folder.to_string_lossy().into_owned()))
+    }
+
+    #[cfg(not(any(feature = "e2e", feature = "live-canary")))]
     {
         _app.dialog()
             .file()
@@ -2169,14 +2178,23 @@ fn open_household_state(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
-    #[cfg(all(debug_assertions, feature = "e2e"))]
+    #[cfg(all(debug_assertions, any(feature = "e2e", feature = "live-canary")))]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
     let builder = builder.setup(|app| {
-        #[cfg(not(feature = "e2e"))]
+        #[cfg(not(any(feature = "e2e", feature = "live-canary")))]
         let application_data = app.path().app_data_dir()?;
+        #[cfg(feature = "live-canary")]
+        let application_data = std::env::var_os("LUNA_LIVE_CANARY_DATA_DIR")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "LUNA_LIVE_CANARY_DATA_DIR is required.",
+                )
+            })?;
         #[cfg(feature = "e2e")]
         let application_data =
             std::env::temp_dir().join(format!("luna-e2e-device-{}", std::process::id()));
@@ -2191,8 +2209,14 @@ pub fn run() {
         app.manage(CabinetManager::new(settings));
         #[cfg(not(feature = "e2e"))]
         {
-            let trusted_device =
-                TrustedDeviceManager::new(OsCredentialVault::new("app.luna.household"));
+            let household_vault_service = if cfg!(feature = "live-canary") {
+                "app.luna.live-canary.household"
+            } else {
+                "app.luna.household"
+            };
+            let trusted_device = TrustedDeviceManager::new(OsCredentialVault::new(
+                household_vault_service,
+            ));
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
             app.manage(CloudIntelligenceStore::open(
                 &database,
@@ -2205,9 +2229,16 @@ pub fn run() {
             app.manage(trusted_device);
         }
         #[cfg(not(feature = "e2e"))]
-        app.manage(AccountSessionStore::new(OsCredentialVault::new(
-            "app.luna.account",
-        )));
+        {
+            let account_vault_service = if cfg!(feature = "live-canary") {
+                "app.luna.live-canary.account"
+            } else {
+                "app.luna.account"
+            };
+            app.manage(AccountSessionStore::new(OsCredentialVault::new(
+                account_vault_service,
+            )));
+        }
         #[cfg(feature = "e2e")]
         {
             let trusted_device = TrustedDeviceManager::new(E2eCredentialVault::default());

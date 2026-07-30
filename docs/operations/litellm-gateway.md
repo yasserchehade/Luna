@@ -106,6 +106,15 @@ virtual key was revoked. A content-blind scan of all six container logs found
 neither `LUNA_SYNTHETIC_CANARY_53` nor any checked provider, gateway, database or
 tunnel credential.
 
+On 30 July the isolated installed desktop canary also completed the member
+journey through this hostname: MFA sign-in, first Trusted Device enrollment,
+narrow credential provisioning, exact-default selection, Conversation
+permission, Enter submission, real reply and a completed exact-route audit
+event. A gateway-offline provisioning attempt first created a durable failed
+alias; the protected reconciler removed one alias with zero failures before the
+successful retry. The desktop now packages this non-secret public customer URL
+as its beta default instead of requiring a process environment variable.
+
 This is internal-beta infrastructure evidence, not production readiness. Issue
 #53 remains open until the designated Trusted Device provisions through the
 deployed Edge Function, completes a managed request through the public hostname
