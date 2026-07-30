@@ -2105,26 +2105,6 @@ fn open_household_state(
     String::from_utf8(plaintext).map_err(|_| "Protected Household state is not UTF-8.".to_owned())
 }
 
-#[cfg(test)]
-mod tests {
-    use std::future::Future;
-
-    use super::select_document_files;
-
-    fn assert_async_document_picker<F, Fut>(command: F)
-    where
-        F: FnOnce(tauri::AppHandle) -> Fut,
-        Fut: Future<Output = Result<Vec<String>, String>>,
-    {
-        let _ = command;
-    }
-
-    #[test]
-    fn document_picker_command_does_not_block_the_tauri_main_thread() {
-        assert_async_document_picker(select_document_files);
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
@@ -2287,4 +2267,24 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("Luna failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+
+    use super::select_document_files;
+
+    fn assert_async_document_picker<F, Fut>(command: F)
+    where
+        F: FnOnce(tauri::AppHandle) -> Fut,
+        Fut: Future<Output = Result<Vec<String>, String>>,
+    {
+        let _ = command;
+    }
+
+    #[test]
+    fn document_picker_command_does_not_block_the_tauri_main_thread() {
+        assert_async_document_picker(select_document_files);
+    }
 }
