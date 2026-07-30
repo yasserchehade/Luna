@@ -738,21 +738,8 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         &self,
         household_id: &str,
     ) -> Result<Vec<CloudConsentScope>, IntelligenceFailure> {
-        let connection = self.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, protected_payload FROM cloud_consents
-                 WHERE household_id = ?1 ORDER BY id DESC",
-            )
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        let rows = statement
-            .query_map(params![household_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        rows.into_iter()
+        self.consent_rows(household_id)?
+            .into_iter()
             .map(|(id, protected)| {
                 let payload: ConsentPayload = self.open_protected(household_id, &protected)?;
                 Ok(consent_scope(household_id, id, payload))
@@ -760,10 +747,42 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             .collect()
     }
 
+    /// Returns only grants whose protected payload can be verified on this Trusted Device.
+    /// Unreadable grants remain unusable and are still surfaced by the strict public listing.
+    pub(crate) fn verified_consent_scopes(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<CloudConsentScope>, IntelligenceFailure> {
+        let mut scopes = Vec::new();
+        for (id, protected) in self.consent_rows(household_id)? {
+            match self.open_protected::<ConsentPayload>(household_id, &protected) {
+                Ok(payload) => scopes.push(consent_scope(household_id, id, payload)),
+                Err(IntelligenceFailure::ProtectedStateUnavailable) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(scopes)
+    }
+
     pub(crate) fn portable_consent_exports(
         &self,
         household_id: &str,
     ) -> Result<Vec<PortableConsentExport>, IntelligenceFailure> {
+        let mut exports = Vec::new();
+        for (id, protected) in self.consent_rows(household_id)? {
+            match self.open_protected::<ConsentPayload>(household_id, &protected) {
+                Ok(payload) => exports.push(PortableConsentExport {
+                    scope: consent_scope(household_id, id, payload.clone()),
+                    future_scope_evidence: payload.future_scope_evidence,
+                }),
+                Err(IntelligenceFailure::ProtectedStateUnavailable) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(exports)
+    }
+
+    fn consent_rows(&self, household_id: &str) -> Result<Vec<(i64, String)>, IntelligenceFailure> {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare(
@@ -778,15 +797,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             .map_err(|_| IntelligenceFailure::StorageUnavailable)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        rows.into_iter()
-            .map(|(id, protected)| {
-                let payload: ConsentPayload = self.open_protected(household_id, &protected)?;
-                Ok(PortableConsentExport {
-                    scope: consent_scope(household_id, id, payload.clone()),
-                    future_scope_evidence: payload.future_scope_evidence,
-                })
-            })
-            .collect()
+        Ok(rows)
     }
 
     pub(crate) fn apply_portable_consent(
@@ -2250,6 +2261,63 @@ mod tests {
             Err(IntelligenceFailure::ConsentRevoked)
         );
         assert!(gateway.requests().is_empty());
+    }
+
+    #[test]
+    fn verified_consent_lookup_skips_unreadable_history_without_reusing_it() {
+        let gateway =
+            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+        let store = store_with_gateway(gateway);
+        let selection = IntelligenceSelection {
+            provider_id: "openai".to_owned(),
+            model_id: "gpt-4.1-mini".to_owned(),
+        };
+        let unreadable = store
+            .grant_scope(
+                "household",
+                &selection,
+                IntelligenceCapability::ConversationReply,
+                "conversation-reply",
+                vec!["currentMessage".to_owned()],
+                Vec::new(),
+                "organiser-1",
+            )
+            .expect("grant consent that will become unreadable");
+        let verified = store
+            .grant_scope(
+                "household",
+                &selection,
+                IntelligenceCapability::DirectionInterpretation,
+                "direction-interpretation",
+                vec!["filename".to_owned()],
+                Vec::new(),
+                "organiser-1",
+            )
+            .expect("grant readable consent");
+        store
+            .connect()
+            .expect("open Intelligence database")
+            .execute(
+                "UPDATE cloud_consents SET protected_payload = ?1 WHERE id = ?2",
+                params!["not-a-protected-payload", unreadable.id],
+            )
+            .expect("damage historical consent payload");
+
+        assert_eq!(
+            store.list_consent_scopes("household"),
+            Err(IntelligenceFailure::ProtectedStateUnavailable)
+        );
+        assert_eq!(
+            store
+                .verified_consent_scopes("household")
+                .expect("list only verified consent"),
+            vec![verified.clone()]
+        );
+        let exports = store
+            .portable_consent_exports("household")
+            .expect("export only verified consent");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].scope, verified);
     }
 
     #[test]

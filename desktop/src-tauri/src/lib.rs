@@ -612,7 +612,7 @@ fn set_default_intelligence_permission(
         load_default_intelligence_provider(settings.inner(), intelligence.inner(), &household_id)?
             .ok_or_else(|| "Choose a default Intelligence Provider in Options.".to_owned())?;
     let matching = intelligence
-        .list_consent_scopes(&household_id)
+        .verified_consent_scopes(&household_id)
         .map_err(|error| error.to_string())?
         .into_iter()
         .filter(|scope| default_permission_matches(scope, &selected, permission))
@@ -714,7 +714,7 @@ fn submit_ordinary_conversation_message(
         .find(|provider| provider.id == selected.provider_id)
         .map(|provider| provider.name);
     let permission = intelligence
-        .list_consent_scopes(&household_id)
+        .verified_consent_scopes(&household_id)
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|scope| {
@@ -980,7 +980,7 @@ fn revoke_default_intelligence_permissions(
     selected: &DefaultIntelligenceProvider,
 ) -> Result<(), String> {
     for scope in intelligence
-        .list_consent_scopes(household_id)
+        .verified_consent_scopes(household_id)
         .map_err(|error| error.to_string())?
         .into_iter()
         .filter(|scope| {
@@ -1209,7 +1209,7 @@ fn evaluate_document_with_default_intelligence_provider(
         load_default_intelligence_provider(settings.inner(), intelligence.inner(), &household_id)?
             .ok_or_else(|| "Choose a default Intelligence Provider in Options.".to_owned())?;
     let permission = intelligence
-        .list_consent_scopes(&household_id)
+        .verified_consent_scopes(&household_id)
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|scope| {
