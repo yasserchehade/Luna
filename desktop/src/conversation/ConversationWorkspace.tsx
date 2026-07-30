@@ -984,6 +984,7 @@ export function ConversationWorkspace({
       setError("");
       await loadHouseholdWork();
     } catch (duplicateError) {
+      await loadHouseholdWork().catch(() => undefined);
       setError(String(duplicateError));
     }
   };

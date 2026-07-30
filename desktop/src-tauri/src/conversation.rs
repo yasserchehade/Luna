@@ -1264,14 +1264,8 @@ impl<V: CredentialVault> ConversationStore<V> {
             &*self.local_ocr,
         );
         let context_direction = local_context_direction(extracted_text.as_deref());
-        let processing_state = if local_evidence_needs_direction_interpretation(
-            extracted_text.as_deref(),
-            &context_direction,
-        ) {
-            DocumentProcessingState::NeedsCloudConsent
-        } else {
-            DocumentProcessingState::NeedsMemberDirection
-        };
+        let processing_state =
+            processing_state_after_local_inspection(extracted_text.as_deref(), &context_direction);
         let mut payload = DocumentArrivalPayload {
             original_name: original_name.to_owned(),
             original_path,
@@ -1317,14 +1311,30 @@ impl<V: CredentialVault> ConversationStore<V> {
                 payload.clone(),
             )?;
             if let Some(preference) = self.matching_duplicate_preference(household_id, &payload)? {
-                return self.resolve_duplicate_internal(
-                    household_id,
-                    arrival_id,
-                    preference.related_arrival_id,
-                    preference.decision,
-                    false,
-                    DuplicateAuditKind::DuplicatePreferenceApplied,
-                );
+                if let Some(candidate) = payload.duplicate_review.as_ref().and_then(|review| {
+                    review
+                        .candidates
+                        .iter()
+                        .find(|candidate| {
+                            candidate.kind == DuplicateKind::Exact
+                                && candidate.arrival_id == preference.related_arrival_id
+                        })
+                        .or_else(|| {
+                            review
+                                .candidates
+                                .iter()
+                                .find(|candidate| candidate.kind == DuplicateKind::Exact)
+                        })
+                }) {
+                    return self.resolve_duplicate_internal(
+                        household_id,
+                        arrival_id,
+                        candidate.arrival_id,
+                        preference.decision,
+                        false,
+                        DuplicateAuditKind::DuplicatePreferenceApplied,
+                    );
+                }
             }
             return self.document_arrival(household_id, arrival_id, conversation_id, payload);
         }
@@ -1455,12 +1465,35 @@ impl<V: CredentialVault> ConversationStore<V> {
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        drop(connection);
         protected_rows
             .into_iter()
             .map(|(id, conversation_id, protected)| {
                 let mut payload: DocumentArrivalPayload =
                     self.open_protected(household_id, &protected)?;
                 payload.restore_legacy_original_path();
+                if payload.processing_state == DocumentProcessingState::PossibleDuplicate {
+                    let refreshed_review = self.refresh_duplicate_review(
+                        household_id,
+                        payload.duplicate_review.as_ref(),
+                    )?;
+                    if refreshed_review != payload.duplicate_review {
+                        payload.duplicate_review = refreshed_review;
+                        if payload.duplicate_review.is_none() {
+                            payload.processing_state = processing_state_after_local_inspection(
+                                payload.extracted_text.as_deref(),
+                                &payload.context_direction,
+                            );
+                        }
+                        return self.save_document_arrival_payload(
+                            household_id,
+                            id,
+                            conversation_id,
+                            payload,
+                        );
+                    }
+                }
                 self.document_arrival(household_id, id, conversation_id, payload)
             })
             .collect()
@@ -2906,6 +2939,9 @@ impl<V: CredentialVault> ConversationStore<V> {
         let mut candidates = Vec::new();
         for (existing_id, protected) in protected_rows {
             let existing: DocumentArrivalPayload = self.open_protected(household_id, &protected)?;
+            if !duplicate_candidate_is_available(&existing) {
+                continue;
+            }
             let kind = if existing.checksum == payload.checksum {
                 Some(DuplicateKind::Exact)
             } else if possible_duplicate(&existing, payload) {
@@ -2929,6 +2965,31 @@ impl<V: CredentialVault> ConversationStore<V> {
             DuplicateKind::Exact => 0,
             DuplicateKind::Possible => 1,
         });
+        Ok((!candidates.is_empty()).then_some(DuplicateReview { candidates }))
+    }
+
+    fn refresh_duplicate_review(
+        &self,
+        household_id: &str,
+        review: Option<&DuplicateReview>,
+    ) -> Result<Option<DuplicateReview>, ConversationError> {
+        let Some(review) = review else {
+            return Ok(None);
+        };
+        let mut candidates = Vec::new();
+        for candidate in &review.candidates {
+            let existing = self.load_document_arrival_payload(household_id, candidate.arrival_id);
+            match existing {
+                Ok((_, payload))
+                    if payload.checksum == candidate.checksum
+                        && duplicate_candidate_is_available(&payload) =>
+                {
+                    candidates.push(candidate.clone());
+                }
+                Ok(_) | Err(ConversationError::NotFound) => {}
+                Err(error) => return Err(error),
+            }
+        }
         Ok((!candidates.is_empty()).then_some(DuplicateReview { candidates }))
     }
 
@@ -2980,6 +3041,11 @@ impl<V: CredentialVault> ConversationStore<V> {
         if payload.processing_state != DocumentProcessingState::PossibleDuplicate {
             return Err(ConversationError::DuplicateDecisionUnavailable);
         }
+        let refreshed_review =
+            self.refresh_duplicate_review(household_id, payload.duplicate_review.as_ref())?;
+        if refreshed_review != payload.duplicate_review {
+            payload.duplicate_review = refreshed_review;
+        }
         let candidate = payload
             .duplicate_review
             .as_ref()
@@ -2989,8 +3055,22 @@ impl<V: CredentialVault> ConversationStore<V> {
                     .iter()
                     .find(|candidate| candidate.arrival_id == related_arrival_id)
             })
-            .cloned()
-            .ok_or(ConversationError::DuplicateDecisionUnavailable)?;
+            .cloned();
+        let Some(candidate) = candidate else {
+            if payload.duplicate_review.is_none() {
+                payload.processing_state = processing_state_after_local_inspection(
+                    payload.extracted_text.as_deref(),
+                    &payload.context_direction,
+                );
+            }
+            self.save_document_arrival_payload(
+                household_id,
+                arrival_id,
+                conversation_id,
+                payload.clone(),
+            )?;
+            return Err(ConversationError::DuplicateDecisionUnavailable);
+        };
         if remember_preference && candidate.kind != DuplicateKind::Exact {
             return Err(ConversationError::DuplicateDecisionUnavailable);
         }
@@ -4593,6 +4673,32 @@ fn local_evidence_needs_direction_interpretation(
                     | ContextField::Account
             )
         })
+}
+
+fn processing_state_after_local_inspection(
+    extracted_text: Option<&str>,
+    context: &DocumentContextDirection,
+) -> DocumentProcessingState {
+    if local_evidence_needs_direction_interpretation(extracted_text, context) {
+        DocumentProcessingState::NeedsCloudConsent
+    } else {
+        DocumentProcessingState::NeedsMemberDirection
+    }
+}
+
+fn duplicate_candidate_is_available(payload: &DocumentArrivalPayload) -> bool {
+    if matches!(
+        payload.processing_state,
+        DocumentProcessingState::PossibleDuplicate | DocumentProcessingState::Dismissed
+    ) {
+        return false;
+    }
+    let original_path = payload
+        .filed_original
+        .as_ref()
+        .map(|filed| filed.final_path.as_path())
+        .unwrap_or(payload.original_path.as_path());
+    fs::read(original_path).is_ok_and(|original| sha256(&original) == payload.checksum)
 }
 
 fn valid_candidate_value(value: Option<String>) -> Result<Option<String>, ConversationError> {

@@ -2754,6 +2754,177 @@ fn a_missing_staged_original_is_not_reported_as_a_cabinet_outage() {
 }
 
 #[test]
+fn a_deleted_filed_original_is_not_offered_as_a_duplicate_candidate() {
+    let directory = tempfile::tempdir().expect("temporary deleted Original directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let original = digital_pdf_with_text(
+        "Document Type: Utility bill; Service Provider: Household Service; Addressee: Sam Rivera",
+    );
+    let first_source = directory.path().join("first").join("utility bill.pdf");
+    let second_source = directory.path().join("second").join("utility bill.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    fs::write(&first_source, &original).expect("write first Original");
+    fs::write(&second_source, &original).expect("write second Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &first_source,
+        "Filed utility bill.pdf",
+    );
+    let filed = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect("file first Original");
+    assert_eq!(filed.processing_state, DocumentProcessingState::Filed);
+    let filed_path = cabinet.join(
+        &filed
+            .review_card
+            .filing_decision
+            .as_ref()
+            .expect("retain Filing Decision")
+            .cabinet_destination,
+    );
+    fs::remove_file(&filed_path).expect("delete filed Original outside Luna");
+
+    let conversation = store
+        .create_conversation("rivera-household", "Replacement attachment")
+        .expect("create replacement Conversation");
+    let replacement = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach replacement Original");
+
+    assert_ne!(
+        replacement.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert!(replacement.duplicate_review.is_none());
+}
+
+#[test]
+fn a_duplicate_review_drops_a_candidate_deleted_after_display() {
+    let directory = tempfile::tempdir().expect("temporary stale duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let original = digital_pdf_with_text(
+        "Document Type: Utility bill; Service Provider: Household Service; Addressee: Sam Rivera",
+    );
+    let first_source = directory.path().join("first").join("utility bill.pdf");
+    let second_source = directory.path().join("second").join("utility bill.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    fs::write(&first_source, &original).expect("write first Original");
+    fs::write(&second_source, &original).expect("write second Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &first_source,
+        "Filed utility bill.pdf",
+    );
+    let filed = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect("file first Original");
+    let filed_path = filed
+        .filed_original
+        .as_ref()
+        .expect("retain Filed Original")
+        .final_path
+        .clone();
+    let conversation = store
+        .create_conversation("rivera-household", "Stale duplicate review")
+        .expect("create Conversation");
+    let replacement = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach duplicate Original");
+    assert_eq!(
+        replacement.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    fs::remove_file(filed_path).expect("delete candidate after review is displayed");
+
+    let refreshed = store
+        .list_document_arrivals("rivera-household")
+        .expect("refresh Document Arrivals")
+        .into_iter()
+        .find(|arrival| arrival.id == replacement.id)
+        .expect("retain replacement arrival");
+    assert_ne!(
+        refreshed.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert!(refreshed.duplicate_review.is_none());
+}
+
+#[test]
+fn a_dismissed_duplicate_is_not_offered_again_as_an_original() {
+    let directory = tempfile::tempdir().expect("temporary dismissed duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let original = digital_pdf_with_text("Household service statement for Sam Rivera");
+    let sources = (0..3)
+        .map(|index| {
+            directory
+                .path()
+                .join(index.to_string())
+                .join("statement.pdf")
+        })
+        .collect::<Vec<_>>();
+    for source in &sources {
+        fs::create_dir_all(source.parent().expect("source directory"))
+            .expect("create source directory");
+        fs::write(source, &original).expect("write Original");
+    }
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Dismissed duplicate review")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &sources[0], &cabinet)
+        .expect("attach first Original");
+    let second = store
+        .attach_document("rivera-household", conversation.id, &sources[1], &cabinet)
+        .expect("attach second Original");
+    store
+        .resolve_duplicate(
+            "rivera-household",
+            second.id,
+            first.id,
+            DuplicateDecision::DiscardNew,
+            false,
+        )
+        .expect("discard second duplicate");
+
+    let third = store
+        .attach_document("rivera-household", conversation.id, &sources[2], &cabinet)
+        .expect("attach third Original");
+    let candidates = &third
+        .duplicate_review
+        .as_ref()
+        .expect("show duplicate review")
+        .candidates;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].arrival_id, first.id);
+}
+
+#[test]
 fn duplicate_arrivals_are_stopped_before_automatic_filing_and_exact_preferences_remain_scoped() {
     let directory = tempfile::tempdir().expect("temporary duplicate directory");
     let cabinet = directory.path().join("Cabinet");
