@@ -27,8 +27,7 @@ import type {
   TodoItem,
 } from "./conversationService";
 import {
-  documentIntelligenceFields,
-  documentIntelligencePurpose,
+  cloudConsentScopeGrantsDefaultPermission,
 } from "./conversationService";
 
 const intelligenceFailureNotice = (
@@ -255,15 +254,7 @@ function DocumentReviewEditor({
     ({ id }) => id === cloudDefaultProvider?.modelId,
   );
   const existingCloudScope = cloudScopes.find((scope) => (
-    !scope.revoked
-    && scope.defaultPermission
-    && scope.providerId === cloudDefaultProvider?.providerId
-    && scope.modelId === cloudDefaultProvider?.modelId
-    && scope.kind === "reusable"
-    && scope.capability === "directionInterpretation"
-    && scope.purpose === documentIntelligencePurpose
-    && scope.fields.length === documentIntelligenceFields.length
-    && documentIntelligenceFields.every((field) => scope.fields.includes(field))
+    cloudConsentScopeGrantsDefaultPermission(scope, cloudDefaultProvider, "document")
   ));
 
   useEffect(() => {

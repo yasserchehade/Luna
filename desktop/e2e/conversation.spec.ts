@@ -132,6 +132,11 @@ describe("Luna Conversation desk", () => {
     await expect($("section[aria-label='Default intelligence settings']")).toHaveText(
       expect.stringContaining("OpenAI · gpt-4.1-mini"),
     );
+    await expect($("section[aria-label='Default intelligence settings']")).toHaveText(
+      expect.stringContaining(
+        "May send exactly: media type, document type, service provider, addressee, property, account, amount, relevant dates, and up to 4,000 characters of locally extracted text.",
+      ),
+    );
     const documentPermission = $("input[aria-label='Allow Document evaluations by default']");
     if (!await documentPermission.isSelected()) {
       await documentPermission.click();
@@ -562,9 +567,36 @@ describe("Luna Conversation desk", () => {
     await expect(cloudOptions.$("a=Continue to Paddle sandbox")).toBeDisplayed();
     await expect(cloudOptions).toHaveText(expect.stringContaining("No real charge"));
 
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "provisioning"): void };
+      }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState("provisioning");
+    });
+    await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("clear_managed_intelligence_gateway_credential", { householdId })
+    ), testHousehold.id);
+    await $("button[aria-label='Learned Filing Rules options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    cloudOptions = $("section[aria-label='Cloud assistance']");
+    await expect(cloudOptions).toHaveText(expect.stringContaining("Preparing this Trusted Device"));
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { setManagedIntelligenceState(state: "ready"): void };
+      }).__LUNA_E2E_ACCOUNT__.setManagedIntelligenceState("ready");
+    });
+    await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("set_managed_intelligence_gateway_credential", {
+        householdId,
+        credential: "sk-luna-e2e-delayed-managed-access",
+      })
+    ), testHousehold.id);
+    await expect(cloudOptions).toHaveText(
+      expect.stringContaining("Managed access ready"),
+      { wait: 10_000 },
+    );
+
     for (const [state, status] of [
       ["checkoutPending", "Checkout pending"],
-      ["provisioning", "Preparing this Trusted Device"],
       ["paymentProblem", "Payment needs attention"],
       ["ended", "Managed access ended"],
     ] as const) {
@@ -592,6 +624,7 @@ describe("Luna Conversation desk", () => {
     await expect(cloudOptions).toHaveText(expect.stringContaining("You never need to enter a Luna access key"));
     const byokConnection = cloudOptions.$("section[aria-label='OpenAI bring-your-own-key connection']");
     await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
+    await expect(byokConnection.$("a=OpenAI API keys")).toBeDisplayed();
     const providerKey = byokConnection.$("input[type='password']");
     await providerKey.setValue("sk-e2e-customer-provider-key");
     await byokConnection.$("button=Test and connect").click();
@@ -599,9 +632,32 @@ describe("Luna Conversation desk", () => {
     await providerKey.setValue("sk-e2e-replacement-provider-key");
     await byokConnection.$("button=Test and replace").click();
     await expect(byokConnection).toHaveText(expect.stringContaining("Connected"));
-    await byokConnection.$("button=Remove key").click();
-    await expect(byokConnection).toHaveText(expect.stringContaining("Not connected"));
+
+    await browser.tauri.execute(({ core }, request) => (
+      core.invoke("set_default_intelligence_provider", request)
+    ), {
+      householdId: testHousehold.id,
+      providerId: "openai-byok",
+      modelId: "gpt-4.1-mini",
+    });
+    await $("button[aria-label='Learned Filing Rules options']").click();
+    await $("button[aria-label='Cloud assistance options']").click();
+    await expect($("section[aria-label='Default intelligence settings'] .section-heading span")).toHaveText(
+      "OpenAI — bring your own key · gpt-4.1-mini",
+    );
+    const refreshedByokConnection = $("section[aria-label='OpenAI bring-your-own-key connection']");
+    await refreshedByokConnection.$("button=Remove key").click();
+    await expect(refreshedByokConnection).toHaveText(expect.stringContaining("Not connected"));
+    const replacementDefault = $("select[aria-label='Default Intelligence Provider and model']");
+    await expect(replacementDefault).toHaveValue("openai::gpt-4.1-mini");
+    await expect($("button=Save default")).toBeEnabled();
+    await $("button=Save default").click();
+    await expect($("section[aria-label='Default intelligence settings'] .section-heading span")).toHaveText(
+      "OpenAI · gpt-4.1-mini",
+    );
     const activeDocumentPermission = $("input[aria-label='Allow Document evaluations by default']");
+    await expect(activeDocumentPermission).not.toBeChecked();
+    await activeDocumentPermission.click();
     await expect(activeDocumentPermission).toBeChecked();
     await activeDocumentPermission.click();
     await expect(activeDocumentPermission).not.toBeChecked();
@@ -617,6 +673,42 @@ describe("Luna Conversation desk", () => {
     await expect(
       permissionlessAssistance.$("button=Ask default Intelligence Provider"),
     ).toBeDisabled();
+    const permissionlessArrivalId = Number(
+      await permissionlessArrival.getAttribute("data-arrival-id"),
+    );
+    const bypassOutcome = await browser.tauri.execute(async ({ core }, request) => {
+      const arrivals = await core.invoke("list_document_arrivals", {
+        householdId: request.householdId,
+      }) as Array<{ id: number; conversationId: number }>;
+      const arrival = arrivals.find(({ id }) => id === request.arrivalId);
+      const view = await core.invoke("get_document_conversation", {
+        householdId: request.householdId,
+        arrivalId: request.arrivalId,
+      }) as { prompt: { id: string } | null };
+      if (!arrival || !view.prompt) throw new Error("The permissionless Document prompt is unavailable.");
+      return core.invoke("submit_member_utterance", {
+        request: {
+          householdId: request.householdId,
+          arrivalId: request.arrivalId,
+          utterance: {
+            conversationId: arrival.conversationId,
+            message: "Allow once",
+            linkedPrompt: view.prompt.id,
+          },
+          cloudSelection: null,
+          existingConsentGrantId: null,
+        },
+      });
+    }, {
+      householdId: testHousehold.id,
+      arrivalId: permissionlessArrivalId,
+    }) as { status: string; message: string; cloudResult: unknown };
+    expect(bypassOutcome.status).toBe("clarificationRequired");
+    expect(bypassOutcome.message).toContain("Enable Document permission in Options");
+    expect(bypassOutcome.cloudResult).toBeNull();
+    await expect(permissionlessAssistance).not.toHaveText(
+      expect.stringContaining("suggested amount"),
+    );
 
     await $("button[aria-label='Options']").click();
     await $("button[aria-label='Cloud assistance options']").click();

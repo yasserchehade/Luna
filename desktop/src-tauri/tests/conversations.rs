@@ -1435,31 +1435,39 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
     assert!(prompt
         .allowed_actions
         .contains(&ConversationAction::KeepLocal));
-    for (message, consent) in [
-        ("Allow once", CloudConsentDecision::AllowOnce),
-        (
-            "Allow this scoped future use",
-            CloudConsentDecision::AllowForScope,
-        ),
-        (
-            "Use existing Consent Grant",
-            CloudConsentDecision::UseExistingScope,
-        ),
-        ("Keep local", CloudConsentDecision::KeepLocal),
-    ] {
-        let interpretation = DeterministicMemberDirectionInterpreter.interpret(
-            &prompt,
-            &MemberUtterance {
-                conversation_id: conversation.id,
-                message: message.to_owned(),
-                linked_prompt: prompt.id.clone(),
-            },
-        );
-        assert_eq!(
-            interpretation.proposed_commands,
-            vec![MemberDirectionCommand::UseCloudAssistance { consent }]
-        );
-    }
+    let one_time_consent = DeterministicMemberDirectionInterpreter.interpret(
+        &prompt,
+        &MemberUtterance {
+            conversation_id: conversation.id,
+            message: "Allow once".to_owned(),
+            linked_prompt: prompt.id.clone(),
+        },
+    );
+    assert_eq!(
+        one_time_consent.confidence,
+        InterpretationConfidence::Ambiguous
+    );
+    assert!(one_time_consent.proposed_commands.is_empty());
+    assert!(one_time_consent
+        .ambiguity
+        .as_deref()
+        .is_some_and(|message| message.contains("Document permission in Options")));
+    assert!(!prompt.message.contains("consent choices"));
+
+    let keep_local = DeterministicMemberDirectionInterpreter.interpret(
+        &prompt,
+        &MemberUtterance {
+            conversation_id: conversation.id,
+            message: "Keep local".to_owned(),
+            linked_prompt: prompt.id.clone(),
+        },
+    );
+    assert_eq!(
+        keep_local.proposed_commands,
+        vec![MemberDirectionCommand::UseCloudAssistance {
+            consent: CloudConsentDecision::KeepLocal,
+        }]
+    );
 
     let outcome = store
         .submit_member_utterance(

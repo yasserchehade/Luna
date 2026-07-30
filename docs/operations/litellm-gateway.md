@@ -106,7 +106,7 @@ virtual key was revoked. A content-blind scan of all six container logs found
 neither `LUNA_SYNTHETIC_CANARY_53` nor any checked provider, gateway, database or
 tunnel credential.
 
-On 30 July the isolated installed desktop canary also completed the member
+On 30 July a one-off isolated installed-desktop release-environment run also completed the member
 journey through this hostname: MFA sign-in, first Trusted Device enrollment,
 narrow credential provisioning, exact-default selection, Conversation
 permission, Enter submission, real reply and a completed exact-route audit
@@ -120,6 +120,9 @@ Options reported Managed access ready for the exact GPT-4.1 mini default with
 Conversation permission enabled, and an Enter-submitted synthetic availability
 message received a nonempty managed reply. Separate protected-memory and
 Cabinet recovery warnings remained visible without blocking the gateway call.
+The live WebdriverIO harness was removed from PR #61 so its routine installed-app
+tests remain deterministic as required by issue #38; this historical operator
+evidence does not make a paid-provider call part of the automated suite.
 
 This is internal-beta infrastructure evidence, not production readiness. Issue
 #53 remains open until the designated Trusted Device provisions through the

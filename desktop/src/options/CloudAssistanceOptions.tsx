@@ -11,10 +11,7 @@ import type {
   IntelligenceProviderStatus,
 } from "../conversation/conversationService";
 import {
-  conversationIntelligenceFields,
-  conversationIntelligencePurpose,
-  documentIntelligenceFields,
-  documentIntelligencePurpose,
+  cloudConsentScopeGrantsDefaultPermission,
 } from "../conversation/conversationService";
 import type { TrustedDeviceService } from "../trusted-device/trustedDeviceService";
 
@@ -32,7 +29,7 @@ type CloudAssistanceAccountService = Pick<
   | "createManagedIntelligenceCustomerPortalSession"
 >;
 
-export async function loadCloudAssistanceOptionsData(
+async function loadCloudAssistanceOptionsData(
   conversationService: CloudAssistanceDataService,
   accountService: CloudAssistanceAccountService,
   trustedDeviceService: Pick<TrustedDeviceService, "currentDevicePublicKey">,
@@ -70,7 +67,7 @@ export async function loadCloudAssistanceOptionsData(
   };
 }
 
-export function cloudAssistanceLoadErrorMessage(
+function cloudAssistanceLoadErrorMessage(
   area: "providers" | "consents",
   _technicalReason: string,
 ): string {
@@ -80,11 +77,11 @@ export function cloudAssistanceLoadErrorMessage(
   return "Luna couldn't open older Consent Grants on this device. They will not be reused unless Luna can verify them. Provider setup remains available.";
 }
 
-export function providerApiKeysLinkLabel(providerName: string): string {
+function providerApiKeysLinkLabel(providerName: string): string {
   return `${providerName.split(" — ")[0]} API keys`;
 }
 
-export function providerSetupAvailability(
+function providerSetupAvailability(
   status: Pick<IntelligenceProviderStatus, "gatewayConfigured" | "configured">,
 ): { enabled: boolean; statusLabel: string } {
   return {
@@ -97,7 +94,7 @@ export function providerSetupAvailability(
   };
 }
 
-export function defaultRouteSelection(
+function defaultRouteSelection(
   defaultProvider: DefaultIntelligenceProvider | null,
   providers: IntelligenceProviderStatus[],
   current: string,
@@ -131,7 +128,7 @@ function managedAccessStatus(
   }
 }
 
-export function awaitingManagedAccessRefresh(
+function awaitingManagedAccessRefresh(
   access: HouseholdIntelligenceAccess | null,
   providers: IntelligenceProviderStatus[],
 ): boolean {
@@ -261,25 +258,11 @@ export function CloudAssistanceOptions({
     && descriptor.id === defaultProvider?.providerId
     && descriptor.models.some(({ id }) => id === defaultProvider.modelId)
   ));
-  const activeScopes = scopes.filter((scope) => (
-    !scope.revoked
-    && scope.providerId === defaultProvider?.providerId
-    && scope.modelId === defaultProvider?.modelId
+  const conversationPermission = scopes.some((scope) => (
+    cloudConsentScopeGrantsDefaultPermission(scope, defaultProvider, "conversation")
   ));
-  const conversationPermission = activeScopes.some((scope) => (
-    scope.defaultPermission
-    &&
-    scope.capability === "conversationReply"
-    && scope.purpose === conversationIntelligencePurpose
-    && conversationIntelligenceFields.every((field) => scope.fields.includes(field))
-  ));
-  const documentPermission = activeScopes.some((scope) => (
-    scope.defaultPermission
-    &&
-    scope.capability === "directionInterpretation"
-    && scope.purpose === documentIntelligencePurpose
-    && scope.fields.length === documentIntelligenceFields.length
-    && documentIntelligenceFields.every((field) => scope.fields.includes(field))
+  const documentPermission = scopes.some((scope) => (
+    cloudConsentScopeGrantsDefaultPermission(scope, defaultProvider, "document")
   ));
 
   const saveDefault = async () => {
@@ -408,7 +391,7 @@ export function CloudAssistanceOptions({
           />
           <span>
             <strong>Allow Document evaluations by default</strong>
-            <small>Member-initiated assistance may send: media type, locally extracted text, and the visible review fields. Suggestions remain reviewable.</small>
+            <small>May send exactly: media type, document type, service provider, addressee, property, account, amount, relevant dates, and up to 4,000 characters of locally extracted text. Suggestions remain reviewable.</small>
           </span>
         </label>
       </fieldset>

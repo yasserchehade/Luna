@@ -322,6 +322,31 @@ export type CloudConsentScope = {
   revoked: boolean;
 };
 
+export function cloudConsentScopeGrantsDefaultPermission(
+  scope: CloudConsentScope,
+  defaultProvider: DefaultIntelligenceProvider | null,
+  permission: "conversation" | "document",
+): boolean {
+  const fields = permission === "conversation"
+    ? conversationIntelligenceFields
+    : documentIntelligenceFields;
+  const capability = permission === "conversation"
+    ? "conversationReply"
+    : "directionInterpretation";
+  const purpose = permission === "conversation"
+    ? conversationIntelligencePurpose
+    : documentIntelligencePurpose;
+  return !scope.revoked
+    && scope.defaultPermission
+    && scope.kind === "reusable"
+    && scope.providerId === defaultProvider?.providerId
+    && scope.modelId === defaultProvider?.modelId
+    && scope.capability === capability
+    && scope.purpose === purpose
+    && scope.fields.length === fields.length
+    && fields.every((field) => scope.fields.includes(field));
+}
+
 export type CloudConsentScopeListing = {
   scopes: CloudConsentScope[];
   hasUnreadable: boolean;
@@ -571,13 +596,6 @@ export interface ConversationService {
   clearManagedIntelligenceGatewayCredential(householdId: string): Promise<void>;
   listCloudConsentScopes(householdId: string): Promise<CloudConsentScopeListing>;
   revokeCloudConsentScope(householdId: string, scopeId: number): Promise<void>;
-  evaluateDocumentWithCloudAssistance(
-    householdId: string,
-    arrivalId: number,
-    selection: IntelligenceSelection,
-    consent: CloudConsentDecision,
-    existingConsentGrantId: number | null,
-  ): Promise<CloudAssistanceResolution>;
   evaluateDocumentWithDefaultIntelligenceProvider(
     householdId: string,
     arrivalId: number,
@@ -786,17 +804,6 @@ export const tauriConversationService: ConversationService = {
   },
   revokeCloudConsentScope(householdId, scopeId) {
     return invoke("revoke_cloud_consent_scope", { householdId, scopeId });
-  },
-  evaluateDocumentWithCloudAssistance(householdId, arrivalId, selection, consent, existingConsentGrantId) {
-    return invoke<CloudAssistanceResolution>("evaluate_document_with_cloud_assistance", {
-      input: {
-        householdId,
-        arrivalId,
-        selection,
-        consent,
-        existingConsentGrantId,
-      },
-    });
   },
   evaluateDocumentWithDefaultIntelligenceProvider(householdId, arrivalId) {
     return invoke<CloudAssistanceResolution>(

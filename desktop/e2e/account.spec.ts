@@ -329,6 +329,35 @@ describe("Luna account access", () => {
     await expect($("[data-device-label='This device']")).toHaveText(expect.stringContaining("Revoked"));
 
     await $("button=Sign out on this device").click();
+    await browser.tauri.execute(({ core }, householdId) => (
+      core.invoke("forget_current_device", { householdId })
+    ), testHousehold.id);
+    await browser.execute(() => {
+      (window as typeof window & {
+        __LUNA_E2E_ACCOUNT__: { simulateNoTrustedDevices(): void };
+      }).__LUNA_E2E_ACCOUNT__.simulateNoTrustedDevices();
+    });
+    await $("#sign-in-email").setValue(testHousehold.email);
+    await $("#sign-in-password").setValue(testHousehold.replacementPassword);
+    await $("button=Sign in").click();
+    await expect($("h1=Verify your identity")).toBeDisplayed();
+    await $("#sign-in-authenticator-code").setValue(testHousehold.authenticatorCode);
+    await $("button=Continue to Luna").click();
+    await expect($("h1=Protect this trusted device")).toBeDisplayed();
+    await expect($("button=Continue trusted device setup")).toBeDisplayed();
+    await expect($("button=Set up authenticator")).not.toBeExisting();
+    await $("button=Continue trusted device setup").click();
+    await expect($("h1=Save your Recovery Key")).toBeDisplayed();
+    const firstVerifiedRecoveryKey = await $("#recovery-key").getText();
+    await $("#recovery-key-confirmation").setValue(firstVerifiedRecoveryKey);
+    await $("button=Confirm Recovery Key").click();
+    await expect($("h1=Create a device PIN")).toBeDisplayed();
+    await $("#device-pin").setValue(testHousehold.replacementDevicePin);
+    await $("#device-pin-confirmation").setValue(testHousehold.replacementDevicePin);
+    await $("button=Save device PIN").click();
+    await expect($("button=Options")).toBeDisplayed();
+    await $("button[aria-label='Options']").click();
+    await $("button=Sign out on this device").click();
     await $("button=Forgot password?").click();
     await $("#recovery-email").setValue("unknown@example.com");
     await $("button=Send recovery code").click();

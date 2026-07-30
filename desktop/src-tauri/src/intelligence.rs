@@ -127,6 +127,22 @@ pub struct CloudConsentScope {
     pub revoked: bool,
 }
 
+impl CloudConsentScope {
+    pub fn grants_default_permission(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        capability: IntelligenceCapability,
+    ) -> bool {
+        !self.revoked
+            && self.default_permission
+            && self.kind == ConsentGrantKind::Reusable
+            && self.provider_id == provider_id
+            && self.model_id == model_id
+            && default_permission_shape(capability, &self.purpose, &self.fields)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudConsentScopeListing {
@@ -1575,17 +1591,24 @@ fn is_default_permission_payload(payload: &ConsentPayload) -> bool {
     if payload.document_arrival_id.is_some() || !payload.future_scope_evidence.is_empty() {
         return false;
     }
-    match payload.capability {
+    default_permission_shape(payload.capability, &payload.purpose, &payload.fields)
+}
+
+fn default_permission_shape(
+    capability: IntelligenceCapability,
+    purpose: &str,
+    fields: &[String],
+) -> bool {
+    match capability {
         IntelligenceCapability::ConversationReply => {
-            payload.purpose == CONVERSATION_REPLY_PURPOSE
-                && payload.fields == [CURRENT_MESSAGE_FIELD.to_owned()]
+            purpose == CONVERSATION_REPLY_PURPOSE && fields == [CURRENT_MESSAGE_FIELD.to_owned()]
         }
         IntelligenceCapability::DirectionInterpretation => {
-            payload.purpose == DOCUMENT_EVALUATION_PURPOSE
-                && payload.fields.len() == DOCUMENT_DEFAULT_PERMISSION_FIELDS.len()
+            purpose == DOCUMENT_EVALUATION_PURPOSE
+                && fields.len() == DOCUMENT_DEFAULT_PERMISSION_FIELDS.len()
                 && DOCUMENT_DEFAULT_PERMISSION_FIELDS
                     .iter()
-                    .all(|field| payload.fields.iter().any(|allowed| allowed == field))
+                    .all(|field| fields.iter().any(|allowed| allowed == field))
         }
     }
 }

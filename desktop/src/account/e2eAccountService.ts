@@ -35,6 +35,12 @@ type E2eRemoteRotation = {
 };
 
 export const e2eAccountTestControl = {
+  simulateNoTrustedDevices() {
+    trustedDevices = [];
+    trustedDeviceEnvelopes.clear();
+    recoveryEnvelope = "";
+    recoveryVerificationKey = "";
+  },
   setManagedIntelligenceState(state: E2eManagedIntelligenceState) {
     managedIntelligenceState = state;
   },

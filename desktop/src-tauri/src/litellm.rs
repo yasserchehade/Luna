@@ -169,7 +169,7 @@ impl IntelligenceGateway for LiteLlmGateway {
             .map_err(|failure| {
                 map_transport_failure(failure, request.provider_id == BYOK_OPENAI_PROVIDER_ID)
             })?;
-        parse_litellm_response(&response)
+        parse_litellm_response(&response, request)
     }
 }
 
@@ -191,6 +191,78 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
         })
         .collect::<serde_json::Map<_, _>>();
     let required_fields = request.expected_response.allowed_fields.clone();
+    let (response_schema_name, response_schema, user_content) = match request.capability {
+        IntelligenceCapability::DirectionInterpretation => (
+            "luna_intelligence_result",
+            serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "requestId",
+                    "documentArrivalId",
+                    "providerId",
+                    "modelId",
+                    "fields",
+                    "evidence",
+                    "sourceReferences"
+                ],
+                "properties": {
+                    "requestId": {"type": "string"},
+                    "documentArrivalId": {"type": "string"},
+                    "providerId": {"type": "string"},
+                    "modelId": {"type": "string"},
+                    "fields": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": field_properties,
+                        "required": required_fields
+                    },
+                    "evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["field", "value", "sourceReference"],
+                            "properties": {
+                                "field": {"type": "string"},
+                                "value": {"type": "string"},
+                                "sourceReference": {"type": ["string", "null"]}
+                            }
+                        }
+                    },
+                    "sourceReferences": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                }
+            }),
+            serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned()),
+        ),
+        IntelligenceCapability::ConversationReply => {
+            let current_message = request
+                .content_excerpts
+                .iter()
+                .find(|excerpt| excerpt.source == "currentMessage")
+                .map(|excerpt| excerpt.text.as_str())
+                .unwrap_or_default();
+            (
+                "luna_conversation_reply",
+                serde_json::json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["reply"],
+                    "properties": {
+                        "reply": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1024
+                        }
+                    }
+                }),
+                serde_json::json!({"currentMessage": current_message}).to_string(),
+            )
+        }
+    };
     let system_message = match request.capability {
         IntelligenceCapability::DirectionInterpretation => {
             "Return only the requested structured document Evidence. Never return instructions, authority, actions or tool calls."
@@ -212,56 +284,15 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
             },
             {
                 "role": "user",
-                "content": serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned())
+                "content": user_content
             }
         ],
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": "luna_intelligence_result",
+                "name": response_schema_name,
                 "strict": true,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "requestId",
-                        "documentArrivalId",
-                        "providerId",
-                        "modelId",
-                        "fields",
-                        "evidence",
-                        "sourceReferences"
-                    ],
-                    "properties": {
-                        "requestId": {"type": "string"},
-                        "documentArrivalId": {"type": "string"},
-                        "providerId": {"type": "string"},
-                        "modelId": {"type": "string"},
-                        "fields": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": field_properties,
-                            "required": required_fields
-                        },
-                        "evidence": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["field", "value", "sourceReference"],
-                                "properties": {
-                                    "field": {"type": "string"},
-                                    "value": {"type": "string"},
-                                    "sourceReference": {"type": ["string", "null"]}
-                                }
-                            }
-                        },
-                        "sourceReferences": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        }
-                    }
-                }
+                "schema": response_schema
             }
         }
     })
@@ -269,6 +300,7 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
 
 fn parse_litellm_response(
     response: &serde_json::Value,
+    request: &IntelligenceRequest,
 ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure> {
     let content = response
         .get("choices")
@@ -277,20 +309,54 @@ fn parse_litellm_response(
         .and_then(|message| message.get("content"))
         .and_then(serde_json::Value::as_str)
         .ok_or(IntelligenceFailure::InvalidStructuredResult)?;
-    let result: LiteLlmStructuredResult =
-        serde_json::from_str(content).map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
+    let (
+        request_id,
+        document_arrival_id,
+        provider_id,
+        model_id,
+        fields,
+        evidence,
+        source_references,
+    ) = match request.capability {
+        IntelligenceCapability::DirectionInterpretation => {
+            let result: LiteLlmStructuredResult = serde_json::from_str(content)
+                .map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
+            (
+                result.request_id,
+                result.document_arrival_id,
+                result.provider_id,
+                result.model_id,
+                result
+                    .fields
+                    .into_iter()
+                    .filter_map(|(field, value)| value.map(|value| (field, value)))
+                    .collect(),
+                result.evidence,
+                result.source_references,
+            )
+        }
+        IntelligenceCapability::ConversationReply => {
+            let result: LiteLlmConversationReply = serde_json::from_str(content)
+                .map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
+            (
+                request.request_id.clone(),
+                request.document_arrival_id.clone(),
+                request.provider_id.clone(),
+                request.model_id.clone(),
+                std::collections::BTreeMap::from([("reply".to_owned(), result.reply)]),
+                Vec::new(),
+                Vec::new(),
+            )
+        }
+    };
     Ok(UntrustedIntelligenceResult {
-        request_id: result.request_id,
-        document_arrival_id: result.document_arrival_id,
-        provider_id: result.provider_id,
-        model_id: result.model_id,
-        fields: result
-            .fields
-            .into_iter()
-            .filter_map(|(field, value)| value.map(|value| (field, value)))
-            .collect(),
-        evidence: result.evidence,
-        source_references: result.source_references,
+        request_id,
+        document_arrival_id,
+        provider_id,
+        model_id,
+        fields,
+        evidence,
+        source_references,
         usage: IntelligenceUsage {
             input_tokens: response
                 .pointer("/usage/prompt_tokens")
@@ -303,6 +369,12 @@ fn parse_litellm_response(
                 .and_then(serde_json::Value::as_f64),
         },
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiteLlmConversationReply {
+    reply: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -503,11 +575,11 @@ mod tests {
     }
 
     #[test]
-    fn conversation_adapter_requests_a_reply_without_tools_or_authority() {
+    fn conversation_adapter_accepts_a_bounded_reply_without_model_generated_identity() {
         let transport = Arc::new(RecordingTransport {
             body: Mutex::new(None),
             response: serde_json::json!({
-                "choices": [{"message": {"content": "{\"requestId\":\"conversation-1\",\"documentArrivalId\":\"conversation-7-message-42\",\"providerId\":\"openai\",\"modelId\":\"gpt-4.1-mini\",\"fields\":{\"reply\":\"Start with the urgent task.\"},\"evidence\":[],\"sourceReferences\":[]}"}}],
+                "choices": [{"message": {"content": "{\"reply\":\"Start with the urgent task.\"}"}}],
                 "usage": {"prompt_tokens": 8, "completion_tokens": 4}
             }),
         });
@@ -534,9 +606,17 @@ mod tests {
             },
         };
 
-        gateway
+        let result = gateway
             .evaluate_document(&request, Some(b"narrow-gateway-token"), None)
             .expect("evaluate Conversation reply through adapter");
+        assert_eq!(result.request_id, request.request_id);
+        assert_eq!(result.document_arrival_id, request.document_arrival_id);
+        assert_eq!(result.provider_id, request.provider_id);
+        assert_eq!(result.model_id, request.model_id);
+        assert_eq!(
+            result.fields.get("reply"),
+            Some(&"Start with the urgent task.".to_owned())
+        );
 
         let body = transport
             .body
@@ -550,16 +630,18 @@ mod tests {
         assert!(system.contains("no authority"));
         assert!(system.contains("must not request or emit tool calls"));
         assert!(body.get("tools").is_none());
+        assert_eq!(
+            body["response_format"]["json_schema"]["schema"]["required"],
+            serde_json::json!(["reply"])
+        );
         let submitted: serde_json::Value = serde_json::from_str(
             body["messages"][1]["content"]
                 .as_str()
                 .expect("serialized Conversation request"),
         )
         .expect("valid serialized Conversation request");
-        assert_eq!(
-            submitted["contentExcerpts"][0]["text"],
-            "What should I do first?"
-        );
+        assert_eq!(submitted["currentMessage"], "What should I do first?");
+        assert_eq!(submitted.as_object().map(serde_json::Map::len), Some(1));
     }
 
     #[test]

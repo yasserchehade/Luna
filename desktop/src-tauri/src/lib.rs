@@ -287,16 +287,7 @@ async fn select_cabinet_folder(_app: tauri::AppHandle) -> Result<Option<String>,
         Ok(Some(folder.to_string_lossy().into_owned()))
     }
 
-    #[cfg(all(feature = "live-canary", not(feature = "e2e")))]
-    {
-        let folder = std::env::var_os("LUNA_LIVE_CANARY_CABINET_DIR")
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| "LUNA_LIVE_CANARY_CABINET_DIR is required.".to_owned())?;
-        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-        Ok(Some(folder.to_string_lossy().into_owned()))
-    }
-
-    #[cfg(not(any(feature = "e2e", feature = "live-canary")))]
+    #[cfg(not(feature = "e2e"))]
     {
         _app.dialog()
             .file()
@@ -855,16 +846,6 @@ fn clear_managed_intelligence_gateway_credential(
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CloudAssistanceCommand {
-    household_id: String,
-    arrival_id: i64,
-    selection: IntelligenceSelection,
-    consent: CloudConsentDecision,
-    existing_consent_grant_id: Option<i64>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct StoredHouseholdSession {
     account_id: String,
     household_id: String,
@@ -968,29 +949,11 @@ fn default_permission_matches(
     selected: &DefaultIntelligenceProvider,
     permission: DefaultIntelligencePermission,
 ) -> bool {
-    if scope.revoked
-        || !scope.default_permission
-        || scope.kind != ConsentGrantKind::Reusable
-        || scope.provider_id != selected.provider_id
-        || scope.model_id != selected.model_id
-    {
-        return false;
-    }
-    match permission {
-        DefaultIntelligencePermission::Conversation => {
-            scope.capability == IntelligenceCapability::ConversationReply
-                && scope.purpose == CONVERSATION_REPLY_PURPOSE
-                && scope.fields == [CURRENT_MESSAGE_FIELD.to_owned()]
-        }
-        DefaultIntelligencePermission::Document => {
-            scope.capability == IntelligenceCapability::DirectionInterpretation
-                && scope.purpose == DOCUMENT_EVALUATION_PURPOSE
-                && scope.fields.len() == DOCUMENT_DEFAULT_PERMISSION_FIELDS.len()
-                && DOCUMENT_DEFAULT_PERMISSION_FIELDS
-                    .iter()
-                    .all(|field| scope.fields.iter().any(|allowed| allowed == field))
-        }
-    }
+    let capability = match permission {
+        DefaultIntelligencePermission::Conversation => IntelligenceCapability::ConversationReply,
+        DefaultIntelligencePermission::Document => IntelligenceCapability::DirectionInterpretation,
+    };
+    scope.grants_default_permission(&selected.provider_id, &selected.model_id, capability)
 }
 
 fn revoke_default_intelligence_permissions(
@@ -1176,39 +1139,6 @@ fn portable_authorization_cutoff(
     portable
         .authorization_cutoff(&household_id, &device_id)
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn evaluate_document_with_cloud_assistance(
-    conversations: State<'_, ConversationState>,
-    intelligence: State<'_, IntelligenceState>,
-    portable: State<'_, PortableState>,
-    cabinet: State<'_, CabinetState>,
-    sessions: State<'_, AccountSessionManager>,
-    input: CloudAssistanceCommand,
-) -> Result<CloudAssistanceResolution, String> {
-    let granted_by = current_household_actor(sessions.inner(), &input.household_id)?;
-    let household_id = input.household_id.clone();
-    let result = DocumentIntelligenceService::new(
-        conversations.inner().clone(),
-        intelligence.inner().clone(),
-    )
-    .evaluate_document(
-        &input.household_id,
-        input.arrival_id,
-        input.selection,
-        input.consent,
-        &granted_by,
-        input.existing_consent_grant_id,
-    );
-    capture_portable_state(
-        portable.inner(),
-        conversations.inner(),
-        intelligence.inner(),
-        cabinet.inner(),
-        &household_id,
-    )?;
-    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2178,23 +2108,14 @@ fn open_household_state(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
-    #[cfg(all(debug_assertions, any(feature = "e2e", feature = "live-canary")))]
+    #[cfg(all(debug_assertions, feature = "e2e"))]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
     let builder = builder.setup(|app| {
-        #[cfg(not(any(feature = "e2e", feature = "live-canary")))]
+        #[cfg(not(feature = "e2e"))]
         let application_data = app.path().app_data_dir()?;
-        #[cfg(all(feature = "live-canary", not(feature = "e2e")))]
-        let application_data = std::env::var_os("LUNA_LIVE_CANARY_DATA_DIR")
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "LUNA_LIVE_CANARY_DATA_DIR is required.",
-                )
-            })?;
         #[cfg(feature = "e2e")]
         let application_data =
             std::env::temp_dir().join(format!("luna-e2e-device-{}", std::process::id()));
@@ -2209,14 +2130,8 @@ pub fn run() {
         app.manage(CabinetManager::new(settings));
         #[cfg(not(feature = "e2e"))]
         {
-            let household_vault_service = if cfg!(feature = "live-canary") {
-                "app.luna.live-canary.household"
-            } else {
-                "app.luna.household"
-            };
-            let trusted_device = TrustedDeviceManager::new(OsCredentialVault::new(
-                household_vault_service,
-            ));
+            let trusted_device =
+                TrustedDeviceManager::new(OsCredentialVault::new("app.luna.household"));
             app.manage(ConversationStore::open(&database, trusted_device.clone())?);
             app.manage(CloudIntelligenceStore::open(
                 &database,
@@ -2229,16 +2144,9 @@ pub fn run() {
             app.manage(trusted_device);
         }
         #[cfg(not(feature = "e2e"))]
-        {
-            let account_vault_service = if cfg!(feature = "live-canary") {
-                "app.luna.live-canary.account"
-            } else {
-                "app.luna.account"
-            };
-            app.manage(AccountSessionStore::new(OsCredentialVault::new(
-                account_vault_service,
-            )));
-        }
+        app.manage(AccountSessionStore::new(OsCredentialVault::new(
+            "app.luna.account",
+        )));
         #[cfg(feature = "e2e")]
         {
             let trusted_device = TrustedDeviceManager::new(E2eCredentialVault::default());
@@ -2302,7 +2210,6 @@ pub fn run() {
         clear_intelligence_provider_credential,
         set_managed_intelligence_gateway_credential,
         clear_managed_intelligence_gateway_credential,
-        evaluate_document_with_cloud_assistance,
         evaluate_document_with_default_intelligence_provider,
         list_cloud_consent_scopes,
         revoke_cloud_consent_scope,

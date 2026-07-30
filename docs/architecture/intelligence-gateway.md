@@ -26,7 +26,7 @@ flowchart TD
 
 `DocumentIntelligenceService` is the application seam joining protected Document Handling state to that boundary. The frontend supplies only a Document Arrival identifier. The Rust application boundary resolves the saved exact default route and applicable Document permission, then constructs the request; the Review Card cannot construct an arbitrary provider payload or select another route.
 
-Ordinary Conversation uses a separate atomic application command. It first stores the member message, resolves the saved exact default route and Conversation permission, submits only that new message, validates the structured reply, and then stores the reply as a Luna-authored Conversation message. The provider result has no command, tool, consent, filing or Household authority. If configuration, consent, transport or validation fails, the member message remains saved and no provider reply is added.
+Ordinary Conversation uses a separate atomic application command. It first stores the member message, resolves the saved exact default route and Conversation permission, submits only that new message, validates a bounded `reply` object, and then stores the reply as a Luna-authored Conversation message. The provider does not receive or reproduce Luna's request, Document Arrival, provider or model identities; the synchronous adapter attaches those locally from the request before common gateway validation. The provider result has no command, tool, consent, filing or Household authority. If configuration, consent, transport or validation fails, the member message remains saved and no provider reply is added.
 
 The production catalogue contains two deliberately separate OpenAI routes:
 
@@ -73,18 +73,23 @@ Luna does not transmit the Household identifier, Cabinet or source paths, checks
 Options shows one exact Default Intelligence Provider and model and two
 independent permissions. Conversation permission is restricted to the
 `currentMessage` field. Document permission is restricted to the enumerated
-Document evaluation fields. Changing or disabling the default revokes both
+Document evaluation fields: media type, document type, service provider,
+addressee, property, account, amount, relevant dates and up to 4,000 characters
+of locally extracted text. Changing or disabling the default revokes both
 permissions. Luna does not silently select a fallback and the Review Card does
 not expose a competing provider/model or per-Document consent selector.
 
 Legacy one-time and narrowly scoped Document consent remains protected by its
-original provider/model, capability, local-scope Evidence and disclosed fields.
-A changed media type, local context value, provider, model, capability or wider
-disclosed field set still requires a new Consent Grant.
+original provider/model, capability, local-scope Evidence and disclosed fields
+for history and compatibility. Options and Conversation no longer issue or
+accept one-time Document consent; member-initiated evaluation requires the
+verified Default Intelligence Permission. A changed media type, local context
+value, provider, model, capability or wider disclosed field set still requires
+a new Consent Grant.
 
 ## Validation and authority
 
-The gateway result must echo the request, Document Arrival, provider and model identities. Luna rejects unknown fields, empty or oversized values, malformed structured results and mismatched correlation. Document Handling then rejects candidate fields that already have Member Direction, malformed monetary values and dates that are not valid ISO calendar dates, in addition to its existing bounds and control-character constraints.
+Direction Interpretation results must echo the request, Document Arrival, provider and model identities. Conversation providers return only a nonempty bounded `reply`; the adapter preserves the Luna-owned request, correlation and exact route identities without asking the model to generate them. Luna rejects unknown fields, empty or oversized values, malformed structured results and mismatched correlation. Document Handling then rejects candidate fields that already have Member Direction, malformed monetary values and dates that are not valid ISO calendar dates, in addition to its existing bounds and control-character constraints.
 
 The provider result cannot create Member Direction or mutate a Document Arrival. A validated candidate is held in the review interface until a Household Member accepts or corrects it through the existing Member Direction command. History records provider completion and later candidate acceptance, correction or rejection as separate immutable events; an earlier event is never rewritten.
 

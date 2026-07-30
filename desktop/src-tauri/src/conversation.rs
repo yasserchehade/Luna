@@ -399,34 +399,9 @@ impl MemberDirectionInterpreter for DeterministicMemberDirectionInterpreter {
                     confident(MemberDirectionCommand::UseCloudAssistance {
                         consent: CloudConsentDecision::KeepLocal,
                     })
-                } else if matches!(
-                    normalized.as_str(),
-                    "allow once" | "use cloud once" | "one time"
-                ) {
-                    confident(MemberDirectionCommand::UseCloudAssistance {
-                        consent: CloudConsentDecision::AllowOnce,
-                    })
-                } else if matches!(
-                    normalized.as_str(),
-                    "allow this scoped future use"
-                        | "allow for this scope"
-                        | "remember this consent"
-                ) {
-                    confident(MemberDirectionCommand::UseCloudAssistance {
-                        consent: CloudConsentDecision::AllowForScope,
-                    })
-                } else if matches!(
-                    normalized.as_str(),
-                    "use existing consent grant"
-                        | "use the existing consent grant"
-                        | "use existing scope"
-                ) {
-                    confident(MemberDirectionCommand::UseCloudAssistance {
-                        consent: CloudConsentDecision::UseExistingScope,
-                    })
                 } else {
                     ambiguous(
-                        "Choose a disclosed provider and consent option below, or say “Keep local”.",
+                        "Enable Document permission in Options, use Review details, or say \"Keep local\".",
                     )
                 }
             }
@@ -3746,7 +3721,7 @@ fn document_conversation_view(
             | DocumentProcessingState::WaitingForCloudAssistance
     ) {
         let message = format!(
-            "{understanding}\n\nLocal Evidence is not enough to interpret this Document safely. Review the disclosed Intelligence Provider and consent choices below, or say “Keep local”."
+            "{understanding}\n\nLocal Evidence is not enough to interpret this Document safely. Use Review details to ask the Default Intelligence Provider when Document permission is enabled in Options, or say \"Keep local\"."
         );
         return DocumentConversationView {
             understanding,
