@@ -287,7 +287,7 @@ async fn select_cabinet_folder(_app: tauri::AppHandle) -> Result<Option<String>,
         Ok(Some(folder.to_string_lossy().into_owned()))
     }
 
-    #[cfg(feature = "live-canary")]
+    #[cfg(all(feature = "live-canary", not(feature = "e2e")))]
     {
         let folder = std::env::var_os("LUNA_LIVE_CANARY_CABINET_DIR")
             .map(std::path::PathBuf::from)
@@ -2186,7 +2186,7 @@ pub fn run() {
     let builder = builder.setup(|app| {
         #[cfg(not(any(feature = "e2e", feature = "live-canary")))]
         let application_data = app.path().app_data_dir()?;
-        #[cfg(feature = "live-canary")]
+        #[cfg(all(feature = "live-canary", not(feature = "e2e")))]
         let application_data = std::env::var_os("LUNA_LIVE_CANARY_DATA_DIR")
             .map(std::path::PathBuf::from)
             .ok_or_else(|| {
