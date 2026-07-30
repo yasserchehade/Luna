@@ -7,10 +7,59 @@ import type {
 } from "../conversation/conversationService";
 import {
   cloudAssistanceLoadErrorMessage,
+  defaultRouteSelection,
   loadCloudAssistanceOptionsData,
   providerApiKeysLinkLabel,
   providerSetupAvailability,
 } from "./CloudAssistanceOptions";
+
+test("a stale saved default proposes the configured replacement route", () => {
+  const providers: IntelligenceProviderStatus[] = [{
+    descriptor: {
+      id: "openai",
+      name: "OpenAI",
+      description: "Luna-managed Cloud Assistance",
+      models: [{ id: "gpt-4.1-mini", name: "GPT-4.1 mini" }],
+      managedByLuna: true,
+      authUrl: null,
+    },
+    gatewayConfigured: true,
+    configured: true,
+  }];
+
+  assert.equal(
+    defaultRouteSelection({
+      providerId: "openai",
+      modelId: "gpt-5.6-luna",
+      invalid: false,
+    }, providers, ""),
+    "openai::gpt-4.1-mini",
+  );
+});
+
+test("an available saved default remains the selected exact route", () => {
+  const providers: IntelligenceProviderStatus[] = [{
+    descriptor: {
+      id: "openai",
+      name: "OpenAI",
+      description: "Luna-managed Cloud Assistance",
+      models: [{ id: "gpt-4.1-mini", name: "GPT-4.1 mini" }],
+      managedByLuna: true,
+      authUrl: null,
+    },
+    gatewayConfigured: true,
+    configured: true,
+  }];
+
+  assert.equal(
+    defaultRouteSelection({
+      providerId: "openai",
+      modelId: "gpt-4.1-mini",
+      invalid: false,
+    }, providers, ""),
+    "openai::gpt-4.1-mini",
+  );
+});
 
 test("provider controls remain available when protected Consent Grants cannot be opened", async () => {
   const providers: IntelligenceProviderStatus[] = [{

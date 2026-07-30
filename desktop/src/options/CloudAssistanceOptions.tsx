@@ -93,6 +93,24 @@ export function providerSetupAvailability(
   };
 }
 
+export function defaultRouteSelection(
+  defaultProvider: DefaultIntelligenceProvider | null,
+  providers: IntelligenceProviderStatus[],
+  current: string,
+): string {
+  const configuredRoutes = providers.flatMap(({ descriptor, configured }) => (
+    configured
+      ? descriptor.models.map(({ id }) => `${descriptor.id}::${id}`)
+      : []
+  ));
+  const savedRoute = defaultProvider && !defaultProvider.invalid
+    ? `${defaultProvider.providerId}::${defaultProvider.modelId}`
+    : "";
+  if (configuredRoutes.includes(savedRoute)) return savedRoute;
+  if (configuredRoutes.includes(current)) return current;
+  return configuredRoutes[0] ?? "";
+}
+
 function managedAccessStatus(
   access: HouseholdIntelligenceAccess | null,
   providerConfigured: boolean,
@@ -145,15 +163,11 @@ export function CloudAssistanceOptions({
     setProviders(data.providers);
     setScopes(data.scopes);
     setDefaultProvider(data.defaultProvider);
-    setSelectedRoute((current) => {
-      if (data.defaultProvider && !data.defaultProvider.invalid) {
-        return `${data.defaultProvider.providerId}::${data.defaultProvider.modelId}`;
-      }
-      if (current) return current;
-      const first = data.providers.find(({ configured }) => configured);
-      const model = first?.descriptor.models[0];
-      return first && model ? `${first.descriptor.id}::${model.id}` : "";
-    });
+    setSelectedRoute((current) => defaultRouteSelection(
+      data.defaultProvider,
+      data.providers,
+      current,
+    ));
     setProviderError(data.providerError);
     setConsentError(data.consentError);
     setAccessError(data.accessError);
@@ -335,6 +349,9 @@ export function CloudAssistanceOptions({
           )))}
         </select>
       </label>
+      {defaultProvider && !defaultProvider.invalid && !activeDefaultStatus && <p role="status" className="session-notice">
+        The saved default is no longer available. Review the configured replacement above, then choose <strong>Save default</strong>. Luna will not change the route or transfer permissions without your confirmation.
+      </p>}
       <div className="default-intelligence-actions">
         <button
           type="button"
