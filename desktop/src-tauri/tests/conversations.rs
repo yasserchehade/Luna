@@ -2920,6 +2920,150 @@ fn a_duplicate_review_drops_a_candidate_deleted_after_display() {
 }
 
 #[test]
+fn a_duplicate_review_survives_a_temporarily_unavailable_cabinet() {
+    let directory = tempfile::tempdir().expect("temporary unavailable duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    let unavailable = directory.path().join("Cabinet temporarily unavailable");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let original = digital_pdf_with_text(
+        "Document Type: Utility bill; Service Provider: Household Service; Addressee: Sam Rivera",
+    );
+    let first_source = directory.path().join("first").join("utility bill.pdf");
+    let second_source = directory.path().join("second").join("utility bill.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    fs::write(&first_source, &original).expect("write first Original");
+    fs::write(&second_source, &original).expect("write second Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &first_source,
+        "Filed utility bill.pdf",
+    );
+    store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect("file first Original");
+    let conversation = store
+        .create_conversation("rivera-household", "Unavailable duplicate review")
+        .expect("create Conversation");
+    let replacement = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach duplicate Original");
+    assert_eq!(
+        replacement.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    fs::rename(&cabinet, &unavailable).expect("disconnect Cabinet");
+
+    let waiting = store
+        .list_document_arrivals("rivera-household")
+        .expect("refresh while Cabinet is unavailable")
+        .into_iter()
+        .find(|arrival| arrival.id == replacement.id)
+        .expect("retain replacement arrival");
+    assert_eq!(
+        waiting.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert_eq!(
+        waiting
+            .duplicate_review
+            .as_ref()
+            .expect("retain duplicate review")
+            .candidates
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_possible_duplicate_review_is_removed_when_candidate_context_changes() {
+    let directory = tempfile::tempdir().expect("temporary corrected duplicate directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let first_source = directory.path().join("july").join("statement.pdf");
+    let second_source = directory.path().join("august").join("statement.pdf");
+    fs::create_dir_all(first_source.parent().expect("first source directory"))
+        .expect("create first source directory");
+    fs::create_dir_all(second_source.parent().expect("second source directory"))
+        .expect("create second source directory");
+    fs::write(
+        &first_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-07-15",
+        ),
+    )
+    .expect("write first bill");
+    fs::write(
+        &second_source,
+        digital_pdf_with_text(
+            "Document Type: Electricity bill; Service Provider: AGL Energy; Addressee: Sam Rivera; Property: 12 Seabreeze Avenue; Account: 12345678; Relevant Date: 2026-08-15",
+        ),
+    )
+    .expect("write changed bill");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Corrected duplicate review")
+        .expect("create Conversation");
+    let first = store
+        .attach_document("rivera-household", conversation.id, &first_source, &cabinet)
+        .expect("attach first bill");
+    let second = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &second_source,
+            &cabinet,
+        )
+        .expect("attach changed bill");
+    assert_eq!(
+        second.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    store
+        .record_member_direction(
+            "rivera-household",
+            first.id,
+            DocumentContextDirection {
+                document_type: Some("Insurance notice".to_owned()),
+                document_type_resolved: true,
+                service_provider: Some("Household Insurer".to_owned()),
+                service_provider_resolved: true,
+                addressee: Some("Sam Rivera".to_owned()),
+                addressee_resolved: true,
+                property_resolved: true,
+                account_resolved: true,
+                amount_resolved: true,
+                relevant_dates_resolved: true,
+                ..Default::default()
+            },
+            "Household records",
+        )
+        .expect("correct candidate Household Context");
+
+    let refreshed = store
+        .list_document_arrivals("rivera-household")
+        .expect("refresh corrected duplicate review")
+        .into_iter()
+        .find(|arrival| arrival.id == second.id)
+        .expect("retain changed bill");
+    assert_ne!(
+        refreshed.processing_state,
+        DocumentProcessingState::PossibleDuplicate
+    );
+    assert!(refreshed.duplicate_review.is_none());
+}
+
+#[test]
 fn a_dismissed_duplicate_is_not_offered_again_as_an_original() {
     let directory = tempfile::tempdir().expect("temporary dismissed duplicate directory");
     let cabinet = directory.path().join("Cabinet");

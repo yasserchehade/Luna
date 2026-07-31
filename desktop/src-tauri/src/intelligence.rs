@@ -1222,21 +1222,8 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         &self,
         household_id: &str,
     ) -> Result<Vec<CloudAssistanceAuditEvent>, IntelligenceFailure> {
-        let connection = self.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, protected_payload FROM cloud_assistance_events
-                 WHERE household_id = ?1 ORDER BY id DESC",
-            )
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        let rows = statement
-            .query_map(params![household_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        rows.into_iter()
+        self.audit_rows(household_id)?
+            .into_iter()
             .map(|(id, protected)| {
                 let payload: AuditPayload = self.open_protected(household_id, &protected)?;
                 Ok(cloud_assistance_audit_event(household_id, id, payload))
@@ -1248,6 +1235,18 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         &self,
         household_id: &str,
     ) -> Result<Vec<CloudAssistanceAuditEvent>, IntelligenceFailure> {
+        let mut events = Vec::new();
+        for (id, protected) in self.audit_rows(household_id)? {
+            match self.open_protected::<AuditPayload>(household_id, &protected) {
+                Ok(payload) => events.push(cloud_assistance_audit_event(household_id, id, payload)),
+                Err(IntelligenceFailure::ProtectedStateUnavailable) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(events)
+    }
+
+    fn audit_rows(&self, household_id: &str) -> Result<Vec<(i64, String)>, IntelligenceFailure> {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare(
@@ -1262,15 +1261,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
             .map_err(|_| IntelligenceFailure::StorageUnavailable)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
-        let mut events = Vec::new();
-        for (id, protected) in rows {
-            match self.open_protected::<AuditPayload>(household_id, &protected) {
-                Ok(payload) => events.push(cloud_assistance_audit_event(household_id, id, payload)),
-                Err(IntelligenceFailure::ProtectedStateUnavailable) => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(events)
+        Ok(rows)
     }
 
     fn require_selection(

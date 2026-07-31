@@ -1474,10 +1474,7 @@ impl<V: CredentialVault> ConversationStore<V> {
                     self.open_protected(household_id, &protected)?;
                 payload.restore_legacy_original_path();
                 if payload.processing_state == DocumentProcessingState::PossibleDuplicate {
-                    let refreshed_review = self.refresh_duplicate_review(
-                        household_id,
-                        payload.duplicate_review.as_ref(),
-                    )?;
+                    let refreshed_review = self.refresh_duplicate_review(household_id, &payload)?;
                     if refreshed_review != payload.duplicate_review {
                         payload.duplicate_review = refreshed_review;
                         if payload.duplicate_review.is_none() {
@@ -2943,7 +2940,9 @@ impl<V: CredentialVault> ConversationStore<V> {
         let mut candidates = Vec::new();
         for (existing_id, protected) in protected_rows {
             let existing: DocumentArrivalPayload = self.open_protected(household_id, &protected)?;
-            if !duplicate_candidate_is_available(&existing) {
+            if duplicate_candidate_availability(&existing)
+                != DuplicateCandidateAvailability::Available
+            {
                 continue;
             }
             let kind = if existing.checksum == payload.checksum {
@@ -2975,9 +2974,9 @@ impl<V: CredentialVault> ConversationStore<V> {
     fn refresh_duplicate_review(
         &self,
         household_id: &str,
-        review: Option<&DuplicateReview>,
+        current: &DocumentArrivalPayload,
     ) -> Result<Option<DuplicateReview>, ConversationError> {
-        let Some(review) = review else {
+        let Some(review) = current.duplicate_review.as_ref() else {
             return Ok(None);
         };
         let mut candidates = Vec::new();
@@ -2986,7 +2985,12 @@ impl<V: CredentialVault> ConversationStore<V> {
             match existing {
                 Ok((_, payload))
                     if payload.checksum == candidate.checksum
-                        && duplicate_candidate_is_available(&payload) =>
+                        && match candidate.kind {
+                            DuplicateKind::Exact => payload.checksum == current.checksum,
+                            DuplicateKind::Possible => possible_duplicate(&payload, current),
+                        }
+                        && duplicate_candidate_availability(&payload)
+                            != DuplicateCandidateAvailability::Missing =>
                 {
                     candidates.push(candidate.clone());
                 }
@@ -3045,8 +3049,7 @@ impl<V: CredentialVault> ConversationStore<V> {
         if payload.processing_state != DocumentProcessingState::PossibleDuplicate {
             return Err(ConversationError::DuplicateDecisionUnavailable);
         }
-        let refreshed_review =
-            self.refresh_duplicate_review(household_id, payload.duplicate_review.as_ref())?;
+        let refreshed_review = self.refresh_duplicate_review(household_id, &payload)?;
         if refreshed_review != payload.duplicate_review {
             payload.duplicate_review = refreshed_review;
         }
@@ -4690,19 +4693,70 @@ fn processing_state_after_local_inspection(
     }
 }
 
-fn duplicate_candidate_is_available(payload: &DocumentArrivalPayload) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DuplicateCandidateAvailability {
+    Available,
+    Missing,
+    TemporarilyUnavailable,
+}
+
+fn duplicate_candidate_availability(
+    payload: &DocumentArrivalPayload,
+) -> DuplicateCandidateAvailability {
     if matches!(
         payload.processing_state,
         DocumentProcessingState::PossibleDuplicate | DocumentProcessingState::Dismissed
     ) {
-        return false;
+        return DuplicateCandidateAvailability::Missing;
     }
     let original_path = payload
         .filed_original
         .as_ref()
         .map(|filed| filed.final_path.as_path())
         .unwrap_or(payload.original_path.as_path());
-    fs::read(original_path).is_ok_and(|original| sha256(&original) == payload.checksum)
+    match fs::read(original_path) {
+        Ok(original) if sha256(&original) == payload.checksum => {
+            DuplicateCandidateAvailability::Available
+        }
+        Ok(_) => DuplicateCandidateAvailability::Missing,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if candidate_cabinet_root(payload).is_some_and(|root| !root.is_dir()) {
+                DuplicateCandidateAvailability::TemporarilyUnavailable
+            } else {
+                DuplicateCandidateAvailability::Missing
+            }
+        }
+        Err(_) => DuplicateCandidateAvailability::TemporarilyUnavailable,
+    }
+}
+
+fn candidate_cabinet_root(payload: &DocumentArrivalPayload) -> Option<PathBuf> {
+    if let Some(filed) = &payload.filed_original {
+        let relative = Path::new(&filed.filing_decision.cabinet_destination);
+        if relative.is_absolute() {
+            return None;
+        }
+        let mut root = filed.final_path.clone();
+        for _ in relative.components() {
+            if !root.pop() {
+                return None;
+            }
+        }
+        return Some(root);
+    }
+    let checksum_directory = payload.original_path.parent()?;
+    if checksum_directory.file_name()?.to_str()? != payload.checksum {
+        return None;
+    }
+    let incoming = checksum_directory.parent()?;
+    if !incoming
+        .file_name()?
+        .to_str()?
+        .eq_ignore_ascii_case("Incoming")
+    {
+        return None;
+    }
+    incoming.parent().map(Path::to_path_buf)
 }
 
 fn valid_candidate_value(value: Option<String>) -> Result<Option<String>, ConversationError> {
