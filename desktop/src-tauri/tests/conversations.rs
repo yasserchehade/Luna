@@ -2693,9 +2693,9 @@ fn an_unavailable_cabinet_keeps_a_ready_original_waiting_for_retry() {
         "Queued rates.jpg",
     );
     fs::rename(&cabinet, &unavailable).expect("disconnect Cabinet");
-    assert!(store
+    store
         .resume_document_filings("rivera-household", &cabinet)
-        .is_err());
+        .expect("keep queued filing waiting without reopening completed work");
     let queued_waiting = store
         .list_document_arrivals("rivera-household")
         .expect("list queued work after batch retry")
@@ -2808,6 +2808,52 @@ fn a_deleted_filed_original_is_not_offered_as_a_duplicate_candidate() {
         DocumentProcessingState::PossibleDuplicate
     );
     assert!(replacement.duplicate_review.is_none());
+}
+
+#[test]
+fn completed_filing_is_not_reported_as_recovery_work_after_external_deletion() {
+    let directory = tempfile::tempdir().expect("temporary deleted filed Original directory");
+    let cabinet = directory.path().join("Cabinet");
+    fs::create_dir_all(cabinet.join("Household records")).expect("create Cabinet");
+    let source = directory.path().join("utility bill.pdf");
+    fs::write(
+        &source,
+        digital_pdf_with_text(
+            "Document Type: Utility bill; Service Provider: Household Service; Addressee: Sam Rivera",
+        ),
+    )
+    .expect("write Original");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let ready = prepare_document_for_filing(
+        &store,
+        "rivera-household",
+        &cabinet,
+        &source,
+        "Filed utility bill.pdf",
+    );
+    let filed = store
+        .file_document("rivera-household", ready.id, &cabinet)
+        .expect("file Original");
+    let filed_path = filed
+        .filed_original
+        .as_ref()
+        .expect("retain Filed Original")
+        .final_path
+        .clone();
+    fs::remove_file(&filed_path).expect("delete completed Original outside Luna");
+
+    store
+        .resume_document_filings("rivera-household", &cabinet)
+        .expect("ignore completed filing during recovery");
+
+    let unchanged = store
+        .list_document_arrivals("rivera-household")
+        .expect("list completed filing")
+        .into_iter()
+        .find(|arrival| arrival.id == ready.id)
+        .expect("retain completed filing history");
+    assert_eq!(unchanged.processing_state, DocumentProcessingState::Filed);
+    assert!(!filed_path.exists());
 }
 
 #[test]

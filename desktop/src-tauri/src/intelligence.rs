@@ -1239,25 +1239,38 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         rows.into_iter()
             .map(|(id, protected)| {
                 let payload: AuditPayload = self.open_protected(household_id, &protected)?;
-                Ok(CloudAssistanceAuditEvent {
-                    id,
-                    household_id: household_id.to_owned(),
-                    request_id: payload.request_id,
-                    document_arrival_id: payload.document_arrival_id,
-                    provider_id: payload.provider_id,
-                    model_id: payload.model_id,
-                    capability: payload.capability,
-                    purpose: payload.purpose,
-                    consent: payload.consent,
-                    consent_grant_id: payload.consent_grant_id,
-                    granted_by: payload.granted_by,
-                    outcome: payload.outcome,
-                    candidate_disposition: payload.candidate_disposition,
-                    reason: payload.reason,
-                    usage: payload.usage,
-                })
+                Ok(cloud_assistance_audit_event(household_id, id, payload))
             })
             .collect()
+    }
+
+    pub(crate) fn portable_audit_exports(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<CloudAssistanceAuditEvent>, IntelligenceFailure> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, protected_payload FROM cloud_assistance_events
+                 WHERE household_id = ?1 ORDER BY id DESC",
+            )
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        let rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| IntelligenceFailure::StorageUnavailable)?;
+        let mut events = Vec::new();
+        for (id, protected) in rows {
+            match self.open_protected::<AuditPayload>(household_id, &protected) {
+                Ok(payload) => events.push(cloud_assistance_audit_event(household_id, id, payload)),
+                Err(IntelligenceFailure::ProtectedStateUnavailable) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(events)
     }
 
     fn require_selection(
@@ -1584,6 +1597,30 @@ fn consent_scope(household_id: &str, id: i64, payload: ConsentPayload) -> CloudC
         consumed_at: payload.consumed_at,
         revoked: payload.revoked_at.is_some(),
         revoked_at: payload.revoked_at,
+    }
+}
+
+fn cloud_assistance_audit_event(
+    household_id: &str,
+    id: i64,
+    payload: AuditPayload,
+) -> CloudAssistanceAuditEvent {
+    CloudAssistanceAuditEvent {
+        id,
+        household_id: household_id.to_owned(),
+        request_id: payload.request_id,
+        document_arrival_id: payload.document_arrival_id,
+        provider_id: payload.provider_id,
+        model_id: payload.model_id,
+        capability: payload.capability,
+        purpose: payload.purpose,
+        consent: payload.consent,
+        consent_grant_id: payload.consent_grant_id,
+        granted_by: payload.granted_by,
+        outcome: payload.outcome,
+        candidate_disposition: payload.candidate_disposition,
+        reason: payload.reason,
+        usage: payload.usage,
     }
 }
 
@@ -2369,6 +2406,51 @@ mod tests {
             .expect("export only verified consent");
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].scope, verified);
+    }
+
+    #[test]
+    fn portable_audit_export_skips_unreadable_history_without_hiding_readable_events() {
+        let gateway = DeterministicIntelligenceGateway::new(
+            "anthropic",
+            "claude-sonnet-4-5",
+            BTreeMap::new(),
+        );
+        let store = store_with_gateway(gateway);
+        for arrival_id in ["arrival-unreadable", "arrival-readable"] {
+            assert_eq!(
+                store.evaluate_document(
+                    "household",
+                    IntelligenceSelection {
+                        provider_id: "openai".to_owned(),
+                        model_id: "gpt-4.1-mini".to_owned(),
+                    },
+                    authorised_request(arrival_id),
+                    CloudConsentDecision::AllowOnce,
+                    "organiser-1",
+                    None,
+                ),
+                Err(IntelligenceFailure::InvalidStructuredResult)
+            );
+        }
+        store
+            .connect()
+            .expect("open Intelligence database")
+            .execute(
+                "UPDATE cloud_assistance_events SET protected_payload = ?1
+                 WHERE id = (SELECT MIN(id) FROM cloud_assistance_events)",
+                params!["not-a-protected-payload"],
+            )
+            .expect("damage one historical audit payload");
+
+        assert_eq!(
+            store.list_audit_events("household"),
+            Err(IntelligenceFailure::ProtectedStateUnavailable)
+        );
+        let exports = store
+            .portable_audit_exports("household")
+            .expect("export readable audit history");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].document_arrival_id, "arrival-readable");
     }
 
     #[test]

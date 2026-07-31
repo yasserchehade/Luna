@@ -2863,8 +2863,12 @@ impl<V: CredentialVault> ConversationStore<V> {
                     DocumentProcessingState::ReadyToFile
                         | DocumentProcessingState::Filing
                         | DocumentProcessingState::CabinetUnavailable
-                        | DocumentProcessingState::Filed
-                )
+                ) || (arrival.processing_state == DocumentProcessingState::Filed
+                    && arrival.original_path.is_file()
+                    && arrival
+                        .filed_original
+                        .as_ref()
+                        .is_some_and(|filed| filed.final_path.is_file()))
             })
             .map(|arrival| arrival.id)
             .collect::<Vec<_>>();

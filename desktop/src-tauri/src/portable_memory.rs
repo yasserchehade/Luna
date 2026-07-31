@@ -1103,7 +1103,7 @@ impl<V: CredentialVault> PortableMemoryStore<V> {
             )?;
         }
 
-        for event in intelligence.list_audit_events(household_id)? {
+        for event in intelligence.portable_audit_exports(household_id)? {
             let subject_reference = deterministic_reference(
                 "subject",
                 household_id,
