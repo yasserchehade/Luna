@@ -102,6 +102,47 @@ fn a_confirmed_recovery_key_makes_the_first_device_trusted() {
 }
 
 #[test]
+fn a_legacy_trusted_device_backfills_its_missing_current_epoch_key() {
+    let household_id = "10101010-1010-4010-8010-101010101010";
+    let vault = MemoryCredentialVault::default();
+    let manager = TrustedDeviceManager::new(vault.clone());
+    let enrollment = manager
+        .enrol_first_device(household_id)
+        .expect("first device enrolment should succeed");
+    manager
+        .confirm_recovery_key(
+            household_id,
+            &enrollment.recovery_key,
+            &enrollment.recovery_envelope,
+        )
+        .expect("the Recovery Key should confirm");
+    manager
+        .set_current_key_epoch(household_id, 1)
+        .expect("the current key epoch should be recorded");
+    manager
+        .configure_device_pin(household_id, "246810")
+        .expect("the device PIN should complete trust");
+    let protected = manager
+        .protect_household_state(household_id, b"portable household memory")
+        .expect("the unlocked device should protect portable memory");
+
+    vault
+        .delete_secret(&format!("household:{household_id}:memory-key:epoch:1"))
+        .expect("the fixture should represent a device enrolled before epoch-key retention");
+
+    assert_eq!(
+        manager
+            .open_household_state_at_epoch(household_id, 1, &protected)
+            .expect("the current key should backfill its missing epoch slot"),
+        b"portable household memory"
+    );
+    assert!(vault
+        .get_secret(&format!("household:{household_id}:memory-key:epoch:1"))
+        .expect("the vault should remain readable")
+        .is_some());
+}
+
+#[test]
 fn an_unlocked_trusted_device_authorizes_its_managed_intelligence_challenge() {
     let household_id = "13131313-1313-4313-8313-131313131313";
     let manager = TrustedDeviceManager::new(MemoryCredentialVault::default());

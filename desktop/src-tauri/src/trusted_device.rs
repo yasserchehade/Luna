@@ -733,13 +733,7 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         protected: &ProtectedHouseholdState,
     ) -> Result<Vec<u8>, TrustedDeviceError> {
         self.require_unlocked(household_id)?;
-        let key = self
-            .vault
-            .get_secret(&household_key_epoch_name(household_id, key_epoch))?
-            .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
-        if key.len() != HOUSEHOLD_KEY_BYTES {
-            return Err(TrustedDeviceError::MissingHouseholdKey);
-        }
+        let key = self.household_key_at_epoch(household_id, key_epoch)?;
         let cipher = XChaCha20Poly1305::new_from_slice(&key)
             .map_err(|_| TrustedDeviceError::ProtectedStateRejected)?;
         cipher
@@ -774,6 +768,26 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
         Ok(key)
     }
 
+    fn household_key_at_epoch(
+        &self,
+        household_id: &str,
+        key_epoch: u32,
+    ) -> Result<Vec<u8>, TrustedDeviceError> {
+        let name = household_key_epoch_name(household_id, key_epoch);
+        if let Some(key) = self.vault.get_secret(&name)? {
+            if key.len() != HOUSEHOLD_KEY_BYTES {
+                return Err(TrustedDeviceError::MissingHouseholdKey);
+            }
+            return Ok(key);
+        }
+        if key_epoch != self.current_key_epoch(household_id)? {
+            return Err(TrustedDeviceError::MissingHouseholdKey);
+        }
+        let key = self.household_key(household_id)?;
+        self.vault.set_secret(&name, &key)?;
+        Ok(key)
+    }
+
     fn local_recovery_keyring(
         &self,
         household_id: &str,
@@ -781,13 +795,7 @@ impl<V: CredentialVault> TrustedDeviceManager<V> {
     ) -> Result<RecoveryKeyring, TrustedDeviceError> {
         let mut keys = Vec::with_capacity(current_epoch as usize);
         for epoch in 1..=current_epoch {
-            let key = self
-                .vault
-                .get_secret(&household_key_epoch_name(household_id, epoch))?
-                .ok_or(TrustedDeviceError::MissingHouseholdKey)?;
-            if key.len() != HOUSEHOLD_KEY_BYTES {
-                return Err(TrustedDeviceError::MissingHouseholdKey);
-            }
+            let key = self.household_key_at_epoch(household_id, epoch)?;
             keys.push(RecoveryEpochKey { epoch, key });
         }
         Ok(RecoveryKeyring { version: 1, keys })
