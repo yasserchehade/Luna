@@ -36,3 +36,24 @@ test("uses a durable attachment anchor without rendering it as a chat bubble", (
     ["message:20", "arrival:8", "message:22"],
   );
 });
+
+test("keeps legacy attachments before newer anchored uploads in arrival order", () => {
+  const timeline = buildConversationTimeline(
+    [
+      { id: 30, author: "member", linkedDocumentArrival: null, body: "Before the legacy uploads" },
+      { id: 31, author: "attachment", linkedDocumentArrival: 10, body: "new.pdf" },
+    ],
+    [
+      { id: 10, originalName: "new.pdf" },
+      { id: 9, originalName: "legacy-newer.pdf" },
+      { id: 8, originalName: "legacy-older.pdf" },
+    ],
+  );
+
+  assert.deepEqual(
+    timeline.map((entry) => entry.kind === "arrival"
+      ? `arrival:${entry.arrival.id}`
+      : `message:${entry.message.id}`),
+    ["message:30", "arrival:8", "arrival:9", "arrival:10"],
+  );
+});

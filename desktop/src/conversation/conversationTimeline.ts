@@ -20,12 +20,33 @@ export function buildConversationTimeline<
   Arrival extends TimelineArrival,
 >(messages: Message[], arrivals: Arrival[]): ConversationTimelineEntry<Message, Arrival>[] {
   const arrivalById = new Map(arrivals.map((arrival) => [arrival.id, arrival]));
+  const anchoredArrivalIds = new Set(
+    messages
+      .filter((message) => message.author === "attachment")
+      .map((message) => message.linkedDocumentArrival)
+      .filter((arrivalId): arrivalId is number => arrivalId !== null && arrivalById.has(arrivalId)),
+  );
+  const legacyArrivals = [...arrivals]
+    .filter((arrival) => !anchoredArrivalIds.has(arrival.id))
+    .sort((left, right) => left.id - right.id);
   const renderedArrivals = new Set<number>();
   const entries: ConversationTimelineEntry<Message, Arrival>[] = [];
+  const appendLegacyArrivals = () => {
+    for (const arrival of legacyArrivals) {
+      if (!renderedArrivals.has(arrival.id)) {
+        entries.push({ kind: "arrival", arrival });
+        renderedArrivals.add(arrival.id);
+      }
+    }
+  };
   for (const message of messages) {
     const arrivalId = message.linkedDocumentArrival;
     if (message.author === "attachment") {
       if (arrivalId !== null && arrivalById.has(arrivalId)) {
+        // Fully unlinked arrivals predate durable attachment anchors. Although
+        // their exact position among old messages cannot be recovered, their
+        // row ids preserve upload order and they must precede newer anchors.
+        appendLegacyArrivals();
         entries.push({ kind: "arrival", arrival: arrivalById.get(arrivalId)! });
         renderedArrivals.add(arrivalId);
       }
@@ -43,7 +64,7 @@ export function buildConversationTimeline<
     }
     entries.push({ kind: "message", message });
   }
-  for (const arrival of arrivals) {
+  for (const arrival of [...arrivals].sort((left, right) => left.id - right.id)) {
     if (!renderedArrivals.has(arrival.id)) {
       entries.push({ kind: "arrival", arrival });
     }
