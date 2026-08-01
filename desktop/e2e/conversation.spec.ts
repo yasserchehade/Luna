@@ -232,6 +232,17 @@ describe("Luna Conversation desk", () => {
     ), testHousehold.id);
     try {
       await answerLuna("Yes, that's right.");
+      const attachmentPrecedesTheLaterDirection = await browser.execute(() => {
+        const attachment = document.querySelector(".document-arrival");
+        const direction = [...document.querySelectorAll<HTMLElement>(".member-message")]
+          .find((message) => message.textContent?.includes("Yes, that's right."));
+        return Boolean(
+          attachment
+          && direction
+          && (attachment.compareDocumentPosition(direction) & Node.DOCUMENT_POSITION_FOLLOWING),
+        );
+      });
+      expect(attachmentPrecedesTheLaterDirection).toBe(true);
       await expect($(".document-arrival [role='status']")).toHaveText(expect.stringContaining("Cabinet is unavailable"));
       await $(".review-details summary").click();
       await expect($(".document-arrival .review-card").$("dt=Recovery status")).toBeDisplayed();

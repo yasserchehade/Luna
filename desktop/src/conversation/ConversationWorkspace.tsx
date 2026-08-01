@@ -1,6 +1,5 @@
 import {
   FormEvent,
-  Fragment,
   useCallback,
   useEffect,
   useRef,
@@ -29,6 +28,7 @@ import type {
 import {
   cloudConsentScopeGrantsDefaultPermission,
 } from "./conversationService";
+import { buildConversationTimeline } from "./conversationTimeline";
 
 const intelligenceFailureNotice = (
   failure: ConversationIntelligenceFailure | null,
@@ -805,6 +805,7 @@ export function ConversationWorkspace({
       }
       setError("");
       const { arrivals: loadedArrivals } = await loadHouseholdWork();
+      setMessages(await conversationService.listMessages(householdId, selectedConversationId));
       const conversationArrivals = loadedArrivals.filter(
         ({ conversationId }) => conversationId === selectedConversationId,
       );
@@ -1008,14 +1009,6 @@ export function ConversationWorkspace({
     }
   };
 
-  const lastLinkedMessage = new Map<number, number>();
-  for (const message of messages) {
-    if (message.linkedDocumentArrival !== null) {
-      lastLinkedMessage.set(message.linkedDocumentArrival, message.id);
-    }
-  }
-  const arrivalById = new Map(selectedArrivals.map((arrival) => [arrival.id, arrival]));
-  const unlinkedArrivals = selectedArrivals.filter((arrival) => !lastLinkedMessage.has(arrival.id));
   const renderDocumentArrival = (arrival: DocumentArrival) => <article
     className="document-arrival"
     data-arrival-id={arrival.id}
@@ -1155,17 +1148,15 @@ export function ConversationWorkspace({
     </p>}
     <section className="messages" aria-label="Conversation">
       <article className="luna-message"><span aria-hidden="true">L</span><p>What would you like me to take care of?</p></article>
-      {messages.map((message) => <Fragment key={message.id}>
-        <article className={message.author === "luna" ? "luna-message" : "member-message"}>
-          <span aria-hidden="true">{message.author === "luna" ? "L" : "You"}</span>
-          <p className={message.author === "luna" ? "conversation-copy" : undefined}>{message.body}</p>
-        </article>
-        {message.linkedDocumentArrival !== null
-          && lastLinkedMessage.get(message.linkedDocumentArrival) === message.id
-          && arrivalById.has(message.linkedDocumentArrival)
-          && renderDocumentArrival(arrivalById.get(message.linkedDocumentArrival)!)}
-      </Fragment>)}
-      {unlinkedArrivals.map(renderDocumentArrival)}
+      {buildConversationTimeline(messages, selectedArrivals).map((entry) => entry.kind === "arrival"
+        ? renderDocumentArrival(entry.arrival)
+        : <article
+          className={entry.message.author === "luna" ? "luna-message" : "member-message"}
+          key={`message-${entry.message.id}`}
+        >
+          <span aria-hidden="true">{entry.message.author === "luna" ? "L" : "You"}</span>
+          <p className={entry.message.author === "luna" ? "conversation-copy" : undefined}>{entry.message.body}</p>
+        </article>)}
     </section>
     <div className="attachment-zone">
       <p>{dropReady

@@ -803,6 +803,42 @@ fn messages_are_durable_parts_of_a_conversation() {
 }
 
 #[test]
+fn attaching_a_document_records_its_durable_conversation_timeline_position() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let database = directory.path().join("luna.db");
+    let source = directory.path().join("rates.png");
+    fs::write(&source, image_fixture(image::ImageFormat::Png)).expect("write document fixture");
+    let (store, trusted_device) = open_conversation_store(&database);
+    let conversation = store
+        .create_conversation("rivera-household", "Council rates")
+        .expect("create Conversation");
+
+    let arrival = store
+        .attach_document(
+            "rivera-household",
+            conversation.id,
+            &source,
+            directory.path(),
+        )
+        .expect("attach supported document");
+    store
+        .add_member_message("rivera-household", conversation.id, "Context after upload")
+        .expect("add later member message");
+
+    let reopened =
+        ConversationStore::open(&database, trusted_device).expect("reopen Conversation store");
+    let messages = reopened
+        .list_messages("rivera-household", conversation.id)
+        .expect("list Conversation messages");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].author, "attachment");
+    assert_eq!(messages[0].body, "rates.png");
+    assert_eq!(messages[0].linked_document_arrival, Some(arrival.id));
+    assert_eq!(messages[1].author, "member");
+    assert_eq!(messages[1].body, "Context after upload");
+}
+
+#[test]
 fn resolving_work_from_any_surface_updates_the_same_document_handling_state() {
     let directory = tempfile::tempdir().expect("temporary device directory");
     let document = directory.path().join("rates.png");

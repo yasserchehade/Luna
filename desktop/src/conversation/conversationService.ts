@@ -10,7 +10,7 @@ export type Conversation = {
 export type ConversationMessage = {
   id: number;
   conversationId: number;
-  author: "member" | "luna";
+  author: "member" | "luna" | "attachment";
   body: string;
   linkedDocumentArrival: number | null;
 };

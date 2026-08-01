@@ -1299,6 +1299,13 @@ impl<V: CredentialVault> ConversationStore<V> {
             )?;
             connection.last_insert_rowid()
         };
+        self.add_conversation_message(
+            household_id,
+            conversation_id,
+            "attachment",
+            original_name,
+            Some(arrival_id),
+        )?;
         if let Some(duplicate_review) =
             self.find_duplicate_review(household_id, arrival_id, &payload)?
         {
