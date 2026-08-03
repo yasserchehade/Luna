@@ -1300,7 +1300,7 @@ fn set_e2e_cabinet_availability(
 }
 
 #[tauri::command]
-fn select_document_files(_app: tauri::AppHandle) -> Result<Vec<String>, String> {
+async fn select_document_files(_app: tauri::AppHandle) -> Result<Vec<String>, String> {
     #[cfg(feature = "e2e")]
     {
         let document =
@@ -1769,4 +1769,24 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("Luna failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+
+    use super::select_document_files;
+
+    fn assert_async_document_picker<F, Fut>(command: F)
+    where
+        F: FnOnce(tauri::AppHandle) -> Fut,
+        Fut: Future<Output = Result<Vec<String>, String>>,
+    {
+        let _ = command;
+    }
+
+    #[test]
+    fn document_picker_command_does_not_block_the_tauri_main_thread() {
+        assert_async_document_picker(select_document_files);
+    }
 }
