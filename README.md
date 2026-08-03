@@ -1,15 +1,22 @@
 # Luna
 
-Luna is being rebuilt from a clean sheet as a permissioned AI household employee that learns how a household handles administrative records while leaving people in control of privacy, authority and consequential decisions.
+Luna is a digital household employee that takes ownership of household administration. It observes incoming household information, understands it in context, creates durable household work, proposes or completes authorised actions, and keeps the household involved only when genuinely necessary.
 
-The default household experience is conversation-first: members delegate in ordinary language, Luna asks only the next materially necessary question, and typed Household Context, Filing Decisions and execution state remain behind the interaction. Structured inspection and correction are available through **Review details** without turning the main experience into a form.
+The default household experience is conversation-first: members delegate in ordinary language, Luna uses relevant email, attachments, household context and recent conversation, and typed work state remains behind the interaction. Structured inspection and correction are available through **Review details** without turning the main experience into a form.
 
 ## Current design sources
 
 - `CONTEXT.md` — the domain glossary and preferred language.
+- `docs/product/product-constitution.md` — the binding product direction.
+- `docs/product/mvp-definition.md` — the first household-administration loop and scope.
+- `docs/product/competency-map.md` — the competency-led development map.
+- `docs/architecture/agent-architecture.md` — the intended one-agent reasoning and execution boundary.
 - `docs/domain-model.md` — domain boundaries, relationships and invariants.
 - `docs/adr/` — accepted architectural decisions.
-- `docs/plans/luna-first-vertical-tickets.md` — the dependency-aware implementation path.
+- `docs/plans/mvp-reset-follow-up-issues.md` — the post-reset implementation sequence.
+- `docs/plans/unified-uploaded-document-household-work.md` — the first implementation-ready Household Work slice (GitHub issue #73).
+- `docs/plans/pr61-extraction-map.md` — the PR #61 extraction and closure strategy.
+- `docs/plans/luna-first-vertical-tickets.md` — the superseded historical ticket map.
 - `docs/quality-gates.md` — approved test seams and QA/QC stop points.
 - `frontend/app/prototype/luna/` — the throwaway Option A visual prototype.
 
@@ -36,9 +43,13 @@ Use `build:review` before reviewing the Windows desktop application. It rebuilds
 
 Windows development requires Rust and the Visual Studio C++ build workload. macOS development requires Rust and Xcode command-line tools.
 
-### Local document inspection
+### Supporting document inspection
 
-Luna keeps document inspection on-device. Digital PDFs are read through the bundled Rust parser; image OCR uses local Tesseract. Image-only PDFs are first rasterised locally with Poppler's `pdftoppm`. Set `LUNA_TESSERACT_COMMAND` and `LUNA_PDFTOPPM_COMMAND` when those executables are not already available on the device path.
+Luna may inspect documents locally for transport validation, preservation, evidence and recovery. The MVP uses Luna-managed OpenAI as the reasoning and document-reading engine when authorised context is required. Digital PDFs are read through the bundled Rust parser; image OCR uses local Tesseract. Image-only PDFs are first rasterised locally with Poppler's `pdftoppm`. Set `LUNA_TESSERACT_COMMAND` and `LUNA_PDFTOPPM_COMMAND` when those executables are not already available on the device path.
+
+### Product reset
+
+The repository contains an earlier document-centred vertical and its implementation history. That work is preserved for salvageable infrastructure and historical evidence, but it is not the next product roadmap. The MVP reset is recorded in `docs/product/`, `docs/architecture/agent-architecture.md` and `docs/plans/mvp-reset-assessment.md`.
 
 ### Local account service
 

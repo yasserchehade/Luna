@@ -4,6 +4,8 @@ status: accepted
 
 # Own the Intelligence Gateway and isolate LiteLLM
 
+> **MVP scope note:** ADR 0019 retains this record's Luna-owned gateway, server-side credential, validation and untrusted-result boundaries. Its provider-neutral, BYOK, separate capability and latest-message-only product assumptions are historical/deferred and must not govern new MVP work.
+
 Luna will own a provider-neutral `IntelligenceGateway` contract and use an isolated, separately operated LiteLLM proxy as the provisional first Luna-managed implementation. Document Handling and Conversation depend only on Luna-owned request, result, failure, Consent Grant and Direction Interpretation types. LiteLLM translation, HTTP details and error mapping remain inside one private Rust adapter.
 
 ## Context

@@ -1,5 +1,7 @@
 # Cloud Assistance threat model
 
+> **Reset note:** This threat model preserves useful credential, gateway and authority risks, but disclosure assumptions that limit Conversation to only the newly submitted prompt are superseded by ADR 0019. Before the new agent path is implemented, update the threat model for authorised recent conversation, household context, email and attachment disclosure.
+
 ## Assets
 
 - untouched Originals and locally extracted content;

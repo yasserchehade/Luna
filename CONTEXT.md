@@ -1,6 +1,6 @@
 # Luna Household Administration
 
-Luna is the domain of a permissioned AI household employee that learns how a household handles administrative records while leaving people in control of privacy, authority and consequential decisions.
+Luna is the domain of a digital household employee that takes ownership of household administration while leaving people in control of privacy, authority and consequential decisions. The binding product direction is in `docs/product/product-constitution.md` and `docs/product/mvp-definition.md`.
 
 ## Household identity and authority
 
@@ -109,6 +109,16 @@ _Avoid_: Storage health, automatic fallback
 One occurrence of a file entering Luna through attachment, upload, email or another intake channel.
 _Avoid_: Upload
 
+**Household Work**:
+A durable piece of household administration that Luna owns from observation through understanding, member input, approval, execution, monitoring and completion, dismissal or irrelevance. It links sources, evidence, responsibility, due dates, proposed actions and outcomes.
+_Avoid_: Workflow, work order, task, ticket
+
+**Obligation**:
+The internal domain term for Household Work that requires attention, a decision or an authorised action. It is not required user-facing language.
+
+**Source**:
+An email, message, document, attachment, calendar event or connected-service record that provides evidence for Household Work. A Source does not own the work lifecycle.
+
 **Document**:
 The logical household record that connects one or more arrivals or versions to household context and filing decisions.
 _Avoid_: File
@@ -158,8 +168,8 @@ _Avoid_: Model memory, automation
 ## Document work and attention
 
 **Document Handling**:
-The durable lifecycle of a document arrival from receipt through inspection, clarification, filing or a waiting state.
-_Avoid_: Task, job
+The supporting lifecycle of a Document Arrival from receipt through preservation, inspection, evidence capture, clarification and filing or waiting. In the reset direction it is a source-processing capability, not Luna's central durable product domain.
+_Avoid_: Product centre, task, job
 
 **Local Inspection**:
 The on-device examination of a document for type, text, checksum, duplicates and known household context without disclosing content externally.
@@ -181,7 +191,7 @@ An authorised member's answer or correction that resolves uncertainty and may te
 _Avoid_: Approval, when no consequential action is being authorised
 
 **To-do Item**:
-An unresolved action that requires a specific household member's attention and links back to its originating conversation and subject.
+An interaction projection of Household Work that currently requires a specific household member's attention and links back to its originating sources, conversation and subject. It does not own the work lifecycle.
 _Avoid_: Task, incoming item, work order
 
 **History**:
@@ -195,7 +205,7 @@ _Avoid_: Log entry
 ## Conversation and briefing
 
 **Conversation**:
-A member-controlled dialogue with Luna that may contain document attachments, review cards and linked to-do items without owning their durable records.
+A member-controlled dialogue with Luna that may contain source attachments, explanations, approvals and linked Household Work without owning the work lifecycle.
 _Avoid_: Thread, chat session
 
 **Conversation Prompt**:
@@ -207,7 +217,7 @@ A replaceable interpretation of a Member Utterance into candidate typed commands
 _Avoid_: Direct state update, authority decision
 
 **Conversation Orchestration**:
-The interface boundary that reads durable work state, presents the next Conversation Prompt, interprets a Member Utterance and submits validated commands to the owning domain.
+The interaction boundary that assembles relevant Household Work and context, presents the next useful explanation or question, interprets a Member Utterance and submits validated commands to the owning domain.
 _Avoid_: Work engine, conversation state machine
 
 **Brief**:
@@ -219,7 +229,7 @@ Household members communicate with Luna through natural conversation, not softwa
 ## Intelligence and consent
 
 **Intelligence Provider**:
-An external or local reasoning engine used by Luna without owning Luna's household memory, authority or tools.
+An external or local reasoning engine used by Luna without owning Luna's household memory, authority or tools. The MVP uses Luna-managed OpenAI; local-only intelligence, BYOK and additional providers are deferred.
 _Avoid_: AI, model provider, provider
 
 **Cloud Assistance**:

@@ -1,5 +1,7 @@
 # Cloud Assistance acceptance coverage
 
+> **Reset note:** The provider and credential tests remain useful infrastructure evidence. Tests that assert current-message-only disclosure, separate document permissions or document-only reasoning are historical and must be replaced by the shared context-aware Household Work agent tests described in `docs/plans/mvp-reset-follow-up-issues.md`.
+
 Tests use the approved local-core, boundary-contract and installed-application seams.
 
 | Requirement | Evidence |

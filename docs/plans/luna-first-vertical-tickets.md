@@ -1,12 +1,14 @@
-# Luna First Vertical — Implementation Tickets
+# Luna First Vertical — Historical Implementation Tickets
 
-This review document decomposes [specification issue #1](https://github.com/yasserchehade/Luna/issues/1) into small, dependency-aware tracer-bullet tickets.
+> **Superseded as the active product roadmap by the MVP reset.** Preserve this document as historical evidence of the earlier document-centred direction. New planning must follow [the product constitution](../product/product-constitution.md), [the MVP definition](../product/mvp-definition.md) and [the reset follow-up sequence](./mvp-reset-follow-up-issues.md).
 
-- Status: approved and published
+This review document decomposes [specification issue #1](https://github.com/yasserchehade/Luna/issues/1) into the earlier small, dependency-aware tracer-bullet tickets.
+
+- Status: historical; superseded for new product work
 - Tracker: private GitHub repository
 - Interaction model: conversation-first under ADR 0010
 - Delivery status: conversation-first stabilization (#29) is published in PR [#59](https://github.com/yasserchehade/Luna/pull/59) on current `main`; final GitHub Actions verification remains required before merge
-- Development strategy: complete the unfamiliar-document-to-learned-automation path depth-first, implementing only dependencies that genuinely block it
+- Historical development strategy: complete the unfamiliar-document-to-learned-automation path depth-first, implementing only dependencies that genuinely block it
 
 ## Dependency chart
 
@@ -352,6 +354,6 @@ The main value spine is tickets 01–09. Tickets 10–13 deepen transparency, du
 - [x] Conversation deletion does not delete Document Handling, Filing Rules or Audit Events.
 - [x] Keyboard and accessibility coverage includes the composer, inline actions and Review details.
 
-## Execution guidance
+## Historical execution guidance
 
-Follow the dependency frontier and complete each ticket's full quality gate before merging dependent work. Stacked draft pull requests may expose already implemented local work for review while GitHub Actions credits are unavailable, but they remain draft and their issues remain open until the required CI and review evidence exists. Do not close or repurpose the parent specification issue.
+Do not use this dependency frontier as the default implementation order after the MVP reset. Stacked draft pull requests may expose already implemented local work for review while GitHub Actions credits are unavailable, but they remain draft and their issues remain open until the required CI and review evidence exists. Do not delete the historical ticket records or silently repurpose the parent specification issue; re-triage future work against the reset follow-up sequence instead.
