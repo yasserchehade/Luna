@@ -17,11 +17,35 @@ pub enum HouseholdWorkStatus {
 }
 
 impl HouseholdWorkStatus {
-    pub fn is_open(self) -> bool {
-        !matches!(
+    pub fn is_terminal(self) -> bool {
+        matches!(
             self,
             Self::Completed | Self::Dismissed | Self::NoLongerRelevant
         )
+    }
+
+    pub fn is_open(self) -> bool {
+        !self.is_terminal()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ValidatedHouseholdWorkDirection {
+    Complete,
+    Dismiss,
+    MarkNoLongerRelevant,
+    Reopen,
+}
+
+impl ValidatedHouseholdWorkDirection {
+    pub fn terminal_status(self) -> Option<HouseholdWorkStatus> {
+        match self {
+            Self::Complete => Some(HouseholdWorkStatus::Completed),
+            Self::Dismiss => Some(HouseholdWorkStatus::Dismissed),
+            Self::MarkNoLongerRelevant => Some(HouseholdWorkStatus::NoLongerRelevant),
+            Self::Reopen => None,
+        }
     }
 }
 
@@ -82,6 +106,7 @@ pub enum ActionExecution {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct WorkFact {
     pub key: WorkFactKey,
     pub value: String,

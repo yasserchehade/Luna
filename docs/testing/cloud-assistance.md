@@ -25,6 +25,10 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Installed BYOK setup | installed Conversation scenario tests connect, replace and remove in Options |
 | Deterministic contract | all `DeterministicIntelligenceGateway` application and boundary tests |
 | Invalid output rejection | `invalid_structured_identity_is_rejected_and_recorded_as_waiting` |
+| Household structured output | `household_request_uses_the_strict_accepted_output_schema`, `conforming_household_response_parses_successfully`, `household_response_missing_a_required_field_is_rejected_cleanly` and `household_transport_metadata_comes_from_luna_and_the_response_envelope` |
+| Bounded household document input | `an_oversized_document_is_rejected_before_it_is_read_or_preserved`, `text_pdf_input_is_bounded_and_binary_is_a_file_part` and `image_only_pdf_and_image_use_supported_non_text_content_parts` |
+| Household Work transition authority | `hallucinated_terminal_household_work_states_are_rejected`, `explicit_member_payment_authorises_completion_inside_luna`, `a_read_only_question_cannot_close_household_work` and `explicit_correction_can_reopen_source_linked_terminal_work` |
+| Household Work no-op and attention | `a_none_operation_preserves_existing_awaiting_approval_work_exactly` and `terminal_household_work_is_removed_from_attention_for_every_terminal_state` |
 | Untrusted Evidence bounds and provenance | `oversized_or_untraceable_provider_evidence_is_rejected_through_the_gateway_boundary` |
 | No provider-owned mutation | the allow-once application test proves the Original remains unfiled |
 | Owning-domain validation | `invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state`, `invalid_candidate_calendar_date_is_rejected_by_document_handling` and `candidate_cannot_replace_context_that_already_has_member_direction` |

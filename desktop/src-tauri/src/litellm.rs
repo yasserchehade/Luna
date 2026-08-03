@@ -7,10 +7,15 @@ use std::{io::Read, net::IpAddr, sync::Arc, time::Duration};
 
 use reqwest::StatusCode;
 
+use crate::household_work::{
+    HouseholdWorkKind, HouseholdWorkStatus, ProposedActionKind, WorkFact, WorkFactKey,
+};
 use crate::intelligence::{
-    AdditionalIntelligenceEvidence, HouseholdAdministrationRequest, IntelligenceFailure,
-    IntelligenceGateway, IntelligenceRequest, IntelligenceUsage,
-    UntrustedHouseholdAdministrationResult, UntrustedIntelligenceResult, BYOK_OPENAI_PROVIDER_ID,
+    AdditionalIntelligenceEvidence, HouseholdActionProposal, HouseholdAdministrationRequest,
+    HouseholdClarification, HouseholdWorkProposal, IntelligenceFailure, IntelligenceGateway,
+    IntelligenceRequest, IntelligenceUsage, UntrustedHouseholdAdministrationResult,
+    UntrustedIntelligenceResult, BYOK_OPENAI_PROVIDER_ID, MANAGED_INTELLIGENCE_MODEL_ID,
+    MANAGED_INTELLIGENCE_PROVIDER_ID, MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS,
 };
 
 enum LiteLlmAuthentication<'a> {
@@ -197,11 +202,45 @@ impl IntelligenceGateway for LiteLlmGateway {
                 &litellm_household_request(request),
             )
             .map_err(|failure| map_transport_failure(failure, provider_credential.is_some()))?;
-        parse_litellm_household_response(&response)
+        parse_litellm_household_response(&response, request)
     }
 }
 
 fn litellm_household_request(request: &HouseholdAdministrationRequest) -> serde_json::Value {
+    let mut bounded_request = request.clone();
+    if let Some(source) = bounded_request.source.as_mut() {
+        if let Some(extracted_text) = source.extracted_text.as_mut() {
+            let was_truncated = extracted_text.chars().count() > MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS;
+            *extracted_text = extracted_text
+                .chars()
+                .take(MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS)
+                .collect();
+            source.extracted_text_truncated |= was_truncated;
+        }
+    }
+    let mut content = vec![serde_json::json!({
+        "type": "text",
+        "text": serde_json::to_string(&bounded_request).unwrap_or_else(|_| "{}".to_owned())
+    })];
+    if let Some(source) = request.source.as_ref() {
+        match source.media_type.as_str() {
+            "application/pdf" => content.push(serde_json::json!({
+                "type": "file",
+                "file": {
+                    "filename": source.filename,
+                    "file_data": source.original_base64
+                }
+            })),
+            "image/jpeg" | "image/png" => content.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:{};base64,{}", source.media_type, source.original_base64),
+                    "detail": "auto"
+                }
+            })),
+            _ => {}
+        }
+    }
     serde_json::json!({
         "model": "openai/gpt-4.1-mini",
         "temperature": 0,
@@ -215,11 +254,92 @@ fn litellm_household_request(request: &HouseholdAdministrationRequest) -> serde_
             },
             {
                 "role": "user",
-                "content": serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned())
+                "content": content
             }
         ],
         "response_format": {
-            "type": "json_object"
+            "type": "json_schema",
+            "json_schema": {
+                "name": "luna_household_administration_result",
+                "strict": true,
+                "schema": household_administration_response_schema()
+            }
+        }
+    })
+}
+
+fn household_administration_response_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reply", "work", "clarification", "proposedActions"],
+        "properties": {
+            "reply": {"type": "string", "minLength": 1, "maxLength": 4000},
+            "work": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["operation", "workId", "kind", "summary", "status", "facts", "dueAt", "urgency"],
+                "properties": {
+                    "operation": {"type": "string", "enum": ["none", "create", "update"]},
+                    "workId": {"type": ["string", "null"]},
+                    "kind": {"type": ["string", "null"], "enum": ["bill", "renewal", "request", "appointment", "other", null]},
+                    "summary": {"type": ["string", "null"], "maxLength": 1024},
+                    "status": {"type": ["string", "null"], "enum": ["active", "needsClarification", "awaitingApproval", "inProgress", "monitoring", "completed", "dismissed", "noLongerRelevant", "blocked", null]},
+                    "facts": {
+                        "type": "array",
+                        "maxItems": 16,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["key", "value", "evidenceRefs", "certainty"],
+                            "properties": {
+                                "key": {"type": "string", "enum": ["provider", "property", "account", "amount", "dueDate", "requiredAction", "urgency", "other"]},
+                                "value": {"type": "string", "minLength": 1, "maxLength": 1024},
+                                "evidenceRefs": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "maxLength": 256}},
+                                "certainty": {"type": "string", "enum": ["confirmed", "likely", "unknown"]}
+                            }
+                        }
+                    },
+                    "dueAt": {"type": ["string", "null"]},
+                    "urgency": {"type": ["string", "null"], "enum": ["low", "normal", "high", null]}
+                }
+            },
+            "clarification": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["question", "reason", "field"],
+                "properties": {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "reason": {"type": ["string", "null"], "maxLength": 1024},
+                    "field": {"type": ["string", "null"], "enum": ["provider", "property", "account", "amount", "dueDate", "requiredAction", "urgency", "other", null]}
+                }
+            },
+            "proposedActions": {
+                "type": "array",
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind", "summary", "arguments", "approvalRequired"],
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["draftReply", "reminder"]},
+                        "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "arguments": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["recipient", "subject", "body", "remindAt", "message"],
+                            "properties": {
+                                "recipient": {"type": ["string", "null"], "maxLength": 1024},
+                                "subject": {"type": ["string", "null"], "maxLength": 1024},
+                                "body": {"type": ["string", "null"], "maxLength": 1024},
+                                "remindAt": {"type": ["string", "null"], "maxLength": 1024},
+                                "message": {"type": ["string", "null"], "maxLength": 1024}
+                            }
+                        },
+                        "approvalRequired": {"type": "boolean"}
+                    }
+                }
+            }
         }
     })
 }
@@ -350,6 +470,7 @@ fn parse_litellm_response(
 
 fn parse_litellm_household_response(
     response: &serde_json::Value,
+    request: &HouseholdAdministrationRequest,
 ) -> Result<UntrustedHouseholdAdministrationResult, IntelligenceFailure> {
     let content = response
         .get("choices")
@@ -358,20 +479,131 @@ fn parse_litellm_household_response(
         .and_then(|message| message.get("content"))
         .and_then(serde_json::Value::as_str)
         .ok_or(IntelligenceFailure::InvalidStructuredResult)?;
-    let mut result: UntrustedHouseholdAdministrationResult =
+    let result: LiteLlmHouseholdStructuredResult =
         serde_json::from_str(content).map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
-    result.usage = IntelligenceUsage {
-        input_tokens: response
-            .pointer("/usage/prompt_tokens")
-            .and_then(serde_json::Value::as_u64),
-        output_tokens: response
-            .pointer("/usage/completion_tokens")
-            .and_then(serde_json::Value::as_u64),
-        estimated_cost_usd: response
-            .pointer("/usage/cost")
-            .and_then(serde_json::Value::as_f64),
-    };
-    Ok(result)
+    Ok(UntrustedHouseholdAdministrationResult {
+        request_id: request.request_id.clone(),
+        provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+        model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+        reply: result.reply,
+        work: result.work.into_domain(),
+        clarification: result.clarification.0.map(|item| item.into_domain()),
+        proposed_actions: result
+            .proposed_actions
+            .into_iter()
+            .map(LiteLlmHouseholdActionProposal::into_domain)
+            .collect(),
+        usage: IntelligenceUsage {
+            input_tokens: response
+                .pointer("/usage/prompt_tokens")
+                .and_then(serde_json::Value::as_u64),
+            output_tokens: response
+                .pointer("/usage/completion_tokens")
+                .and_then(serde_json::Value::as_u64),
+            estimated_cost_usd: response
+                .pointer("/usage/cost")
+                .and_then(serde_json::Value::as_f64),
+        },
+    })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(transparent)]
+struct RequiredNullable<T>(Option<T>);
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LiteLlmHouseholdStructuredResult {
+    reply: String,
+    work: LiteLlmHouseholdWorkProposal,
+    clarification: RequiredNullable<LiteLlmHouseholdClarification>,
+    proposed_actions: Vec<LiteLlmHouseholdActionProposal>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LiteLlmHouseholdWorkProposal {
+    operation: crate::intelligence::HouseholdWorkOperation,
+    work_id: RequiredNullable<String>,
+    kind: RequiredNullable<HouseholdWorkKind>,
+    summary: RequiredNullable<String>,
+    status: RequiredNullable<HouseholdWorkStatus>,
+    facts: Vec<WorkFact>,
+    due_at: RequiredNullable<String>,
+    urgency: RequiredNullable<String>,
+}
+
+impl LiteLlmHouseholdWorkProposal {
+    fn into_domain(self) -> HouseholdWorkProposal {
+        HouseholdWorkProposal {
+            operation: self.operation,
+            work_id: self.work_id.0,
+            kind: self.kind.0,
+            summary: self.summary.0,
+            status: self.status.0,
+            facts: self.facts,
+            due_at: self.due_at.0,
+            urgency: self.urgency.0,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LiteLlmHouseholdClarification {
+    question: String,
+    reason: RequiredNullable<String>,
+    field: RequiredNullable<WorkFactKey>,
+}
+
+impl LiteLlmHouseholdClarification {
+    fn into_domain(self) -> HouseholdClarification {
+        HouseholdClarification {
+            question: self.question,
+            reason: self.reason.0,
+            field: self.field.0,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LiteLlmHouseholdActionProposal {
+    kind: ProposedActionKind,
+    summary: String,
+    arguments: LiteLlmHouseholdActionArguments,
+    approval_required: bool,
+}
+
+impl LiteLlmHouseholdActionProposal {
+    fn into_domain(self) -> HouseholdActionProposal {
+        let arguments = [
+            ("recipient", self.arguments.recipient.0),
+            ("subject", self.arguments.subject.0),
+            ("body", self.arguments.body.0),
+            ("remindAt", self.arguments.remind_at.0),
+            ("message", self.arguments.message.0),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value)))
+        .collect();
+        HouseholdActionProposal {
+            kind: self.kind,
+            summary: self.summary,
+            arguments,
+            approval_required: self.approval_required,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LiteLlmHouseholdActionArguments {
+    recipient: RequiredNullable<String>,
+    subject: RequiredNullable<String>,
+    body: RequiredNullable<String>,
+    remind_at: RequiredNullable<String>,
+    message: RequiredNullable<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -471,8 +703,9 @@ fn map_transport_failure(failure: LiteLlmTransportFailure, byok: bool) -> Intell
 mod tests {
     use super::*;
     use crate::intelligence::{
-        DocumentContentExcerpt, IntelligenceCapability, IntelligenceExecutionConstraints,
-        IntelligenceResponseSchema,
+        AvailableHouseholdTool, DocumentContentExcerpt, HouseholdAdministrationMessage,
+        HouseholdAdministrationSource, HouseholdContextItem, IntelligenceCapability,
+        IntelligenceExecutionConstraints, IntelligenceResponseSchema,
     };
     use std::sync::Mutex;
 
@@ -520,6 +753,206 @@ mod tests {
             *self.body.lock().expect("recording transport lock") = Some(body.clone());
             Ok(self.response.clone())
         }
+    }
+
+    fn household_request(
+        media_type: &str,
+        original_base64: &str,
+        extracted_text: Option<String>,
+    ) -> HouseholdAdministrationRequest {
+        HouseholdAdministrationRequest {
+            request_id: "household-request-1".to_owned(),
+            conversation_id: 42,
+            current_message: "What does this say?".to_owned(),
+            relevant_conversation: vec![HouseholdAdministrationMessage {
+                author: "member".to_owned(),
+                body: "What does this say?".to_owned(),
+            }],
+            source: Some(HouseholdAdministrationSource {
+                reference: "document-7".to_owned(),
+                filename: if media_type == "application/pdf" {
+                    "notice.pdf".to_owned()
+                } else {
+                    "notice.png".to_owned()
+                },
+                media_type: media_type.to_owned(),
+                original_base64: original_base64.to_owned(),
+                extracted_text,
+                original_size_bytes: 6,
+                extracted_text_truncated: false,
+            }),
+            household_context: vec![HouseholdContextItem {
+                category: "property".to_owned(),
+                value: "12 Seabreeze Avenue".to_owned(),
+                source_reference: "document-7".to_owned(),
+            }],
+            active_household_work: Vec::new(),
+            source_linked_household_work: None,
+            available_tools: vec![AvailableHouseholdTool {
+                name: "reminder".to_owned(),
+                description: "Propose a reminder".to_owned(),
+            }],
+            authority_and_approval_constraints: "Luna validates proposals.".to_owned(),
+            response_schema_version: "household-administration.v1".to_owned(),
+            constraints: IntelligenceExecutionConstraints {
+                timeout_ms: 10_000,
+                max_output_tokens: 1_200,
+            },
+        }
+    }
+
+    fn conforming_household_content() -> serde_json::Value {
+        serde_json::json!({
+            "reply": "The bill is due on 15 August.",
+            "work": {
+                "operation": "none",
+                "workId": null,
+                "kind": null,
+                "summary": null,
+                "status": null,
+                "facts": [],
+                "dueAt": null,
+                "urgency": null
+            },
+            "clarification": null,
+            "proposedActions": []
+        })
+    }
+
+    fn household_response(content: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "choices": [{"message": {"content": content.to_string()}}],
+            "usage": {"prompt_tokens": 37, "completion_tokens": 19, "cost": 0.002}
+        })
+    }
+
+    #[test]
+    fn household_request_uses_the_strict_accepted_output_schema() {
+        let request =
+            household_request("application/pdf", "QklOQVJZ", Some("Bill text".to_owned()));
+        let body = litellm_household_request(&request);
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        let required = body["response_format"]["json_schema"]["schema"]["required"]
+            .as_array()
+            .expect("required fields");
+        assert_eq!(
+            required,
+            &vec![
+                serde_json::json!("reply"),
+                serde_json::json!("work"),
+                serde_json::json!("clarification"),
+                serde_json::json!("proposedActions"),
+            ]
+        );
+        assert!(
+            body["response_format"]["json_schema"]["schema"]["properties"]
+                .get("usage")
+                .is_none()
+        );
+        assert!(
+            body["response_format"]["json_schema"]["schema"]["properties"]
+                .get("requestId")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn conforming_household_response_parses_successfully() {
+        let request = household_request("application/pdf", "QklOQVJZ", None);
+        let result = parse_litellm_household_response(
+            &household_response(conforming_household_content()),
+            &request,
+        )
+        .expect("parse conforming household result");
+        assert_eq!(result.reply, "The bill is due on 15 August.");
+        assert_eq!(result.work.operation, crate::HouseholdWorkOperation::None);
+    }
+
+    #[test]
+    fn household_response_missing_a_required_field_is_rejected_cleanly() {
+        let request = household_request("application/pdf", "QklOQVJZ", None);
+        let mut content = conforming_household_content();
+        content
+            .as_object_mut()
+            .expect("household result object")
+            .remove("work");
+        assert_eq!(
+            parse_litellm_household_response(&household_response(content), &request),
+            Err(IntelligenceFailure::InvalidStructuredResult)
+        );
+    }
+
+    #[test]
+    fn household_transport_metadata_comes_from_luna_and_the_response_envelope() {
+        let request = household_request("application/pdf", "QklOQVJZ", None);
+        let result = parse_litellm_household_response(
+            &household_response(conforming_household_content()),
+            &request,
+        )
+        .expect("parse household result without model-owned metadata");
+        assert_eq!(result.request_id, request.request_id);
+        assert_eq!(result.provider_id, MANAGED_INTELLIGENCE_PROVIDER_ID);
+        assert_eq!(result.model_id, MANAGED_INTELLIGENCE_MODEL_ID);
+        assert_eq!(result.usage.input_tokens, Some(37));
+        assert_eq!(result.usage.output_tokens, Some(19));
+        assert_eq!(result.usage.estimated_cost_usd, Some(0.002));
+    }
+
+    #[test]
+    fn text_pdf_input_is_bounded_and_binary_is_a_file_part() {
+        let request = household_request(
+            "application/pdf",
+            "QklOQVJZ",
+            Some("x".repeat(MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS + 100)),
+        );
+        let body = litellm_household_request(&request);
+        let content = body["messages"][1]["content"]
+            .as_array()
+            .expect("multimodal content");
+        let text = content[0]["text"].as_str().expect("request text");
+        assert!(!text.contains("QklOQVJZ"));
+        let request_json: serde_json::Value = serde_json::from_str(text).expect("request JSON");
+        assert_eq!(
+            request_json["source"]["extractedText"]
+                .as_str()
+                .expect("bounded extracted text")
+                .chars()
+                .count(),
+            MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS
+        );
+        assert_eq!(request_json["source"]["extractedTextTruncated"], true);
+        assert_eq!(content[1]["type"], "file");
+        assert_eq!(content[1]["file"]["file_data"], "QklOQVJZ");
+    }
+
+    #[test]
+    fn image_only_pdf_and_image_use_supported_non_text_content_parts() {
+        let pdf_body = litellm_household_request(&household_request(
+            "application/pdf",
+            "U0NBTk5FRFBERg==",
+            None,
+        ));
+        let pdf_content = pdf_body["messages"][1]["content"]
+            .as_array()
+            .expect("PDF content");
+        assert_eq!(pdf_content[1]["type"], "file");
+        assert_eq!(pdf_content[1]["file"]["file_data"], "U0NBTk5FRFBERg==");
+
+        let image_body =
+            litellm_household_request(&household_request("image/png", "UE5HREFUQQ==", None));
+        let image_content = image_body["messages"][1]["content"]
+            .as_array()
+            .expect("image content");
+        assert_eq!(image_content[1]["type"], "image_url");
+        assert_eq!(
+            image_content[1]["image_url"]["url"],
+            "data:image/png;base64,UE5HREFUQQ=="
+        );
+        assert!(!image_content[0]["text"]
+            .as_str()
+            .expect("request text")
+            .contains("UE5HREFUQQ=="));
     }
 
     #[test]

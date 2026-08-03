@@ -107,6 +107,12 @@ HouseholdAdministrationRequest
 
 `relevantConversation`, `householdContext`, `activeHouseholdWork` and `availableTools` are intentionally part of the first contract. They must not be reduced to a single `currentMessage` field.
 
+### MVP document-input bounds
+
+The uploaded-document slice accepts PDF, JPG and PNG originals up to **5 MiB** each. Luna checks the file size before reading or preserving the Original and checks it again before assembling the reasoning request. A larger file fails with a clear processing-limit error; Luna does not ask the member to reproduce the document manually.
+
+Locally extracted text is capped at **12,000 Unicode characters** and the request records whether truncation occurred. Raw attachment bytes are never embedded in the ordinary JSON chat text. A bounded PDF is supplied through the managed OpenAI route as a file content part, including an image-only or scanned PDF; JPG and PNG originals are supplied as image content parts. The bounded extracted text remains supporting context when available.
+
 ## Minimum OpenAI output contract
 
 The model returns one structured result. This is a bounded proposal schema, not a generic workflow language:
@@ -146,6 +152,9 @@ Rules:
 - At most one clarification is returned for the first slice.
 - Proposed actions are suggestions. The model cannot approve, execute, mutate durable state or create arbitrary workflow steps.
 - Unknown fields, extra actions, oversized values, malformed dates, unsupported references and conflicting work identifiers are rejected by Luna.
+- Request correlation, provider/model identity and usage metadata are assigned from Luna's request and the provider response envelope. The model output schema does not ask the model to generate them.
+- `work.operation = none` is read-only and cannot alter facts, actions, approval, lifecycle state or audit history.
+- A terminal status proposal is accepted only when Luna independently derives matching explicit Member Direction. Reopening source-linked terminal work likewise requires explicit corrective direction.
 
 ## Luna execution boundary
 
@@ -164,6 +173,8 @@ Luna owns:
 - the final natural explanation shown to the user.
 
 No OpenAI response may directly call a tool, send a message, create a reminder, approve an action, close work or alter household context.
+
+During migration, the To-do projection still uses a linked `DocumentArrival` for display details when one exists. Its durable attention lifecycle is derived from linked Household Work: completed, dismissed and no-longer-relevant work is excluded even if the legacy document processing state still looks actionable. Arrivals without Household Work temporarily retain the legacy projection.
 
 ## Acceptance scenarios
 

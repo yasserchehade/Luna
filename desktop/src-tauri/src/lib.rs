@@ -28,14 +28,15 @@ pub use conversation::{
     FilingRuleUpdate, InterpretationConfidence, LocalOcr, ManualMoveCandidate,
     MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance,
     RebuiltDocumentRelationship, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    MAX_MVP_DOCUMENT_BYTES,
 };
 pub use document_intelligence::{
     CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
 };
 pub use household_work::{
     ActionApproval, ActionExecution, HouseholdWork, HouseholdWorkKind, HouseholdWorkStatus,
-    HouseholdWorkSummary, ProposedAction, ProposedActionKind, WorkFact, WorkFactCertainty,
-    WorkFactKey,
+    HouseholdWorkSummary, ProposedAction, ProposedActionKind, ValidatedHouseholdWorkDirection,
+    WorkFact, WorkFactCertainty, WorkFactKey,
 };
 pub use intelligence::{
     AdditionalIntelligenceEvidence, AvailableHouseholdTool, CandidateDirectionInterpretation,
@@ -50,6 +51,7 @@ pub use intelligence::{
     IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection, IntelligenceUsage,
     UntrustedHouseholdAdministrationResult, UntrustedIntelligenceResult,
     MANAGED_INTELLIGENCE_MODEL_ID, MANAGED_INTELLIGENCE_PROVIDER_ID,
+    MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS,
 };
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
@@ -74,6 +76,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{Manager, State};
@@ -392,6 +395,42 @@ struct HouseholdAdministrationOutcome {
     work: Option<HouseholdWork>,
 }
 
+fn bounded_household_administration_source(
+    arrival: &DocumentArrival,
+) -> Result<HouseholdAdministrationSource, String> {
+    let metadata = fs::metadata(&arrival.original_path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_MVP_DOCUMENT_BYTES {
+        return Err(ConversationError::DocumentTooLarge.to_string());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&arrival.original_path)
+        .map_err(|error| error.to_string())?
+        .take(MAX_MVP_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_MVP_DOCUMENT_BYTES {
+        return Err(ConversationError::DocumentTooLarge.to_string());
+    }
+    let extracted_text_truncated = arrival
+        .extracted_text
+        .as_ref()
+        .is_some_and(|text| text.chars().count() > MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS);
+    let extracted_text = arrival.extracted_text.as_ref().map(|text| {
+        text.chars()
+            .take(MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS)
+            .collect()
+    });
+    Ok(HouseholdAdministrationSource {
+        reference: format!("document-{}", arrival.id),
+        filename: arrival.original_name.clone(),
+        media_type: arrival.media_type.clone(),
+        original_base64: BASE64.encode(&bytes),
+        extracted_text,
+        original_size_bytes: bytes.len() as u64,
+        extracted_text_truncated,
+    })
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn submit_household_administration(
@@ -462,25 +501,26 @@ fn submit_household_administration(
             .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let active_household_work = store
+    let household_work = store
         .list_household_work(&request.household_id)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    let source_reference = arrival
+        .as_ref()
+        .map(|arrival| format!("document-{}", arrival.id));
+    let source_linked_household_work = source_reference.as_ref().and_then(|source_reference| {
+        household_work
+            .iter()
+            .find(|work| work.source_refs.contains(source_reference))
+            .map(HouseholdWorkSummary::from)
+    });
+    let active_household_work = household_work
         .into_iter()
         .filter(|work| work.status.is_open())
         .map(|work| HouseholdWorkSummary::from(&work))
         .collect();
     let source = arrival
         .as_ref()
-        .map(|arrival| {
-            let bytes = fs::read(&arrival.original_path).map_err(|error| error.to_string())?;
-            Ok::<_, String>(HouseholdAdministrationSource {
-                reference: format!("document-{}", arrival.id),
-                filename: arrival.original_name.clone(),
-                media_type: arrival.media_type.clone(),
-                original_base64: BASE64.encode(bytes),
-                extracted_text: arrival.extracted_text.clone(),
-            })
-        })
+        .map(bounded_household_administration_source)
         .transpose()?;
     let request_id = format!(
         "household-work-{}-{}",
@@ -495,6 +535,7 @@ fn submit_household_administration(
         source,
         household_context,
         active_household_work,
+        source_linked_household_work,
         available_tools: vec![
             AvailableHouseholdTool {
                 name: "draftReply".to_owned(),

@@ -17,8 +17,8 @@ use thiserror::Error;
 
 use crate::{
     household_work::{
-        HouseholdWorkKind, HouseholdWorkStatus, ProposedActionKind, WorkFact, WorkFactCertainty,
-        WorkFactKey,
+        HouseholdWorkKind, HouseholdWorkStatus, ProposedActionKind,
+        ValidatedHouseholdWorkDirection, WorkFact, WorkFactCertainty, WorkFactKey,
     },
     litellm::LiteLlmGateway,
     portable_memory::{
@@ -34,6 +34,7 @@ use crate::{
 pub const MANAGED_INTELLIGENCE_PROVIDER_ID: &str = "openai";
 pub const MANAGED_INTELLIGENCE_MODEL_ID: &str = "gpt-4.1-mini";
 pub const BYOK_OPENAI_PROVIDER_ID: &str = "openai-byok";
+pub const MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS: usize = 12_000;
 const MAX_SAFE_RETRY_ATTEMPTS: usize = 2;
 const MAX_FIELD_VALUE_CHARS: usize = 1_024;
 const MAX_EVIDENCE_ITEMS: usize = 32;
@@ -177,8 +178,11 @@ pub struct HouseholdAdministrationSource {
     pub reference: String,
     pub filename: String,
     pub media_type: String,
+    #[serde(skip_serializing)]
     pub original_base64: String,
     pub extracted_text: Option<String>,
+    pub original_size_bytes: u64,
+    pub extracted_text_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +210,7 @@ pub struct HouseholdAdministrationRequest {
     pub source: Option<HouseholdAdministrationSource>,
     pub household_context: Vec<HouseholdContextItem>,
     pub active_household_work: Vec<crate::household_work::HouseholdWorkSummary>,
+    pub source_linked_household_work: Option<crate::household_work::HouseholdWorkSummary>,
     pub available_tools: Vec<AvailableHouseholdTool>,
     pub authority_and_approval_constraints: String,
     pub response_schema_version: String,
@@ -286,6 +291,8 @@ pub struct HouseholdAdministrationResult {
     pub clarification: Option<HouseholdClarification>,
     pub proposed_actions: Vec<HouseholdActionProposal>,
     pub usage: IntelligenceUsage,
+    #[serde(skip)]
+    pub validated_member_direction: Option<ValidatedHouseholdWorkDirection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -554,7 +561,7 @@ fn household_result_from_fields(
             });
         }
     }
-    let completed = request.current_message.to_ascii_lowercase();
+    let member_direction = validated_household_work_direction(&request.current_message);
     let needs_property_clarification = facts.iter().all(|fact| fact.key != WorkFactKey::Property)
         && request
             .source
@@ -564,30 +571,32 @@ fn household_result_from_fields(
                 let text = text.to_ascii_lowercase();
                 text.contains("ambiguous") || text.contains("two properties")
             });
-    let active = request.active_household_work.first();
-    let (operation, work_id, status) = if completed.contains("already paid")
-        || completed.contains("paid it")
-        || completed.contains("done with this")
-    {
+    let relevant_work = request
+        .source_linked_household_work
+        .as_ref()
+        .or(request.active_household_work.first());
+    let (operation, work_id, status) = if let Some(direction) = member_direction {
+        let status = match direction {
+            ValidatedHouseholdWorkDirection::Complete => Some(HouseholdWorkStatus::Completed),
+            ValidatedHouseholdWorkDirection::Dismiss => Some(HouseholdWorkStatus::Dismissed),
+            ValidatedHouseholdWorkDirection::MarkNoLongerRelevant => {
+                Some(HouseholdWorkStatus::NoLongerRelevant)
+            }
+            ValidatedHouseholdWorkDirection::Reopen => Some(HouseholdWorkStatus::Active),
+        };
         (
             HouseholdWorkOperation::Update,
-            active.map(|work| work.id.clone()),
-            Some(HouseholdWorkStatus::Completed),
-        )
-    } else if completed.contains("irrelevant") || completed.contains("dismiss") {
-        (
-            HouseholdWorkOperation::Update,
-            active.map(|work| work.id.clone()),
-            Some(HouseholdWorkStatus::Dismissed),
+            relevant_work.map(|work| work.id.clone()),
+            status,
         )
     } else {
         (
-            if active.is_some() {
+            if relevant_work.is_some() {
                 HouseholdWorkOperation::Update
             } else {
                 HouseholdWorkOperation::Create
             },
-            active.map(|work| work.id.clone()),
+            relevant_work.map(|work| work.id.clone()),
             needs_property_clarification.then_some(HouseholdWorkStatus::NeedsClarification),
         )
     };
@@ -1707,6 +1716,8 @@ fn validate_household_result(
     request: &HouseholdAdministrationRequest,
     result: UntrustedHouseholdAdministrationResult,
 ) -> Result<HouseholdAdministrationResult, IntelligenceFailure> {
+    let validated_member_direction =
+        validated_household_work_direction(request.current_message.as_str());
     if result.request_id != request.request_id
         || result.provider_id != MANAGED_INTELLIGENCE_PROVIDER_ID
         || result.model_id != MANAGED_INTELLIGENCE_MODEL_ID
@@ -1718,18 +1729,43 @@ fn validate_household_result(
         return Err(IntelligenceFailure::InvalidStructuredResult);
     }
     if matches!(result.work.operation, HouseholdWorkOperation::Create)
-        && result.work.work_id.is_some()
+        && (result.work.work_id.is_some() || request.source_linked_household_work.is_some())
     {
         return Err(IntelligenceFailure::InvalidStructuredResult);
     }
+    let mut updated_work = None;
     if matches!(result.work.operation, HouseholdWorkOperation::Update) {
         let Some(work_id) = result.work.work_id.as_ref() else {
             return Err(IntelligenceFailure::InvalidStructuredResult);
         };
-        if !request
+        updated_work = request
             .active_household_work
             .iter()
-            .any(|work| work.id == *work_id && work.status.is_open())
+            .find(|work| work.id == *work_id)
+            .or_else(|| {
+                request
+                    .source_linked_household_work
+                    .as_ref()
+                    .filter(|work| work.id == *work_id)
+            });
+        if updated_work.is_none() {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+    }
+    if let Some(status) = result.work.status.filter(|status| status.is_terminal()) {
+        if !matches!(result.work.operation, HouseholdWorkOperation::Update)
+            || validated_member_direction.and_then(|direction| direction.terminal_status())
+                != Some(status)
+        {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+    }
+    if updated_work.is_some_and(|work| work.status.is_terminal()) {
+        if validated_member_direction != Some(ValidatedHouseholdWorkDirection::Reopen)
+            || result
+                .work
+                .status
+                .is_none_or(HouseholdWorkStatus::is_terminal)
         {
             return Err(IntelligenceFailure::InvalidStructuredResult);
         }
@@ -1763,6 +1799,23 @@ fn validate_household_result(
             return Err(IntelligenceFailure::InvalidStructuredResult);
         }
     }
+    for action in &result.proposed_actions {
+        let allowed_arguments: &[&str] = match action.kind {
+            ProposedActionKind::DraftReply => &["recipient", "subject", "body"],
+            ProposedActionKind::Reminder => &["remindAt", "message"],
+        };
+        if action.summary.trim().is_empty()
+            || action.summary.chars().count() > 500
+            || action.arguments.iter().any(|(key, value)| {
+                !allowed_arguments.contains(&key.as_str())
+                    || value.trim().is_empty()
+                    || value.chars().count() > MAX_FIELD_VALUE_CHARS
+                    || has_invalid_control_character(value)
+            })
+        {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+    }
     Ok(HouseholdAdministrationResult {
         request_id: result.request_id,
         provider_id: result.provider_id,
@@ -1772,7 +1825,55 @@ fn validate_household_result(
         clarification: result.clarification,
         proposed_actions: result.proposed_actions,
         usage: result.usage,
+        validated_member_direction,
     })
+}
+
+fn validated_household_work_direction(message: &str) -> Option<ValidatedHouseholdWorkDirection> {
+    let message = message.to_ascii_lowercase();
+    let contains_any = |phrases: &[&str]| phrases.iter().any(|phrase| message.contains(phrase));
+
+    if contains_any(&[
+        "wasn't paid",
+        "was not paid",
+        "isn't paid",
+        "is not paid",
+        "hasn't been paid",
+        "has not been paid",
+        "reopen",
+        "still needs attention",
+        "still need to pay",
+    ]) {
+        return Some(ValidatedHouseholdWorkDirection::Reopen);
+    }
+    if contains_any(&[
+        "already paid",
+        "paid it",
+        "paid that",
+        "has been paid",
+        "is complete",
+        "completed it",
+        "done with this",
+    ]) {
+        return Some(ValidatedHouseholdWorkDirection::Complete);
+    }
+    if contains_any(&[
+        "no longer relevant",
+        "not relevant anymore",
+        "doesn't apply",
+        "does not apply",
+    ]) {
+        return Some(ValidatedHouseholdWorkDirection::MarkNoLongerRelevant);
+    }
+    if contains_any(&[
+        "dismiss",
+        "ignore this",
+        "don't need this",
+        "do not need this",
+    ]) {
+        return Some(ValidatedHouseholdWorkDirection::Dismiss);
+    }
+    None
 }
 
 impl IntelligenceFailure {
@@ -2881,6 +2982,137 @@ mod tests {
                 "organiser-1",
                 None,
             ),
+            Err(IntelligenceFailure::InvalidStructuredResult)
+        );
+    }
+
+    fn household_validation_request(
+        message: &str,
+        status: HouseholdWorkStatus,
+    ) -> HouseholdAdministrationRequest {
+        let linked_work = crate::household_work::HouseholdWorkSummary {
+            id: "work-1".to_owned(),
+            status,
+            kind: HouseholdWorkKind::Bill,
+            summary: "Electricity bill".to_owned(),
+            facts: Vec::new(),
+            source_refs: vec!["document-1".to_owned()],
+            due_at: None,
+            urgency: None,
+        };
+        HouseholdAdministrationRequest {
+            request_id: "request-1".to_owned(),
+            conversation_id: 1,
+            current_message: message.to_owned(),
+            relevant_conversation: Vec::new(),
+            source: None,
+            household_context: Vec::new(),
+            active_household_work: status
+                .is_open()
+                .then_some(linked_work.clone())
+                .into_iter()
+                .collect(),
+            source_linked_household_work: Some(linked_work),
+            available_tools: Vec::new(),
+            authority_and_approval_constraints: "Luna validates transitions.".to_owned(),
+            response_schema_version: "household-administration.v1".to_owned(),
+            constraints: IntelligenceExecutionConstraints {
+                timeout_ms: 1_000,
+                max_output_tokens: 500,
+            },
+        }
+    }
+
+    fn household_update(status: HouseholdWorkStatus) -> UntrustedHouseholdAdministrationResult {
+        UntrustedHouseholdAdministrationResult {
+            request_id: "request-1".to_owned(),
+            provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+            model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+            reply: "I updated the household work.".to_owned(),
+            work: HouseholdWorkProposal {
+                operation: HouseholdWorkOperation::Update,
+                work_id: Some("work-1".to_owned()),
+                kind: None,
+                summary: None,
+                status: Some(status),
+                facts: Vec::new(),
+                due_at: None,
+                urgency: None,
+            },
+            clarification: None,
+            proposed_actions: Vec::new(),
+            usage: IntelligenceUsage::default(),
+        }
+    }
+
+    #[test]
+    fn hallucinated_terminal_household_work_states_are_rejected() {
+        for status in [
+            HouseholdWorkStatus::Completed,
+            HouseholdWorkStatus::Dismissed,
+            HouseholdWorkStatus::NoLongerRelevant,
+        ] {
+            assert_eq!(
+                validate_household_result(
+                    &household_validation_request("When is this due?", HouseholdWorkStatus::Active),
+                    household_update(status),
+                ),
+                Err(IntelligenceFailure::InvalidStructuredResult)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_member_payment_authorises_completion_inside_luna() {
+        let result = validate_household_result(
+            &household_validation_request(
+                "I already paid that.",
+                HouseholdWorkStatus::AwaitingApproval,
+            ),
+            household_update(HouseholdWorkStatus::Completed),
+        )
+        .expect("validate explicit completion direction");
+        assert_eq!(
+            result.validated_member_direction,
+            Some(ValidatedHouseholdWorkDirection::Complete)
+        );
+    }
+
+    #[test]
+    fn a_read_only_question_cannot_close_household_work() {
+        let mut proposal = household_update(HouseholdWorkStatus::Completed);
+        proposal.work.operation = HouseholdWorkOperation::None;
+        proposal.work.work_id = None;
+        assert_eq!(
+            validate_household_result(
+                &household_validation_request(
+                    "Can you explain this bill?",
+                    HouseholdWorkStatus::AwaitingApproval,
+                ),
+                proposal,
+            ),
+            Err(IntelligenceFailure::InvalidStructuredResult)
+        );
+    }
+
+    #[test]
+    fn explicit_correction_can_reopen_source_linked_terminal_work() {
+        let mut proposal = household_update(HouseholdWorkStatus::Active);
+        let request = household_validation_request(
+            "Actually, it wasn't paid.",
+            HouseholdWorkStatus::Completed,
+        );
+        let result = validate_household_result(&request, proposal.clone())
+            .expect("validate explicit reopening direction");
+        assert_eq!(
+            result.validated_member_direction,
+            Some(ValidatedHouseholdWorkDirection::Reopen)
+        );
+
+        proposal.work.operation = HouseholdWorkOperation::Create;
+        proposal.work.work_id = None;
+        assert_eq!(
+            validate_household_result(&request, proposal),
             Err(IntelligenceFailure::InvalidStructuredResult)
         );
     }

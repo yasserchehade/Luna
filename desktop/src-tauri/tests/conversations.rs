@@ -16,7 +16,7 @@ use luna_core::{
     FilingDecisionDirection, FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
     IntelligenceProviderDescriptor, IntelligenceSelection, InterpretationConfidence, LocalOcr,
     MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance, TrustedDeviceManager,
-    VaultError,
+    VaultError, MAX_MVP_DOCUMENT_BYTES,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -892,6 +892,35 @@ fn only_pdf_jpg_and_png_files_can_enter_the_document_workflow() {
             directory.path()
         )
         .is_err());
+}
+
+#[test]
+fn an_oversized_document_is_rejected_before_it_is_read_or_preserved() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Oversized document")
+        .expect("create Conversation");
+    let oversized = directory.path().join("oversized.pdf");
+    fs::File::create(&oversized)
+        .expect("create oversized fixture")
+        .set_len(MAX_MVP_DOCUMENT_BYTES + 1)
+        .expect("size oversized fixture");
+
+    assert!(matches!(
+        store.attach_document(
+            "rivera-household",
+            conversation.id,
+            &oversized,
+            directory.path()
+        ),
+        Err(ConversationError::DocumentTooLarge)
+    ));
+    assert!(store
+        .list_document_arrivals("rivera-household")
+        .expect("list Document Arrivals")
+        .is_empty());
+    assert!(!directory.path().join("document-arrivals").exists());
 }
 
 #[test]
