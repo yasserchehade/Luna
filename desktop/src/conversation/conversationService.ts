@@ -15,6 +15,53 @@ export type ConversationMessage = {
   linkedDocumentArrival: number | null;
 };
 
+export type HouseholdWorkStatus =
+  | "active"
+  | "needsClarification"
+  | "awaitingApproval"
+  | "inProgress"
+  | "monitoring"
+  | "completed"
+  | "dismissed"
+  | "noLongerRelevant"
+  | "blocked";
+
+export type HouseholdWork = {
+  id: string;
+  householdId: string;
+  status: HouseholdWorkStatus;
+  kind: "bill" | "renewal" | "request" | "appointment" | "other";
+  summary: string;
+  facts: Array<{
+    key: "provider" | "property" | "account" | "amount" | "dueDate" | "requiredAction" | "urgency" | "other";
+    value: string;
+    evidenceRefs: string[];
+    certainty: "confirmed" | "likely" | "unknown";
+  }>;
+  sourceRefs: string[];
+  responsibleMemberId: string | null;
+  dueAt: string | null;
+  urgency: string | null;
+  proposedActions: Array<{
+    id: string;
+    kind: "draftReply" | "reminder";
+    summary: string;
+    arguments: Record<string, string>;
+    approval: "notRequired" | "required" | "approved" | "declined";
+    execution: "notStarted" | "completed" | "failed";
+  }>;
+  auditEvents: string[];
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+};
+
+export type HouseholdAdministrationOutcome = {
+  requestId: string;
+  message: string;
+  work: HouseholdWork | null;
+};
+
 export type DocumentProcessingState =
   | "needsCloudConsent"
   | "inspectingWithAssistance"
@@ -441,6 +488,12 @@ export interface ConversationService {
   archiveConversation(householdId: string, conversationId: number, archived: boolean): Promise<void>;
   deleteConversation(householdId: string, conversationId: number): Promise<void>;
   addMemberMessage(householdId: string, conversationId: number, body: string): Promise<ConversationMessage>;
+  submitHouseholdAdministration(
+    householdId: string,
+    conversationId: number,
+    arrivalId: number | null,
+    message: string,
+  ): Promise<HouseholdAdministrationOutcome>;
   listMessages(householdId: string, conversationId: number): Promise<ConversationMessage[]>;
   selectDocumentFiles(): Promise<string[]>;
   attachDocument(householdId: string, conversationId: number, path: string): Promise<DocumentArrival>;
@@ -454,6 +507,7 @@ export interface ConversationService {
   ): Promise<ConversationTurnOutcome>;
   resumeDocumentFilings(householdId: string): Promise<void>;
   listDocumentArrivals(householdId: string): Promise<DocumentArrival[]>;
+  listHouseholdWork(householdId: string): Promise<HouseholdWork[]>;
   listTodoItems(householdId: string): Promise<TodoItem[]>;
   listFiledOriginals(householdId: string): Promise<FiledOriginal[]>;
   listAuditEvents(householdId: string): Promise<AuditEvent[]>;
@@ -540,6 +594,11 @@ export const tauriConversationService: ConversationService = {
   addMemberMessage(householdId, conversationId, body) {
     return invoke<ConversationMessage>("add_member_message", { householdId, conversationId, body });
   },
+  submitHouseholdAdministration(householdId, conversationId, arrivalId, message) {
+    return invoke<HouseholdAdministrationOutcome>("submit_household_administration", {
+      request: { householdId, conversationId, arrivalId, message },
+    });
+  },
   listMessages(householdId, conversationId) {
     return invoke<ConversationMessage[]>("list_conversation_messages", { householdId, conversationId });
   },
@@ -577,6 +636,9 @@ export const tauriConversationService: ConversationService = {
   },
   listDocumentArrivals(householdId) {
     return invoke<DocumentArrival[]>("list_document_arrivals", { householdId });
+  },
+  listHouseholdWork(householdId) {
+    return invoke<HouseholdWork[]>("list_household_work", { householdId });
   },
   listTodoItems(householdId) {
     return invoke<TodoItem[]>("list_todo_items", { householdId });

@@ -2,6 +2,7 @@ mod account_session;
 mod cabinet;
 mod conversation;
 mod document_intelligence;
+mod household_work;
 mod intelligence;
 mod litellm;
 mod portable_memory;
@@ -31,16 +32,24 @@ pub use conversation::{
 pub use document_intelligence::{
     CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
 };
+pub use household_work::{
+    ActionApproval, ActionExecution, HouseholdWork, HouseholdWorkKind, HouseholdWorkStatus,
+    HouseholdWorkSummary, ProposedAction, ProposedActionKind, WorkFact, WorkFactCertainty,
+    WorkFactKey,
+};
 pub use intelligence::{
-    AdditionalIntelligenceEvidence, CandidateDirectionInterpretation, CandidateDisposition,
-    CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
-    CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
-    DocumentContentExcerpt, IntelligenceCapability, IntelligenceEvidence,
-    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceGateway,
-    IntelligenceModelDescriptor, IntelligenceProviderDescriptor, IntelligenceProviderStatus,
-    IntelligenceRequest, IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection,
-    IntelligenceUsage, UntrustedIntelligenceResult, MANAGED_INTELLIGENCE_MODEL_ID,
-    MANAGED_INTELLIGENCE_PROVIDER_ID,
+    AdditionalIntelligenceEvidence, AvailableHouseholdTool, CandidateDirectionInterpretation,
+    CandidateDisposition, CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision,
+    CloudConsentScope, CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
+    DocumentContentExcerpt, HouseholdActionProposal, HouseholdAdministrationMessage,
+    HouseholdAdministrationRequest, HouseholdAdministrationResult, HouseholdAdministrationSource,
+    HouseholdClarification, HouseholdContextItem, HouseholdWorkOperation, HouseholdWorkProposal,
+    IntelligenceCapability, IntelligenceEvidence, IntelligenceExecutionConstraints,
+    IntelligenceFailure, IntelligenceGateway, IntelligenceModelDescriptor,
+    IntelligenceProviderDescriptor, IntelligenceProviderStatus, IntelligenceRequest,
+    IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection, IntelligenceUsage,
+    UntrustedHouseholdAdministrationResult, UntrustedIntelligenceResult,
+    MANAGED_INTELLIGENCE_MODEL_ID, MANAGED_INTELLIGENCE_PROVIDER_ID,
 };
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
@@ -63,6 +72,10 @@ pub use trusted_device::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tauri::{Manager, State};
 #[cfg(not(feature = "e2e"))]
 use tauri_plugin_dialog::DialogExt;
@@ -362,6 +375,184 @@ fn list_conversation_messages(
         .map_err(|error| error.to_string())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitHouseholdAdministrationRequest {
+    household_id: String,
+    conversation_id: i64,
+    arrival_id: Option<i64>,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HouseholdAdministrationOutcome {
+    request_id: String,
+    message: String,
+    work: Option<HouseholdWork>,
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn submit_household_administration(
+    store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
+    sessions: State<'_, AccountSessionManager>,
+    request: SubmitHouseholdAdministrationRequest,
+) -> Result<HouseholdAdministrationOutcome, String> {
+    let actor = current_household_actor(sessions.inner(), &request.household_id)?;
+    let message = request.message.trim();
+    if message.is_empty() {
+        return Err("The household message cannot be empty.".to_owned());
+    }
+    let arrival = if let Some(arrival_id) = request.arrival_id {
+        let arrival = store
+            .list_document_arrivals(&request.household_id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|arrival| arrival.id == arrival_id)
+            .ok_or_else(|| "The uploaded document is no longer available.".to_owned())?;
+        if arrival.conversation_id != request.conversation_id {
+            return Err("The uploaded document belongs to a different Conversation.".to_owned());
+        }
+        Some(arrival)
+    } else {
+        None
+    };
+    store
+        .add_member_message(&request.household_id, request.conversation_id, message)
+        .map_err(|error| error.to_string())?;
+    let conversation = store
+        .list_messages(&request.household_id, request.conversation_id)
+        .map_err(|error| error.to_string())?;
+    let relevant_conversation = conversation
+        .into_iter()
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| HouseholdAdministrationMessage {
+            author: message.author,
+            body: message.body,
+        })
+        .collect();
+    let household_context = arrival
+        .as_ref()
+        .map(|arrival| {
+            let context = &arrival.review_card.context;
+            [
+                ("documentType", &context.document_type),
+                ("serviceProvider", &context.service_provider),
+                ("addressee", &context.addressee),
+                ("property", &context.property),
+                ("account", &context.account),
+                ("amount", &context.amount),
+            ]
+            .into_iter()
+            .filter_map(|(category, field)| {
+                field.value.as_ref().map(|value| HouseholdContextItem {
+                    category: category.to_owned(),
+                    value: value.clone(),
+                    source_reference: format!("document-{}", arrival.id),
+                })
+            })
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let active_household_work = store
+        .list_household_work(&request.household_id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|work| work.status.is_open())
+        .map(|work| HouseholdWorkSummary::from(&work))
+        .collect();
+    let source = arrival
+        .as_ref()
+        .map(|arrival| {
+            let bytes = fs::read(&arrival.original_path).map_err(|error| error.to_string())?;
+            Ok::<_, String>(HouseholdAdministrationSource {
+                reference: format!("document-{}", arrival.id),
+                filename: arrival.original_name.clone(),
+                media_type: arrival.media_type.clone(),
+                original_base64: BASE64.encode(bytes),
+                extracted_text: arrival.extracted_text.clone(),
+            })
+        })
+        .transpose()?;
+    let request_id = format!(
+        "household-work-{}-{}",
+        request.conversation_id,
+        household_work_timestamp()
+    );
+    let reasoning_request = HouseholdAdministrationRequest {
+        request_id: request_id.clone(),
+        conversation_id: request.conversation_id,
+        current_message: message.to_owned(),
+        relevant_conversation,
+        source,
+        household_context,
+        active_household_work,
+        available_tools: vec![
+            AvailableHouseholdTool {
+                name: "draftReply".to_owned(),
+                description: "Prepare a reply draft without sending it.".to_owned(),
+            },
+            AvailableHouseholdTool {
+                name: "reminder".to_owned(),
+                description: "Propose a reminder without scheduling or executing it.".to_owned(),
+            },
+        ],
+        authority_and_approval_constraints: format!(
+            "Luna validates all proposals. The member {actor} remains the authority. OpenAI cannot approve, execute, send, schedule, mutate context or close work."
+        ),
+        response_schema_version: "household-administration.v1".to_owned(),
+        constraints: IntelligenceExecutionConstraints {
+            timeout_ms: 30_000,
+            max_output_tokens: 1_200,
+        },
+    };
+    let result = intelligence
+        .reason_about_household_administration(&request.household_id, reasoning_request)
+        .map_err(|error| error.to_string())?;
+    let work = store
+        .apply_household_administration_result(
+            &request.household_id,
+            request.conversation_id,
+            request.arrival_id,
+            &result,
+            &household_work_timestamp(),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut response = result.reply.clone();
+    if let Some(clarification) = result.clarification {
+        response.push_str("\n\n");
+        response.push_str(&clarification.question);
+    }
+    store
+        .add_luna_message(
+            &request.household_id,
+            request.conversation_id,
+            &response,
+            request.arrival_id,
+        )
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &request.household_id,
+    )?;
+    Ok(HouseholdAdministrationOutcome {
+        request_id,
+        message: response,
+        work,
+    })
+}
+
 #[tauri::command]
 fn attach_document(
     store: State<'_, ConversationState>,
@@ -396,6 +587,16 @@ fn list_document_arrivals(
 ) -> Result<Vec<DocumentArrival>, String> {
     store
         .list_document_arrivals(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_household_work(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<HouseholdWork>, String> {
+    store
+        .list_household_work(&household_id)
         .map_err(|error| error.to_string())
 }
 
@@ -1618,6 +1819,13 @@ fn open_household_state(
     String::from_utf8(plaintext).map_err(|_| "Protected Household state is not UTF-8.".to_owned())
 }
 
+fn household_work_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| format!("{}-{}", duration.as_secs(), duration.subsec_nanos()))
+        .unwrap_or_else(|_| "0-0".to_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
@@ -1699,8 +1907,10 @@ pub fn run() {
         delete_conversation,
         add_member_message,
         list_conversation_messages,
+        submit_household_administration,
         attach_document,
         list_document_arrivals,
+        list_household_work,
         resume_document_filings,
         list_todo_items,
         list_filed_originals,

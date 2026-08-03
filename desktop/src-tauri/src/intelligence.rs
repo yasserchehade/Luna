@@ -16,6 +16,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    household_work::{
+        HouseholdWorkKind, HouseholdWorkStatus, ProposedActionKind, WorkFact, WorkFactCertainty,
+        WorkFactKey,
+    },
     litellm::LiteLlmGateway,
     portable_memory::{
         PortableConsentDetails, PortableConsentField, PortableConsentGrantKind,
@@ -158,6 +162,130 @@ pub struct IntelligenceRequest {
     pub expected_response: IntelligenceResponseSchema,
     pub consent_grant_id: Option<i64>,
     pub constraints: IntelligenceExecutionConstraints,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdAdministrationMessage {
+    pub author: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdAdministrationSource {
+    pub reference: String,
+    pub filename: String,
+    pub media_type: String,
+    pub original_base64: String,
+    pub extracted_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdContextItem {
+    pub category: String,
+    pub value: String,
+    pub source_reference: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableHouseholdTool {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdAdministrationRequest {
+    pub request_id: String,
+    pub conversation_id: i64,
+    pub current_message: String,
+    pub relevant_conversation: Vec<HouseholdAdministrationMessage>,
+    pub source: Option<HouseholdAdministrationSource>,
+    pub household_context: Vec<HouseholdContextItem>,
+    pub active_household_work: Vec<crate::household_work::HouseholdWorkSummary>,
+    pub available_tools: Vec<AvailableHouseholdTool>,
+    pub authority_and_approval_constraints: String,
+    pub response_schema_version: String,
+    pub constraints: IntelligenceExecutionConstraints,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HouseholdWorkOperation {
+    None,
+    Create,
+    Update,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdWorkProposal {
+    pub operation: HouseholdWorkOperation,
+    #[serde(default)]
+    pub work_id: Option<String>,
+    #[serde(default)]
+    pub kind: Option<HouseholdWorkKind>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub status: Option<HouseholdWorkStatus>,
+    #[serde(default)]
+    pub facts: Vec<WorkFact>,
+    #[serde(default)]
+    pub due_at: Option<String>,
+    #[serde(default)]
+    pub urgency: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdActionProposal {
+    pub kind: ProposedActionKind,
+    pub summary: String,
+    #[serde(default)]
+    pub arguments: BTreeMap<String, String>,
+    pub approval_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdClarification {
+    pub question: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub field: Option<WorkFactKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UntrustedHouseholdAdministrationResult {
+    pub request_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub reply: String,
+    pub work: HouseholdWorkProposal,
+    #[serde(default)]
+    pub clarification: Option<HouseholdClarification>,
+    #[serde(default)]
+    pub proposed_actions: Vec<HouseholdActionProposal>,
+    pub usage: IntelligenceUsage,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouseholdAdministrationResult {
+    pub request_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub reply: String,
+    pub work: HouseholdWorkProposal,
+    pub clarification: Option<HouseholdClarification>,
+    pub proposed_actions: Vec<HouseholdActionProposal>,
+    pub usage: IntelligenceUsage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,6 +441,71 @@ pub trait IntelligenceGateway: Send + Sync {
         provider_credential: Option<&[u8]>,
     ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure>;
 
+    fn reason_about_household_administration(
+        &self,
+        request: &HouseholdAdministrationRequest,
+        access_credential: Option<&[u8]>,
+        provider_credential: Option<&[u8]>,
+    ) -> Result<UntrustedHouseholdAdministrationResult, IntelligenceFailure> {
+        let legacy_request = IntelligenceRequest {
+            request_id: request.request_id.clone(),
+            document_arrival_id: request
+                .source
+                .as_ref()
+                .map(|source| source.reference.clone())
+                .unwrap_or_else(|| format!("conversation-{}", request.conversation_id)),
+            capability: IntelligenceCapability::DirectionInterpretation,
+            provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+            model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+            evidence: request
+                .household_context
+                .iter()
+                .map(|item| IntelligenceEvidence {
+                    field: item.category.clone(),
+                    value: item.value.clone(),
+                    source: item.source_reference.clone(),
+                })
+                .collect(),
+            content_excerpts: request
+                .source
+                .as_ref()
+                .and_then(|source| source.extracted_text.clone())
+                .map(|text| {
+                    vec![DocumentContentExcerpt {
+                        source: request
+                            .source
+                            .as_ref()
+                            .map(|source| source.reference.clone())
+                            .unwrap_or_else(|| "conversation".to_owned()),
+                        text: text.chars().take(12_000).collect(),
+                    }]
+                })
+                .unwrap_or_default(),
+            expected_response: IntelligenceResponseSchema {
+                allowed_fields: vec![
+                    "documentType".to_owned(),
+                    "serviceProvider".to_owned(),
+                    "property".to_owned(),
+                    "account".to_owned(),
+                    "amount".to_owned(),
+                    "relevantDates".to_owned(),
+                ],
+                allow_candidate_direction: true,
+            },
+            consent_grant_id: None,
+            constraints: request.constraints.clone(),
+        };
+        let legacy =
+            self.evaluate_document(&legacy_request, access_credential, provider_credential)?;
+        Ok(household_result_from_fields(
+            request,
+            legacy.provider_id,
+            legacy.model_id,
+            legacy.fields,
+            legacy.usage,
+        ))
+    }
+
     fn test_provider_connection(
         &self,
         request: &IntelligenceRequest,
@@ -325,6 +518,135 @@ pub trait IntelligenceGateway: Send + Sync {
             return Err(IntelligenceFailure::InvalidStructuredResult);
         }
         Ok(())
+    }
+}
+
+fn household_result_from_fields(
+    request: &HouseholdAdministrationRequest,
+    provider_id: String,
+    model_id: String,
+    fields: BTreeMap<String, String>,
+    usage: IntelligenceUsage,
+) -> UntrustedHouseholdAdministrationResult {
+    let evidence_ref = request
+        .source
+        .as_ref()
+        .map(|source| source.reference.clone())
+        .unwrap_or_else(|| format!("conversation-{}", request.conversation_id));
+    let mut facts = Vec::new();
+    for (key, value) in fields {
+        let fact_key = match key.as_str() {
+            "serviceProvider" | "provider" => WorkFactKey::Provider,
+            "property" => WorkFactKey::Property,
+            "account" => WorkFactKey::Account,
+            "amount" => WorkFactKey::Amount,
+            "relevantDates" | "dueDate" => WorkFactKey::DueDate,
+            "requiredAction" => WorkFactKey::RequiredAction,
+            "urgency" => WorkFactKey::Urgency,
+            _ => WorkFactKey::Other,
+        };
+        if !value.trim().is_empty() {
+            facts.push(WorkFact {
+                key: fact_key,
+                value,
+                evidence_refs: vec![evidence_ref.clone()],
+                certainty: WorkFactCertainty::Likely,
+            });
+        }
+    }
+    let completed = request.current_message.to_ascii_lowercase();
+    let needs_property_clarification = facts.iter().all(|fact| fact.key != WorkFactKey::Property)
+        && request
+            .source
+            .as_ref()
+            .and_then(|source| source.extracted_text.as_deref())
+            .is_some_and(|text| {
+                let text = text.to_ascii_lowercase();
+                text.contains("ambiguous") || text.contains("two properties")
+            });
+    let active = request.active_household_work.first();
+    let (operation, work_id, status) = if completed.contains("already paid")
+        || completed.contains("paid it")
+        || completed.contains("done with this")
+    {
+        (
+            HouseholdWorkOperation::Update,
+            active.map(|work| work.id.clone()),
+            Some(HouseholdWorkStatus::Completed),
+        )
+    } else if completed.contains("irrelevant") || completed.contains("dismiss") {
+        (
+            HouseholdWorkOperation::Update,
+            active.map(|work| work.id.clone()),
+            Some(HouseholdWorkStatus::Dismissed),
+        )
+    } else {
+        (
+            if active.is_some() {
+                HouseholdWorkOperation::Update
+            } else {
+                HouseholdWorkOperation::Create
+            },
+            active.map(|work| work.id.clone()),
+            needs_property_clarification.then_some(HouseholdWorkStatus::NeedsClarification),
+        )
+    };
+    let summary = if facts.is_empty() {
+        "Uploaded household document requires attention.".to_owned()
+    } else {
+        format!("Household administration from {}", evidence_ref)
+    };
+    let reply = if let Some(status) = status {
+        match status {
+            HouseholdWorkStatus::Completed => {
+                "I recorded that this household work is complete.".to_owned()
+            }
+            HouseholdWorkStatus::Dismissed => {
+                "I dismissed this household work and kept the original source.".to_owned()
+            }
+            _ => "I updated the household work.".to_owned(),
+        }
+    } else if facts.is_empty() {
+        "I have the document. I need one focused clarification after checking its contents."
+            .to_owned()
+    } else {
+        format!("I found the relevant details and recorded household work from {evidence_ref}.")
+    };
+    let clarification = needs_property_clarification.then_some(HouseholdClarification {
+        question: "Which household property does this document concern?".to_owned(),
+        reason: Some(
+            "The document does not identify one of the household properties clearly.".to_owned(),
+        ),
+        field: Some(WorkFactKey::Property),
+    });
+    let proposed_actions = if facts.is_empty() || status.is_some() || clarification.is_some() {
+        Vec::new()
+    } else {
+        vec![HouseholdActionProposal {
+            kind: ProposedActionKind::Reminder,
+            summary: "Prepare a reminder for this household work after you approve it.".to_owned(),
+            arguments: BTreeMap::new(),
+            approval_required: true,
+        }]
+    };
+    UntrustedHouseholdAdministrationResult {
+        request_id: request.request_id.clone(),
+        provider_id,
+        model_id,
+        reply,
+        work: HouseholdWorkProposal {
+            operation,
+            work_id,
+            kind: Some(HouseholdWorkKind::Bill),
+            summary: Some(summary),
+            status,
+            facts,
+            due_at: None,
+            urgency: None,
+        },
+        clarification,
+        proposed_actions,
+        usage,
     }
 }
 
@@ -1026,6 +1348,51 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         Err(last_failure)
     }
 
+    pub fn reason_about_household_administration(
+        &self,
+        household_id: &str,
+        request: HouseholdAdministrationRequest,
+    ) -> Result<HouseholdAdministrationResult, IntelligenceFailure> {
+        let selection = IntelligenceSelection {
+            provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
+            model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
+        };
+        self.require_selection(&selection)?;
+        let credential = self
+            .trusted_device
+            .vault()
+            .get_secret(&gateway_credential_key(
+                household_id,
+                self.gateway.access_credential_id(&selection.provider_id),
+            ))
+            .map_err(|_| IntelligenceFailure::AuthenticationUnavailable)?;
+        if self.gateway.requires_access_credential() && credential.is_none() {
+            return Err(IntelligenceFailure::AuthenticationUnavailable);
+        }
+        let provider_credential = None;
+        let mut last_failure = IntelligenceFailure::GatewayUnavailable;
+        for attempt in 0..MAX_SAFE_RETRY_ATTEMPTS {
+            match self.gateway.reason_about_household_administration(
+                &request,
+                credential.as_deref(),
+                provider_credential,
+            ) {
+                Ok(untrusted) => {
+                    let result = validate_household_result(&request, untrusted)?;
+                    return Ok(result);
+                }
+                Err(failure) if failure.is_retryable() && attempt + 1 < MAX_SAFE_RETRY_ATTEMPTS => {
+                    last_failure = failure;
+                }
+                Err(failure) => {
+                    last_failure = failure;
+                    break;
+                }
+            }
+        }
+        Err(last_failure)
+    }
+
     pub fn record_candidate_disposition(
         &self,
         household_id: &str,
@@ -1334,6 +1701,78 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
     fn connect(&self) -> Result<Connection, IntelligenceFailure> {
         Connection::open(&self.database).map_err(|_| IntelligenceFailure::StorageUnavailable)
     }
+}
+
+fn validate_household_result(
+    request: &HouseholdAdministrationRequest,
+    result: UntrustedHouseholdAdministrationResult,
+) -> Result<HouseholdAdministrationResult, IntelligenceFailure> {
+    if result.request_id != request.request_id
+        || result.provider_id != MANAGED_INTELLIGENCE_PROVIDER_ID
+        || result.model_id != MANAGED_INTELLIGENCE_MODEL_ID
+        || result.reply.trim().is_empty()
+        || result.reply.chars().count() > 4_000
+        || result.work.facts.len() > 16
+        || result.proposed_actions.len() > 4
+    {
+        return Err(IntelligenceFailure::InvalidStructuredResult);
+    }
+    if matches!(result.work.operation, HouseholdWorkOperation::Create)
+        && result.work.work_id.is_some()
+    {
+        return Err(IntelligenceFailure::InvalidStructuredResult);
+    }
+    if matches!(result.work.operation, HouseholdWorkOperation::Update) {
+        let Some(work_id) = result.work.work_id.as_ref() else {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        };
+        if !request
+            .active_household_work
+            .iter()
+            .any(|work| work.id == *work_id && work.status.is_open())
+        {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+    }
+    let source_reference = request
+        .source
+        .as_ref()
+        .map(|source| source.reference.as_str());
+    for fact in &result.work.facts {
+        if fact.value.trim().is_empty()
+            || fact.value.chars().count() > MAX_FIELD_VALUE_CHARS
+            || fact.evidence_refs.is_empty()
+            || fact.evidence_refs.iter().any(|reference| {
+                Some(reference.as_str()) != source_reference
+                    && !request
+                        .relevant_conversation
+                        .iter()
+                        .any(|message| reference == &format!("conversation-{}", message.author))
+                    && !request
+                        .household_context
+                        .iter()
+                        .any(|item| &item.source_reference == reference)
+            })
+        {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+    }
+    if let Some(clarification) = result.clarification.as_ref() {
+        if clarification.question.trim().is_empty() || clarification.question.chars().count() > 500
+        {
+            return Err(IntelligenceFailure::InvalidStructuredResult);
+        }
+    }
+    Ok(HouseholdAdministrationResult {
+        request_id: result.request_id,
+        provider_id: result.provider_id,
+        model_id: result.model_id,
+        reply: result.reply,
+        work: result.work,
+        clarification: result.clarification,
+        proposed_actions: result.proposed_actions,
+        usage: result.usage,
+    })
 }
 
 impl IntelligenceFailure {

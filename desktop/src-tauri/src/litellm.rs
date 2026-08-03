@@ -8,8 +8,9 @@ use std::{io::Read, net::IpAddr, sync::Arc, time::Duration};
 use reqwest::StatusCode;
 
 use crate::intelligence::{
-    AdditionalIntelligenceEvidence, IntelligenceFailure, IntelligenceGateway, IntelligenceRequest,
-    IntelligenceUsage, UntrustedIntelligenceResult, BYOK_OPENAI_PROVIDER_ID,
+    AdditionalIntelligenceEvidence, HouseholdAdministrationRequest, IntelligenceFailure,
+    IntelligenceGateway, IntelligenceRequest, IntelligenceUsage,
+    UntrustedHouseholdAdministrationResult, UntrustedIntelligenceResult, BYOK_OPENAI_PROVIDER_ID,
 };
 
 enum LiteLlmAuthentication<'a> {
@@ -170,6 +171,57 @@ impl IntelligenceGateway for LiteLlmGateway {
             })?;
         parse_litellm_response(&response)
     }
+
+    fn reason_about_household_administration(
+        &self,
+        request: &HouseholdAdministrationRequest,
+        access_credential: Option<&[u8]>,
+        provider_credential: Option<&[u8]>,
+    ) -> Result<UntrustedHouseholdAdministrationResult, IntelligenceFailure> {
+        let credential = access_credential
+            .and_then(|credential| std::str::from_utf8(credential).ok())
+            .map(str::trim)
+            .filter(|credential| !credential.is_empty())
+            .ok_or(IntelligenceFailure::AuthenticationUnavailable)?;
+        let endpoint = self.managed_endpoint.as_str();
+        if !endpoint_is_secure(endpoint) {
+            return Err(IntelligenceFailure::GatewayUnavailable);
+        }
+        let response = self
+            .transport
+            .post(
+                endpoint,
+                LiteLlmAuthentication::Managed(credential),
+                &request.request_id,
+                Duration::from_millis(request.constraints.timeout_ms.max(1)),
+                &litellm_household_request(request),
+            )
+            .map_err(|failure| map_transport_failure(failure, provider_credential.is_some()))?;
+        parse_litellm_household_response(&response)
+    }
+}
+
+fn litellm_household_request(request: &HouseholdAdministrationRequest) -> serde_json::Value {
+    serde_json::json!({
+        "model": "openai/gpt-4.1-mini",
+        "temperature": 0,
+        "max_tokens": request.constraints.max_output_tokens,
+        "num_retries": 0,
+        "fallbacks": [],
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are Luna's household-administration reasoning engine. Use the supplied document, relevant conversation and authorised household context. Return only the bounded JSON proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification."
+            },
+            {
+                "role": "user",
+                "content": serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned())
+            }
+        ],
+        "response_format": {
+            "type": "json_object"
+        }
+    })
 }
 
 fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
@@ -294,6 +346,32 @@ fn parse_litellm_response(
                 .and_then(serde_json::Value::as_f64),
         },
     })
+}
+
+fn parse_litellm_household_response(
+    response: &serde_json::Value,
+) -> Result<UntrustedHouseholdAdministrationResult, IntelligenceFailure> {
+    let content = response
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or(IntelligenceFailure::InvalidStructuredResult)?;
+    let mut result: UntrustedHouseholdAdministrationResult =
+        serde_json::from_str(content).map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
+    result.usage = IntelligenceUsage {
+        input_tokens: response
+            .pointer("/usage/prompt_tokens")
+            .and_then(serde_json::Value::as_u64),
+        output_tokens: response
+            .pointer("/usage/completion_tokens")
+            .and_then(serde_json::Value::as_u64),
+        estimated_cost_usd: response
+            .pointer("/usage/cost")
+            .and_then(serde_json::Value::as_f64),
+    };
+    Ok(result)
 }
 
 #[derive(serde::Deserialize)]
