@@ -1760,15 +1760,14 @@ fn validate_household_result(
             return Err(IntelligenceFailure::InvalidStructuredResult);
         }
     }
-    if updated_work.is_some_and(|work| work.status.is_terminal()) {
-        if validated_member_direction != Some(ValidatedHouseholdWorkDirection::Reopen)
+    if updated_work.is_some_and(|work| work.status.is_terminal())
+        && (validated_member_direction != Some(ValidatedHouseholdWorkDirection::Reopen)
             || result
                 .work
                 .status
-                .is_none_or(HouseholdWorkStatus::is_terminal)
-        {
-            return Err(IntelligenceFailure::InvalidStructuredResult);
-        }
+                .is_none_or(HouseholdWorkStatus::is_terminal))
+    {
+        return Err(IntelligenceFailure::InvalidStructuredResult);
     }
     let source_reference = request
         .source
