@@ -1,79 +1,76 @@
 # Intelligence Gateway architecture
 
-ADR 0015 implements ADR 0003's provider-neutral Cloud Assistance boundary.
+**Scope:** Supporting infrastructure for the MVP household-administration agent
+
+The gateway is an execution boundary inside the architecture described in [Agent Architecture](./agent-architecture.md). It is not the product's reasoning model, durable domain or user-facing provider-selection experience.
+
+## MVP route
+
+The MVP uses one Luna-managed OpenAI route through the Responses API. OpenAI reads email, supported attachments and the authorised context assembled by Luna. Local parsing and OCR may support preservation, evidence and validation, but they do not replace the reasoning loop.
 
 ```mermaid
 flowchart TD
-    Handling["Document Handling"] --> Inspect["Local Inspection"]
-    Inspect --> Need["Local Evidence is insufficient"]
-    Need --> Capability["Luna selects Direction Interpretation"]
-    Capability --> Selection["Luna selects OpenAI + gpt-4.1-mini"]
-    Selection --> Consent["Validate or request provider/model-specific Consent Grant"]
-    Consent --> Request["Build bounded Intelligence Request"]
-    Request --> Gateway["Luna-owned Intelligence Gateway"]
-    Gateway --> Adapter["Private LiteLLM adapter"]
-    Adapter --> Deployment["Isolated LiteLLM deployment"]
-    Deployment --> Provider["Exact OpenAI model"]
-    Provider --> Untrusted["Structured untrusted result"]
-    Untrusted --> Validation["Luna schema, identity and correlation validation"]
-    Validation --> Domain["Document Handling validation"]
-    Domain --> Evidence["Evidence or candidate Direction Interpretation"]
+    Source["User message · email · document"] --> Context["Luna context assembly"]
+    Context --> Request["Luna-owned reasoning request"]
+    Request --> Gateway["Luna Intelligence Gateway"]
+    Gateway --> Adapter["Private OpenAI/Responses adapter"]
+    Adapter --> Model["OpenAI MVP reasoning engine"]
+    Model --> Untrusted["Untrusted response or tool proposal"]
+    Untrusted --> Validation["Luna schema, authority and approval validation"]
+    Validation --> Work["Household Work and audit"]
+    Validation --> Tools["Luna-owned tool execution"]
+    Tools --> Work
 ```
 
 ## Public boundary
 
-`IntelligenceGateway` receives a Luna-owned `IntelligenceRequest` and returns a Luna-owned `UntrustedIntelligenceResult` or `IntelligenceFailure`. The request carries a safe request identifier, Document Arrival correlation, capability, exact provider/model, selected Local Inspection Evidence, bounded content excerpts, expected response schema, Consent Grant reference and execution constraints.
+`IntelligenceGateway` receives a Luna-owned request and returns an untrusted result or a Luna-owned failure. The request may contain:
 
-`DocumentIntelligenceService` is the application seam joining protected Document Handling state to that boundary. The frontend supplies only a Document Arrival identifier, exact selection, consent choice, granting Luna Account and optional existing Consent Grant. It cannot construct an arbitrary provider payload.
+- a Luna-generated request and correlation identifier;
+- the relevant recent conversation;
+- authorised household context and active work;
+- email body and metadata;
+- a preserved PDF, JPG or PNG attachment;
+- the expected response schema and tool-proposal limits; and
+- execution constraints and the applicable Luna permission decision.
 
-The production catalogue contains two deliberately separate OpenAI routes:
+The gateway must not accept provider-generated authority, credentials, tool implementations, durable identifiers or direct state mutations. Luna adds and verifies request identity, route identity and audit metadata around the provider result.
 
-| Intelligence Provider | Model | Mode | Harness |
-| --- | --- | --- | --- |
-| OpenAI | `gpt-4.1-mini` | Luna-managed Intelligence | isolated LiteLLM; remote before external testing |
-| OpenAI | `gpt-4.1-mini` | Bring-your-own Intelligence | separate BYOK-only LiteLLM process; customer provider key required |
+## One context-aware contract
 
-Luna-managed Intelligence is an entitlement of an eligible paid Household plan and uses provider credentials billed to Luna. A free Household may instead configure a supported Bring-your-own provider connection entirely through Luna's interface, with provider usage billed to the connection owner, or remain Local-only. Paid Households retain those choices. Managed gateway credentials are automatically provisioned to Trusted Devices and are never customer-entered settings.
+The gateway must support the shared household-administration reasoning path. It must not preserve a product boundary in which:
 
-The managed adapter authenticates with a bearer gateway credential. The BYOK adapter sends the automatically provisioned gateway credential as `x-litellm-api-key` and the transient customer provider credential separately as `x-api-key`. The provider credential is loaded from the OS vault and never enters the request body. Options keeps provider-key entry disabled until that Trusted Device has BYOK gateway access, so missing infrastructure access is never misreported as a bad customer key. The BYOK LiteLLM process has no `OPENAI_API_KEY`; its configured model is `byok/openai/gpt-4.1-mini`, and its virtual keys cannot address the managed route.
+- ordinary Conversation receives only `currentMessage`; and
+- Document Intelligence receives a separate bounded field questionnaire.
 
-## Household Plan and billing
+The provider needs enough relevant context to resolve references, understand the attachment and relate the source to the household. Luna still applies relevance and privacy policy; context minimisation means authorised and relevant, not isolated and unusable.
 
-A Managed Intelligence Entitlement belongs to the Household and remains distinct from Trusted Device provisioning. During the first prototype, a small beta cohort receives complimentary, usage-capped entitlements through the same server-side interface that will later consume paid subscription state. No account identity is hard-coded and a checkout redirect can never grant access.
+## Luna-owned execution boundary
 
-Paddle sandbox is the first Billing Subscription adapter evaluated under ADR 0017. Luna creates checkout and customer-portal sessions only for an authenticated Household Organiser, accepts entitlement changes only from verified and idempotently processed server-side billing events, and retains only external billing identifiers plus access-critical status. Card data and billing secrets never enter the desktop, Cabinet or protected Household state.
+OpenAI may return:
 
-The account service owns the entitlement state machine: `free`, `checkoutPending`, `provisioning`, `ready`, `paymentProblem` and `ended`. Complimentary access is granted by an operator to a Household identifier through a service-role-only function; it does not depend on a member email or a hard-coded founder identity. Paddle events are authenticated over the raw request body, de-duplicated by event identifier and applied only when their `occurred_at` value is newer than the recorded subscription state. A reconciliation endpoint feeds recovered Paddle state through that same ordered seam.
+- a natural conversational explanation;
+- extracted facts with evidence and uncertainty;
+- a proposed Household Work update;
+- a clarifying question; or
+- a proposed tool call with typed arguments.
 
-An entitled Trusted Device must prove possession of its existing Ed25519 device-authorisation key over a five-minute server nonce before the provisioning service requests a LiteLLM virtual key. The service durably reserves the deterministic device alias and a unique reservation while rechecking entitlement, device status, budget scope and cap before it asks LiteLLM to mint the key. A two-minute provisioning lease prevents reconciliation from declaring that alias deleted while minting is still in flight; each gateway administration call is capped at 15 seconds and the complete mint path is bounded well inside that lease. Expired pending reservations become durable revocations, so a worker crash or failed cleanup cannot erase the retry handle. Entitlement loss during provisioning therefore either prevents minting or leaves an alias that reconciliation can retry. Readiness requires the same live reservation, scope and cap. Each resulting key is device-attributed, limited to `openai/gpt-4.1-mini` and `/v1/chat/completions`, expires within 24 hours, and has rate and token caps. A cap change rotates the entitlement budget scope, so an older request cannot restore a superseded ceiling. Every device key for one entitlement budget scope belongs to the same LiteLLM team, whose spend ceiling enforces the cap once for the Household rather than once per device. Only the narrow virtual key returns to the desktop, where it is written to the operating-system credential vault and renewed before expiry. Cancellation, payment failure, entitlement expiry or device revocation queues the attributable LiteLLM key alias for server-side deletion and causes the desktop to clear its local credential at the next authenticated synchronisation.
+Luna validates all of these. In particular, Luna verifies source correlation, work identity, allowed fields, value bounds, target and scope, household authority, approval requirements, idempotency and persistence. The model cannot call a tool, send a message, schedule a reminder, alter a provider account or mark work complete directly.
 
-Live charging remains disabled until issue #53's remote gateway can provision and revoke narrow managed credentials for entitled Trusted Devices and enforce abuse controls. Bring-your-own and Local-only Intelligence remain available regardless of Billing Subscription state.
+## Credentials and transport
 
-`DeterministicIntelligenceGateway` implements the same contract for tests and never enters the production registry.
+The upstream OpenAI credential remains in the operator-controlled gateway environment. The desktop receives only a narrow, revocable Luna gateway credential in the operating-system vault. Credentials never enter SQLite, Cabinet files, Conversation messages, Household Work, audit content or diagnostics.
 
-For prototype acceptance, an operator may run the pinned gateway deployment ephemerally on loopback and send only the fixed synthetic canary. The desktop and canary accept cleartext HTTP only for loopback hosts and reject every cleartext remote endpoint before transmitting credentials or content. This validates the real provider contract without adding LiteLLM or Python to the desktop. Before external testing, the same boundary moves behind authenticated remote HTTPS ingress with managed secrets and attributable gateway credentials.
+The gateway and adapter must disable raw request/response content logging, pin the evaluated model route, use bounded timeouts and retries, and retain only privacy-safe usage metadata. A real remote deployment requires authenticated TLS ingress and abuse controls before external household data is used.
 
-## Minimisation
+## Failure and recovery
 
-For Direction Interpretation, Luna may transmit:
+Provider, gateway, validation and authentication failures become Luna-owned failure categories. Safe retries use the same request, provider and model. A failed request leaves the relevant Household Work and source intact in a waiting or blocked state. No fallback provider, model or action is selected silently.
 
-- media type;
-- local values for unresolved document fields;
-- the names of fields Luna asks the provider to interpret;
-- at most 4,000 characters of locally extracted text.
+If a result is malformed, over-scoped or correlated to the wrong source, Luna rejects it without changing durable work or consuming approval. A later retry or member decision resumes the same work item.
 
-Luna does not transmit the Household identifier, Cabinet or source paths, checksum, Filing Rules, duplicate state, History, credentials, the Original file, or complete Household state. Relevance to a Household, property or Service Provider remains Member Direction and is not requested from the provider.
+## Deferred routes
 
-Before Luna offers reusable consent, the Conversation states its concrete future scope: the exact provider/model and capability, the current media type, the same locally known context values and no wider set of disclosed fields. The protected Consent Grant stores that local-scope Evidence and validates it against every attempted reuse. A changed media type, local context value, provider, model, capability or wider disclosed field set requires a new Consent Grant.
+The MVP does not expose local models, local-only reasoning, BYOK, multiple provider choices or per-document provider consent UX. The `IntelligenceGateway` contract may remain replaceable infrastructure for a later route, but these future options must not shape the MVP product or split the reasoning layer.
 
-## Validation and authority
-
-The gateway result must echo the request, Document Arrival, provider and model identities. Luna rejects unknown fields, empty or oversized values, malformed structured results and mismatched correlation. Document Handling then rejects candidate fields that already have Member Direction, malformed monetary values and dates that are not valid ISO calendar dates, in addition to its existing bounds and control-character constraints.
-
-The provider result cannot create Member Direction or mutate a Document Arrival. A validated candidate is held in the review interface until a Household Member accepts or corrects it through the existing Member Direction command. History records provider completion and later candidate acceptance, correction or rejection as separate immutable events; an earlier event is never rewritten.
-
-## Failure and retry
-
-Luna maps infrastructure failures to its own categories. Only `ProviderUnavailable`, `GatewayUnavailable` and `TimedOut` receive one bounded retry, using the byte-equivalent Luna request and the same provider/model. LiteLLM receives `num_retries: 0` and an empty fallback list.
-
-Exhausted, invalid, rejected, gateway-authentication, provider-credential or rate-limit failures leave Document Handling in `WaitingForCloudAssistance`. For BYOK 401/403 responses, the adapter reads only a bounded structured error type: known LiteLLM virtual-key failures remain gateway-authentication failures, while upstream authentication failures are attributed to the selected provider credential. A missing BYOK provider key is rejected before transmission and before one-time consent is consumed. Keep local returns it to `NeedsMemberDirection` without a gateway call. Existing Filing Rules and duplicate/version handling never call this gateway and remain offline-capable.
+`DeterministicIntelligenceGateway` remains a test seam and never enters the production registry. ADR 0003 is historical and superseded for the MVP by [ADR 0019](../adr/0019-openai-mvp-household-administration-agent.md). ADR 0015 remains useful only where it describes Luna-owned transport, credential and validation boundaries.

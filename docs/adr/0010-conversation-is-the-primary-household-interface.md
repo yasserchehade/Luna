@@ -4,6 +4,8 @@ status: accepted
 
 # Make Conversation the primary household interface
 
+> **MVP scope note:** ADR 0019 retains Conversation as the primary interface but supersedes the assumption that Document Handling is the durable product centre. New work must use Conversation to explain and direct Household Work across email, documents and other sources.
+
 Household members communicate with Luna through natural conversation rather than software workflows. Document Handling, Household Context, authority, Filing Decisions, Filing Rules, execution state and Audit History remain typed and durable in their owning domains; Conversation derives prompts from that state, interprets a member utterance into candidate Member Direction, validates it, and submits commands to those domains.
 
 Luna asks for only the next materially necessary answer and hides structured state by default. Minimal inline actions may support a conversational prompt, while natural-language replies remain available. Extracted evidence can inform a proposal but cannot grant authority or execute a consequential action.
