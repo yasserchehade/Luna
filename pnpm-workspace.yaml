@@ -1,6 +1,7 @@
 packages:
   - desktop
   - frontend
+  - apps/*
 
 overrides:
   "@wdio/native-utils": 2.5.0

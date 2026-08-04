@@ -1,5 +1,7 @@
 # Luna First Vertical — Historical Implementation Tickets
 
+> **Web-first note:** ADR 0020 freezes this desktop sequence for the MVP. Retain it as historical delivery evidence only; do not continue Tauri UI, local Cabinet, portable-memory UX or installed-desktop milestones as the active roadmap.
+
 > **Superseded as the active product roadmap by the MVP reset.** Preserve this document as historical evidence of the earlier document-centred direction. New planning must follow [the product constitution](../product/product-constitution.md), [the MVP definition](../product/mvp-definition.md) and [the reset follow-up sequence](./mvp-reset-follow-up-issues.md).
 
 This review document decomposes [specification issue #1](https://github.com/yasserchehade/Luna/issues/1) into the earlier small, dependency-aware tracer-bullet tickets.

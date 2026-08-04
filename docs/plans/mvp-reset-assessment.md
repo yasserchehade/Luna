@@ -1,5 +1,7 @@
 # Luna MVP reset assessment
 
+> **Historical assessment note (2026-08-04):** This assessment predates the web-first decision in ADR 0020. Its Household Work, OpenAI and Luna-owned authority findings remain useful. Desktop retention, local persistence, Cabinet, portable-memory and email-first sequencing are superseded by the [web-first migration assessment](./web-first-migration-assessment.md).
+
 **Review date:** 2026-08-03
 
 **Reviewed:** repository `HEAD` `6ec3c21` on `codex/issue-38-managed-conversation`, the current product and architecture documentation, and open PR #61 (`Add default intelligence permissions and managed conversation replies`, head `codex/issue-38-managed-conversation`, base `main`).

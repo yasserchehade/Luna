@@ -1,55 +1,51 @@
 # MVP reset follow-up implementation issues
 
-**Status:** Recommended sequence; GitHub issues not yet created
+**Status:** Web-first sequence under ADR 0020; GitHub issues not yet created
 
-This sequence turns the product reset into a small set of dependency-aware implementation issues. It supersedes the old document-first order in `luna-first-vertical-tickets.md` for future planning. The old ticket map remains historical and should not be implemented by default.
-
-The first detailed issue is [Unified uploaded-document Household Work journey](./unified-uploaded-document-household-work.md), tracked in [GitHub issue #73](https://github.com/yasserchehade/Luna/issues/73). It is intentionally an uploaded-document slice; Gmail and Outlook are not dependencies.
+This sequence replaces the desktop and email-first order for future planning. The historical ticket map and the 2026-08-03 MVP reset assessment remain evidence, not the active delivery sequence. Gmail, Outlook and cloud-storage providers are not dependencies of the first web Household Work journey.
 
 ## Sequence
 
-### 1. Freeze the conflicting product path and split reusable infrastructure
+### 1. Select the web Today experience
 
-Review PR #61 against the reset. Keep or extract secure OpenAI transport, Responses attachment support, credential-vault handling, persistence, validation, audit and deterministic test seams. Mark latest-message-only conversation, separate document evaluation, document prompts and provider-permission UX as superseded product work.
+Review the three `apps/web` variants across desktop, tablet and mobile. Choose the briefing hierarchy, persistent-composer behavior and working-context disclosure. Record the selected variant and rationale, then rewrite it as the real route without carrying prototype variants or the switcher into production.
 
-Use `codex/product-direction-reset` for the documentation PR, then `codex/pr61-infrastructure-extraction` from the post-reset `main` for the salvage PR. PR #61 remains open only until the salvage PR is reviewable, then closes without merging.
+### 2. Define the multi-user web API boundary
 
-### 2. Define Household Work / `Obligation`
+Specify authenticated briefing projections, Conversation turns, Household Work commands and bounded uploads. Define household authorization, optimistic concurrency, idempotency, audit, source identity and recoverable failure behavior before choosing which desktop modules to expose or port.
 
-Introduce the minimum durable work model: source references, summary, facts, responsibility, due date, urgency, lifecycle, proposed action, approval, execution, monitoring and audit. Define how legacy `Document Handling` records project into or are retired behind the new work owner.
+### 3. Resolve and extract PR #76 reusable capability
 
-### 3. Add the first household email source
+Reproduce the live clarification, correction and image-delegation failures. Extract only reviewed Household Work rules, strict intelligence schemas, bounded source transport, no-op/terminal invariants and deterministic tests. Do not merge PR #76 into the web frontend and do not preserve local SQLite, Tauri or credential-vault assumptions by default.
 
-Connect one authorised household email account. Ingest sender, recipients, subject, body, received time and PDF/JPG/PNG attachments. Preserve source identity and attachment bytes, make ingestion idempotent, and keep source failures visible in household work.
+### 4. Implement server-owned Household Work and Conversation
 
-### 4. Assemble relevant household context
+Create the minimal shared service for durable Household Work, source references, relevant conversation, facts, responsibility, due date, urgency, lifecycle, proposed action, approval and audit. The browser receives authorised projections and submits commands; it never owns the durable lifecycle.
 
-Build one Luna-owned context assembler for current message, recent relevant conversation, email, attachment, confirmed household subjects, prior decisions, active work, responsibility and authority. Add disclosure evidence and tests proving that useful context is not reduced to the latest sentence.
+### 5. Connect one bounded uploaded-document journey
 
-### 5. Replace split reasoning with one OpenAI agent contract
+Replace fixture behavior for one path: a member uploads a PDF/JPG/PNG and says, "Take care of this." The service assembles authorised context, calls the managed OpenAI route, validates the proposal and creates or updates one durable work item without asking for known facts.
 
-Define a context-aware OpenAI request and untrusted result that can explain, extract facts, propose work changes, ask a question and propose typed tool calls. Keep Luna-owned correlation, schema validation, authority and execution boundaries.
+### 6. Complete conversational work handling
 
-### 6. Create and maintain work from incoming information
+Prove read-only questions, one focused clarification, correction, approval, dismissal, completion and source-linked updates through the web seam. Preserve one Household Work item and keep structured evidence secondary.
 
-Use the agent to decide whether a source needs attention, then create or update one durable work item. Prove the electricity-bill path: provider, amount, property, account, due date, urgency and next action are available without member re-entry.
+### 7. Add safe proposals and smallest useful execution
 
-### 7. Make conversation the work interaction layer
+Implement one approved reminder or draft-reply path behind Luna-owned authority, validation, idempotency, audit and recovery. OpenAI proposes; Luna executes.
 
-Remove typed document prompts from the primary composer path. Route member replies through the active Household Work context, preserve recent relevant turns, explain the work naturally and show structured facts only as secondary correction/transparency surfaces.
+### 8. Prove persistence, resilience and responsive accessibility
 
-### 8. Add safe proposals, approvals and simple execution
+Cover reload/session continuity, concurrent member commands, duplicate prevention, unavailable intelligence, failed execution, mobile/tablet layouts, keyboard navigation, focus, contrast and member-facing recovery language.
 
-Implement draft reply and reminder proposals. Add Luna-owned approval, validation, idempotency, execution and audit for the smallest useful action set. Ensure OpenAI cannot execute or grant approval.
+### 9. Design proactive briefing generation
 
-### 9. Monitor work to a terminal outcome
+Only after persisted work is trustworthy, define how `Today` projects completed, attention and upcoming work. Background workers and monitoring belong to this separate task; fixture language must not be mistaken for implemented automation.
 
-Track due dates, waiting states, follow-ups, completion, dismissal and irrelevance. Update the same work item when a later email confirms completion or requires a response; do not create duplicate tasks for each message.
+### 10. Add one source or storage connector
 
-### 10. Prove the complete MVP loop and retire superseded surfaces
-
-Add installed-app and backend tests for email-to-work, conversation context, attachment reading, no-repeat questioning, approval, failure/retry, monitoring and restart recovery. Then remove or hide document-first forms, provider configuration and legacy paths that no longer serve the MVP.
+Choose either one incoming communication source or one user-controlled storage provider based on product evidence. Specify competency strengthened, member effort reduced, OAuth/credential boundary, source identity and retry behavior. Do not create a generic connector framework or begin Gmail, Google Drive, OneDrive and Dropbox together.
 
 ## Dependency rule
 
-An issue is ready only when its product purpose, durable owner, context requirements, authority boundary, failure state and user-facing conversation outcome are specified. No issue in this sequence should add a general integration framework or future provider abstraction unless it is required by the next end-to-end household-administration test.
+An issue is ready only when its product purpose, durable owner, authorised context, authority boundary, multi-user behavior, failure state and member-facing outcome are specified. No issue may add a generic workflow system, connector catalogue, Luna-managed storage or desktop UX as a shortcut around the web Household Work journey.

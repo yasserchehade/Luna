@@ -5,6 +5,8 @@ date: 2026-08-03
 
 # Use OpenAI as the MVP reasoning engine behind one household-administration agent
 
+> **Delivery-surface note:** [ADR 0020](./0020-make-the-luna-mvp-web-first.md) makes the responsive web application the MVP surface and defers the desktop client. This ADR's reasoning, untrusted-output and Luna-owned authority boundaries remain accepted.
+
 ## Context
 
 Luna's previous direction centred the first vertical on local-first Document Handling. Conversation was a primary interface over that document lifecycle, while a provider-neutral intelligence gateway and narrow consent grants protected a future choice among local models, BYOK and multiple cloud providers.

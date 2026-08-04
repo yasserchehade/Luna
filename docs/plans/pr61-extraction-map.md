@@ -1,5 +1,7 @@
 # PR #61 extraction map and closure strategy
 
+> **Web-first note:** This map describes a desktop-era extraction. ADR 0020 and the web-first migration assessment now govern reuse: extract domain rules and server-suitable contracts only after the web API is defined; do not carry Tauri, OS-vault, local SQLite or desktop UX assumptions forward unchanged.
+
 **Status:** Implementation planning; do not merge PR #61 as-is
 
 **Reviewed:** PR [#61](https://github.com/yasserchehade/Luna/pull/61), base `main`, head `codex/issue-38-managed-conversation` at `6ec3c21`, 29 commits from merge-base `8adf762`.

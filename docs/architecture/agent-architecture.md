@@ -4,6 +4,8 @@
 
 This document defines the conceptual architecture for the household-administration agent. It replaces the assumption that ordinary chat and document interpretation are separate product paths.
 
+ADR 0020 makes the responsive web application the primary MVP delivery surface. This reasoning and authority architecture remains service-owned; the browser presents outcomes and submits member direction but does not own durable state, provider credentials, validation or tool execution.
+
 ## One household-administration reasoning loop
 
 ```text
@@ -54,6 +56,8 @@ Tauri remains responsible for the desktop session, legacy `DocumentArrival` tran
 ### Sources
 
 Email, attachments, user messages, documents, calendar events and future message services are sources of information. They contribute evidence and references. A source does not own the household work created from it.
+
+For the first web slice, a bounded member upload is the implemented source. Email and user-controlled cloud-storage connectors are deferred. The Cabinet is a logical source/document layer: Luna owns meaning and relationships, while a future storage provider owns bytes, versions, sharing and storage infrastructure.
 
 ### Relevant household context assembly
 
@@ -145,6 +149,30 @@ If OpenAI, a source or a tool is unavailable:
 
 An invalid model proposal is a failed interpretation, not a member approval and not a partial execution.
 
+## Web delivery boundary
+
+```text
+Responsive web application
+        |
+        | authenticated commands and projections
+        v
+Luna web API / household service
+        |
+        +--> Conversation and Household Work
+        +--> Context assembly and intelligence adapter
+        +--> Authority, validation, audit and recovery
+        +--> Logical source references
+                 |
+                 v
+          User-controlled storage adapter (later)
+```
+
+The web client may hold transient view state, draft conversation text and selected mock attachments. Production Household Work, source references, conversation, approval and audit state belong behind the service boundary. Every command must authenticate the member, authorise the household and target, validate expected work version and use idempotent semantics where repetition could cause an external effect.
+
+Browser code must not receive OpenAI, gateway, connector or storage-provider credentials. A future provider OAuth flow terminates at an authorised server boundary and exposes only the minimum connection state needed by the member experience.
+
+The first web prototype uses in-memory fixture state and therefore does not prove this boundary. It exists to validate the interaction hierarchy before service implementation.
+
 ## MVP implementation boundary
 
-The direct OpenAI adapter, strict Household Administration contract, bounded attachment transport, persistence, audit and deterministic test seams support this architecture. Existing LiteLLM, gateway provisioning and provider-neutral code remains deferred compatibility infrastructure and is not the MVP Household Administration route. The current split between `ConversationReply` and `DirectionInterpretation`, the latest-message-only disclosure contract and the document-led `Document Handling` lifecycle are migration targets, not the intended product boundary. See [the MVP reset assessment](../plans/mvp-reset-assessment.md).
+The direct OpenAI adapter, strict Household Administration contract, bounded attachment transport, persistence, audit and deterministic test seams support this architecture and can move behind a future multi-user service boundary through the callable engine ports. Existing LiteLLM, gateway provisioning and provider-neutral code remains deferred compatibility infrastructure and is not the MVP Household Administration route. The operating-system credential vault, local SQLite ownership, filesystem Cabinet and Tauri command surface are desktop-specific and frozen. The current split between `ConversationReply` and `DirectionInterpretation`, the latest-message-only disclosure contract and the document-led `Document Handling` lifecycle remain migration targets, not the intended product boundary. See [the MVP reset assessment](../plans/mvp-reset-assessment.md) and [web-first migration assessment](../plans/web-first-migration-assessment.md).

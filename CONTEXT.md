@@ -86,24 +86,24 @@ _Avoid_: Last-write-wins, sync overwrite
 ## Cabinet and documents
 
 **Desk**:
-The working environment the household grants Luna, consisting of trusted device access and a configured cabinet.
+Historical desktop term for the trusted-device and local-Cabinet environment. Deferred under ADR 0020; do not use for the web MVP.
 _Avoid_: Workspace
 
 **Cabinet**:
-The user-owned, human-readable folder structure containing the household's incoming and filed original documents.
-_Avoid_: Vault, blob store, document database
+The logical household-document layer that connects sources and records to household meaning and Household Work. Luna owns meaning, relationships and logical references. A future connected user-controlled storage provider owns file bytes, versions, sharing and storage infrastructure.
+_Avoid_: Vault, Luna-managed blob store, local path browser
 
 **Incoming Cabinet Folder**:
-A visible Cabinet folder that holds untouched Originals awaiting a Filing Decision.
+A historical desktop folder that holds untouched Originals awaiting a Filing Decision. Deferred for the web MVP.
 _Avoid_: Staging area, temporary upload folder
 
 **Cabinet Preset**:
-A proposed initial cabinet structure that the household may customise before any folders are created.
+A historical desktop proposal for a local folder structure. Deferred for the web MVP.
 _Avoid_: Fixed taxonomy
 
 **Cabinet Availability**:
-Whether the configured cabinet and its expected sections are present and writable at the location chosen by the household.
-_Avoid_: Storage health, automatic fallback
+Historical desktop state describing local folder availability. A future web storage connection uses separately defined provider-connection and source-availability terms.
+_Avoid_: Generic web storage health
 
 **Document Arrival**:
 One occurrence of a file entering Luna through attachment, upload, email or another intake channel.
@@ -128,7 +128,7 @@ The exact received bytes of a document version, preserved without content modifi
 _Avoid_: Source copy
 
 **Filed Original**:
-An Original whose verified bytes exist at its confirmed Cabinet Destination and whose successful filing is recorded by an Audit Event.
+A historical desktop state for an Original verified at a local Cabinet Destination. Future web filing terminology must reference a logical Cabinet item and provider-owned object version.
 _Avoid_: Filing record, filed copy
 
 **Document Version**:
@@ -155,8 +155,8 @@ The confirmed relationship of a document to members, properties, accounts, provi
 _Avoid_: Metadata, graph data
 
 **Cabinet Destination**:
-The confirmed human-readable folder and filename where an original belongs.
-_Avoid_: Cabinet path
+Historical desktop term for a confirmed local folder and filename. Future web work uses a logical Cabinet location plus a provider-owned object reference.
+_Avoid_: Cabinet path in web product language
 
 **Filing Decision**:
 A member's confirmed determination of a document's household context and cabinet destination.
@@ -204,6 +204,18 @@ _Avoid_: Log entry
 
 ## Conversation and briefing
 
+**Today**:
+The primary web home where Luna proactively briefs the member on completed work, matters requiring attention or approval and upcoming obligations, with Conversation continuously available.
+_Avoid_: Dashboard, home dashboard
+
+**Working Context**:
+The concise visible context for selected Household Work: current activity, relevant source, household entity, understood facts, unresolved need and proposed action. Detailed evidence remains behind explicit inspection.
+_Avoid_: Inspector, model reasoning, debug context
+
+**Persistent Composer**:
+The conversation input anchored to the primary workspace. It may show active Household Work, household entity or attached-source context and must not resemble a search bar.
+_Avoid_: Search, command palette
+
 **Conversation**:
 A member-controlled dialogue with Luna that may contain source attachments, explanations, approvals and linked Household Work without owning the work lifecycle.
 _Avoid_: Thread, chat session
@@ -221,7 +233,7 @@ The interaction boundary that assembles relevant Household Work and context, pre
 _Avoid_: Work engine, conversation state machine
 
 **Brief**:
-A scheduled, dated conversation in which Luna summarises relevant changes, routine work and items needing attention.
+A proactive, dated conversation in which Luna summarises completed work, relevant changes, upcoming obligations and items needing attention. `Today` presents the current Brief when the member opens Luna; production scheduling is deferred until the underlying work service is proven.
 _Avoid_: Dashboard, digest
 
 Household members communicate with Luna through natural conversation, not software workflows. Structured state exists so Luna can reason, execute and recover reliably, but it is exposed only when needed for confirmation, correction, transparency or accountability. Luna asks for the minimum materially necessary member input, one concise question at a time where practical.

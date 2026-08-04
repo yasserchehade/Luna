@@ -1,38 +1,39 @@
 # Unified uploaded-document Household Work journey
 
-**Status:** Implementation-ready first MVP slice; tracked in [GitHub issue #73](https://github.com/yasserchehade/Luna/issues/73)
+**Status:** Governing uploaded-document capability plan; the primary delivery surface is now the web application under ADR 0020. PR #76 is an unmerged desktop implementation attempt with reusable contracts and unresolved live boundaries.
 
-**Dependencies:** Merge the documentation reset independently, then extract or port only the reusable PR #61 infrastructure. This slice must not begin Gmail integration and must not depend on PR #61 being merged.
+**Dependencies:** Select the founder-reviewed web experience, define a multi-user web API, then extract or port only reusable Household Work and managed-intelligence contracts after PR #76's live clarification, correction and image-delegation failures are resolved. This slice must not begin Gmail or storage-provider integration.
 
 ## Issue statement
 
-Prove the first unified Household Work agent journey with a user-uploaded household document:
+Prove the first unified Household Work agent journey through Luna's responsive web application with a user-uploaded household document:
 
 > A user uploads a household document and communicates naturally. OpenAI receives the document, relevant conversation and household context, identifies Household Work, and Luna stores and discusses that work without asking the user to repeat information available in the document.
 
-This is the first implementation slice for the agreed MVP. It is a local upload/source path used to prove the reasoning, durable work and conversation loop. Email ingestion is explicitly later.
+This remains the first implementation slice for the agreed MVP. The first web prototype uses mock data only; the production slice will use a bounded web upload to prove the reasoning, durable work and conversation loop. Email and connected storage ingestion are explicitly later.
 
 ## User journey
 
-1. The user starts or continues a natural conversation.
-2. The user uploads a household document.
-3. The user may say something minimal such as, "Take care of this."
-4. Luna assembles sufficient authorised context for OpenAI, including:
+1. The member opens `Today` and sees Luna's briefing-led web workspace.
+2. The member starts or continues a natural conversation through the persistent composer.
+3. The member uploads a household document.
+4. The member may say something minimal such as, "Take care of this."
+5. Luna's service assembles sufficient authorised context for OpenAI, including:
    - the uploaded document and preserved original bytes;
    - the current user message;
    - relevant recent conversation, not only the newest message;
    - relevant confirmed household context;
    - active related Household Work; and
    - the available Luna-owned tool definitions and execution constraints.
-5. OpenAI interprets the document and user intent.
-6. OpenAI proposes:
+6. OpenAI interprets the document and user intent.
+7. OpenAI proposes:
    - a natural response;
    - Household Work to create or update;
    - any genuinely necessary clarification; and
    - optional proposed next actions.
-7. Luna validates and persists the result.
-8. Luna responds naturally, explaining what it found, what needs attention and what it proposes.
-9. The user may correct, dismiss or update the work conversationally.
+8. Luna validates and persists the result behind the web API.
+9. Luna responds naturally in the briefing/conversation workspace, explaining what it found, what needs attention and what it proposes.
+10. The member may correct, dismiss or update the same work conversationally.
 
 The user must be able to ask a general question about the document without being forced into a document-field workflow.
 
@@ -238,6 +239,10 @@ This issue does not include:
 
 - Gmail integration;
 - Outlook integration;
+- Google Drive, OneDrive or Dropbox integration;
+- Luna-managed storage;
+- background briefing workers;
+- Tauri UI continuation;
 - automatic payments;
 - local models or local-only reasoning;
 - multiple model providers;
@@ -250,6 +255,8 @@ This issue does not include:
 - restricting OpenAI to only the newest user message.
 
 ## Smallest ordered replacement PR sequence
+
+> **Historical sequence note:** The sequence below describes the pre-web reset and is retained as delivery history. ADR 0020 and the [web-first migration assessment](./web-first-migration-assessment.md) now govern new work. Do not continue it as a desktop PR series.
 
 1. `codex/product-direction-reset` — documentation-only reset, based on `main`; merge independently.
 2. `codex/pr61-infrastructure-extraction` — cherry-pick only product-neutral attachment, credential, recovery and managed OpenAI transport seams; do not merge PR #61.

@@ -1,6 +1,6 @@
 # Luna Domain Model
 
-This document describes the conceptual relationships, invariants and events for Luna's household-administration domain. Canonical terminology lives in [CONTEXT.md](../CONTEXT.md); implementation choices are recorded separately in [ADRs](./adr/). The former document-centred first vertical is retained as implementation history and is assessed in [the MVP reset assessment](./plans/mvp-reset-assessment.md).
+This document describes the conceptual relationships, invariants and events for Luna's household-administration domain. Canonical terminology lives in [CONTEXT.md](../CONTEXT.md); implementation choices are recorded separately in [ADRs](./adr/). The former document-centred desktop vertical is retained as implementation history and is assessed in [the MVP reset assessment](./plans/mvp-reset-assessment.md) and [web-first migration assessment](./plans/web-first-migration-assessment.md).
 
 ## Domain focus
 
@@ -16,7 +16,9 @@ Supporting domain areas are:
 
 ## Interaction principle
 
-Conversation is Luna's primary household interface. A member delegates in ordinary language; Luna derives its understanding and the next materially necessary question from durable work state. Structured Household Context and Filing Decisions remain hidden by default and are available through an optional **Review details** surface for transparency and correction.
+ADR 0020 makes the responsive web application the MVP interaction surface. Device trust, portable memory and local Cabinet behavior below remain deferred desktop capability, not prerequisites for the web domain. Future web identity, persistence, privacy and recovery must be specified at the multi-user service boundary.
+
+Conversation is Luna's primary household interface. In the web MVP it lives inside a proactive `Today` briefing rather than an empty chat screen. A member delegates in ordinary language; Luna derives its understanding and the next materially necessary question from durable work state. Structured Household Context and Filing Decisions remain hidden by default and are available through an optional **Review details** surface for transparency and correction.
 
 Conversation orchestration is an interface boundary, not a new consistency boundary:
 
@@ -93,7 +95,7 @@ Household Work owns the current administration lifecycle: why the work exists, w
 
 ### Document Handling
 
-Document Handling supports source preservation, local inspection, evidence and filing for a Document Arrival. It may update Household Work, but it is not the product's durable centre.
+Document Handling supports source preservation, evidence and filing for a Document Arrival. Local inspection and filesystem filing are deferred desktop capabilities. Future web source handling uses logical Cabinet references and user-controlled storage providers. Document Handling may update Household Work, but it is not the product's durable centre.
 
 ### Filing Rule
 
@@ -109,6 +111,8 @@ A Conversation owns member messages and is the primary interaction layer for Hou
 
 ### Trusted Device
 
+> **Deferred desktop boundary:** Trusted Device, Device PIN, Recovery Key and Portable Memory behavior remains historical native capability under ADR 0020. It is not the web MVP's identity or persistence boundary. A future web threat model must define browser sessions, household authorization, service encryption and recovery independently.
+
 A Trusted Device controls one device identity and its participation in household cryptographic trust. Account access alone is insufficient to join this boundary.
 
 A Trusted Device must also be locally unlocked with its Device PIN for the current session. Recovery material remains pending until its service registration succeeds, and Device Revocation advances the Household key epoch for every retained device.
@@ -118,8 +122,8 @@ Portable Memory Records carry only typed durable facts and opaque owning-domain 
 ## Invariants
 
 1. **Originals are immutable.** Luna may rename or relocate an Original but never silently change its bytes.
-2. **The cabinet remains human-owned.** A household can browse and use filed documents without Luna.
-3. **Account access is not decryption authority.** Cabinet memory requires a Trusted Device or Recovery Key.
+2. **Stored files remain user-controlled.** A household can browse and use provider-owned source files without Luna; Luna does not become the MVP storage provider.
+3. **Authentication is not household authority.** A web session must still satisfy household membership, privacy and action authority; historical Trusted Device and Recovery Key rules apply only to deferred desktop capability.
 4. **Adult privacy survives household administration.** A Household Organiser has no implicit access to another Adult Member's Private Space.
 5. **Household Work survives conversation deletion.** Chat organisation cannot destroy household work, sources or outcomes.
 6. **One work state has many views.** Conversation, To do, sources, Cabinet and History must not maintain competing copies of Household Work state.

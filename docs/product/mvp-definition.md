@@ -10,41 +10,41 @@ Household administration arrives as fragmented email, attachments and follow-up 
 
 The MVP problem is:
 
-> A household needs Luna to turn relevant email and attachments into durable household work, explain that work naturally, and help move it to a safe outcome without making a member repeat facts already present in the source or household context.
+> A household needs Luna to turn relevant incoming information and attachments into durable household work, brief the member naturally, and help move that work to a safe outcome without making the member repeat facts already present in the source or household context.
 
 The MVP is successful when it reduces the work of handling a household obligation, not merely when it extracts document fields.
 
 ## Target user
 
-The target user is a modern family using one connected household email account. The first account may be operated by a Household Organiser, but the model must preserve the distinction between household responsibility and access to another adult member's private information.
+The target user is a modern family sharing responsibility for homes, dependants, providers, accounts, appointments and recurring decisions. The first web slice may be operated by a Household Organiser, but the model must preserve the distinction between household responsibility and access to another adult member's private information.
 
 ## First end-to-end workflow
 
-1. The household connects an email account authorised for household administration.
-2. Luna observes and retrieves household-related email.
-3. Luna reads the email body, metadata and supported attachments.
-4. OpenAI reads and interprets the email and attachment using relevant recent conversation and household context.
+1. The member opens Luna's responsive web `Today` experience and receives a concise briefing.
+2. The member attaches a supported household document and delegates naturally, for example, "Take care of this."
+3. Luna preserves a logical source reference and supplies the bounded source through the web service boundary.
+4. OpenAI reads and interprets the message and attachment using relevant recent conversation and household context.
 5. Luna determines whether the information creates, updates, completes, dismisses or leaves no household work.
 6. Luna extracts relevant facts such as sender, provider, amount, due date, property, account, responsible member, required action and urgency.
 7. Luna creates or updates one durable household work item. Its internal domain name may be `Obligation`.
-8. Luna explains the work in natural conversation, linking the source and the evidence that matters.
+8. Luna explains the work in the briefing-led conversation workspace, linking the source and the evidence that matters.
 9. Luna proposes a safe next action such as a draft reply, reminder or request for approval.
 10. Luna validates any proposed tool call, asks for approval where appropriate, executes only within its authority, records the outcome and keeps monitoring the work.
 11. The work remains active until it is completed, dismissed or no longer relevant.
 
 ## Supported inputs
 
-The MVP supports:
+The first web slice supports:
 
-- one connected household email account;
-- email sender, recipients, subject, body and received time;
-- PDF, JPG and PNG attachments from relevant email;
+- a responsive web application with `Today` as the primary home;
+- a member's natural-language message with an optional uploaded source;
+- bounded PDF, JPG and PNG attachments;
 - recent relevant conversation with the household member;
 - household context already confirmed in Luna, including members, properties, accounts, providers and responsibilities;
 - prior decisions and active household work relevant to the source; and
-- a member's natural-language message, with an optional attached document for development and recovery paths.
+- fixture-backed proactive briefing content while the production briefing service is deferred.
 
-The email account is the first source of incoming work. Gmail, Outlook and future sources are source adapters; they are not separate product experiences or separate reasoning systems.
+Uploaded documents are the first source used to prove the web Household Work journey. Gmail, Outlook, calendar and future storage providers remain source or tool adapters; they are not separate product experiences or reasoning systems and are not implemented until this journey is proven.
 
 ## Expected outputs
 
@@ -140,6 +140,9 @@ Defer the following until the MVP loop is proven:
 - broad role and authority systems;
 - advanced filing-rule learning;
 - extensive billing infrastructure; and
+- Gmail, Outlook and cloud-storage connectors;
+- background workers and production Daily Briefing generation;
+- desktop UI, local filesystem Cabinet, native integration and portable-memory product work; and
 - architecture built solely for hypothetical future requirements.
 
 The MVP may retain secure seams that make these possible later, but they must not dominate implementation or the member experience.
@@ -148,10 +151,10 @@ The MVP may retain secure seams that make these possible later, but they must no
 
 The MVP is ready for the next phase when all of the following are demonstrated:
 
-1. A relevant email and attachment create or update one durable household work item without a member retyping facts visible in the source.
+1. A relevant uploaded document creates or updates one durable household work item through the web experience without a member retyping facts visible in the source.
 2. Luna can explain the work conversationally, including what it found, why it matters, what it proposes and what it needs.
 3. The reasoning request includes the relevant attachment, recent relevant conversation and household context required to interpret the item; it is not limited to an isolated latest sentence.
-4. The same work item remains coherent across a new conversation turn, reload, restart and source follow-up.
+4. The same work item remains coherent across conversation turns, web sessions and source follow-up.
 5. A simple reply or reminder can be prepared, approval can be requested where required, and the result is recorded with an audit trail.
 6. Luna asks a member only after available email, attachment, context, prior decisions and conversation evidence have been exhausted.
 7. An ambiguous, failed or unavailable action waits safely and can resume without duplication or silent fallback.
@@ -161,9 +164,9 @@ The MVP is ready for the next phase when all of the following are demonstrated:
 
 ## Representative user journeys
 
-### Electricity bill from email
+### Uploaded electricity bill
 
-An electricity provider sends a bill by email. Luna reads the email and attachment, identifies the provider, amount, property and due date, creates household work, explains it conversationally, and offers an appropriate next action without asking the user to repeat information from the bill.
+A member uploads an electricity bill and says, "Take care of this." Luna reads the attachment, identifies the provider, amount, property and due date, creates household work, explains it conversationally, and offers an appropriate next action without asking the member to repeat information from the bill.
 
 The member can reply, "Remind me three days before it is due," and Luna understands the reference from the active work item. Luna prepares the reminder, confirms its schedule and keeps the item active until the reminder is delivered or the bill is otherwise resolved.
 
@@ -175,9 +178,9 @@ An insurance renewal names the household but does not establish which adult shou
 
 A provider asks the household to confirm an address. Luna identifies the request, checks the household's confirmed property context, drafts a concise reply and presents the target and proposed content. Luna sends only after the member approves, then records the sent result and monitors for a response.
 
-### Already resolved or irrelevant mail
+### Already resolved or irrelevant source
 
-An email confirms that a previously tracked repair is complete. Luna links it to the active work, marks the work completed and explains the closure. A promotional message with no household action becomes no active work item and does not create a distracting task.
+A member states that a previously tracked bill is already paid or a source is irrelevant. Luna validates the direction, updates the active work and explains the outcome. Information with no household action becomes no active work item and does not create a distracting task.
 
 ### Provider follow-up
 
