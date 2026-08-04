@@ -18,7 +18,7 @@ test("provider controls remain available when protected Consent Grants cannot be
       id: "byok-openai",
       name: "OpenAI — bring your own key",
       description: "Customer-billed Cloud Assistance",
-      models: [{ id: "gpt-4.1-mini", name: "GPT-4.1 mini" }],
+      models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
       managedByLuna: false,
       authUrl: "https://platform.openai.com/api-keys",
     },

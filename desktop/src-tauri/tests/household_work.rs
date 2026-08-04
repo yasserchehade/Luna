@@ -129,7 +129,7 @@ fn household_work_result_is_persisted_and_reused_for_follow_up_updates() {
         .expect("create conversation");
     let gateway = DeterministicIntelligenceGateway::new(
         "openai",
-        "gpt-4.1-mini",
+        "gpt-5.6-luna",
         BTreeMap::from([
             ("serviceProvider".to_owned(), "AGL".to_owned()),
             ("property".to_owned(), "12 Seabreeze Avenue".to_owned()),
@@ -145,8 +145,8 @@ fn household_work_result_is_persisted_and_reused_for_follow_up_updates() {
             name: "OpenAI".to_owned(),
             description: "Deterministic test route".to_owned(),
             models: vec![IntelligenceModelDescriptor {
-                id: "gpt-4.1-mini".to_owned(),
-                name: "GPT-4.1 mini".to_owned(),
+                id: "gpt-5.6-luna".to_owned(),
+                name: "GPT-5.6 Luna".to_owned(),
             }],
             managed_by_luna: true,
             auth_url: None,
@@ -278,7 +278,7 @@ fn a_none_operation_preserves_existing_awaiting_approval_work_exactly() {
     let no_op = HouseholdAdministrationResult {
         request_id: "request-read-only".to_owned(),
         provider_id: "openai".to_owned(),
-        model_id: "gpt-4.1-mini".to_owned(),
+        model_id: "gpt-5.6-luna".to_owned(),
         reply: "The bill is due on 15 August.".to_owned(),
         work: HouseholdWorkProposal {
             operation: HouseholdWorkOperation::None,

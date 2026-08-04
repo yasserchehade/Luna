@@ -829,9 +829,17 @@ fn capture_portable_state(
         conversations,
         intelligence,
     ) {
-        Ok(()) | Err(PortableMemoryError::CabinetUnavailable) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(error) if portable_capture_failure_is_non_blocking(&error) => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn portable_capture_failure_is_non_blocking(error: &PortableMemoryError) -> bool {
+    matches!(
+        error,
+        PortableMemoryError::CabinetUnavailable | PortableMemoryError::Intelligence(_)
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -2026,7 +2034,10 @@ pub fn run() {
 mod tests {
     use std::future::Future;
 
-    use super::select_document_files;
+    use super::{
+        portable_capture_failure_is_non_blocking, select_document_files, IntelligenceFailure,
+        PortableMemoryError,
+    };
 
     fn assert_async_document_picker<F, Fut>(command: F)
     where
@@ -2039,5 +2050,12 @@ mod tests {
     #[test]
     fn document_picker_command_does_not_block_the_tauri_main_thread() {
         assert_async_document_picker(select_document_files);
+    }
+
+    #[test]
+    fn unavailable_portable_intelligence_history_does_not_fail_local_work() {
+        assert!(portable_capture_failure_is_non_blocking(
+            &PortableMemoryError::Intelligence(IntelligenceFailure::ProtectedStateUnavailable),
+        ));
     }
 }

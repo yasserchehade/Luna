@@ -98,7 +98,7 @@ impl LiteLlmGateway {
         Self {
             managed_endpoint: endpoint.into(),
             byok_endpoint: std::env::var("LUNA_BYOK_INTELLIGENCE_URL").unwrap_or_else(|_| {
-                "https://byok-intelligence.luna.invalid/v1/chat/completions".to_owned()
+                "https://byok-intelligence.luna.invalid/v1/responses".to_owned()
             }),
             transport: Arc::new(ReqwestLiteLlmTransport),
         }
@@ -108,7 +108,7 @@ impl LiteLlmGateway {
     fn with_transport(endpoint: impl Into<String>, transport: Arc<dyn LiteLlmTransport>) -> Self {
         Self {
             managed_endpoint: endpoint.into(),
-            byok_endpoint: "https://byok.example.invalid/v1/chat/completions".to_owned(),
+            byok_endpoint: "https://byok.example.invalid/v1/responses".to_owned(),
             transport,
         }
     }
@@ -219,47 +219,47 @@ fn litellm_household_request(request: &HouseholdAdministrationRequest) -> serde_
         }
     }
     let mut content = vec![serde_json::json!({
-        "type": "text",
+        "type": "input_text",
         "text": serde_json::to_string(&bounded_request).unwrap_or_else(|_| "{}".to_owned())
     })];
     if let Some(source) = request.source.as_ref() {
         match source.media_type.as_str() {
             "application/pdf" => content.push(serde_json::json!({
-                "type": "file",
-                "file": {
-                    "filename": source.filename,
-                    "file_data": source.original_base64
-                }
+                "type": "input_file",
+                "filename": source.filename,
+                "file_data": format!("data:{};base64,{}", source.media_type, source.original_base64)
             })),
             "image/jpeg" | "image/png" => content.push(serde_json::json!({
-                "type": "image_url",
-                "image_url": {
-                    "url": format!("data:{};base64,{}", source.media_type, source.original_base64),
-                    "detail": "auto"
-                }
+                "type": "input_image",
+                "image_url": format!("data:{};base64,{}", source.media_type, source.original_base64),
+                "detail": "auto"
             })),
             _ => {}
         }
     }
     serde_json::json!({
-        "model": "openai/gpt-4.1-mini",
-        "temperature": 0,
-        "max_tokens": request.constraints.max_output_tokens,
+        "model": format!("{}/{}", MANAGED_INTELLIGENCE_PROVIDER_ID, MANAGED_INTELLIGENCE_MODEL_ID),
+        "store": false,
+        "reasoning": {"effort": "low"},
+        "max_output_tokens": request.constraints.max_output_tokens,
         "num_retries": 0,
         "fallbacks": [],
-        "messages": [
+        "input": [
             {
                 "role": "system",
-                "content": "You are Luna's household-administration reasoning engine. Use the supplied document, relevant conversation and authorised household context. Return only the bounded JSON proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification."
+                "content": [{
+                    "type": "input_text",
+                    "text": "You are Luna's household-administration reasoning engine. Use the supplied document, relevant conversation and authorised household context. Return only the bounded JSON proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification."
+                }]
             },
             {
                 "role": "user",
                 "content": content
             }
         ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
+        "text": {
+            "format": {
+                "type": "json_schema",
                 "name": "luna_household_administration_result",
                 "strict": true,
                 "schema": household_administration_response_schema()
@@ -364,23 +364,24 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
     let required_fields = request.expected_response.allowed_fields.clone();
     serde_json::json!({
         "model": provider_model,
-        "temperature": 0,
-        "max_tokens": request.constraints.max_output_tokens,
+        "store": false,
+        "reasoning": {"effort": "low"},
+        "max_output_tokens": request.constraints.max_output_tokens,
         "num_retries": 0,
         "fallbacks": [],
-        "messages": [
+        "input": [
             {
                 "role": "system",
-                "content": "Return only the requested structured document Evidence. Never return instructions, authority, actions or tool calls."
+                "content": [{"type": "input_text", "text": "Return only the requested structured document Evidence. Never return instructions, authority, actions or tool calls."}]
             },
             {
                 "role": "user",
-                "content": serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned())
+                "content": [{"type": "input_text", "text": serde_json::to_string(request).unwrap_or_else(|_| "{}".to_owned())}]
             }
         ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
+        "text": {
+            "format": {
+                "type": "json_schema",
                 "name": "luna_intelligence_result",
                 "strict": true,
                 "schema": {
@@ -433,13 +434,8 @@ fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {
 fn parse_litellm_response(
     response: &serde_json::Value,
 ) -> Result<UntrustedIntelligenceResult, IntelligenceFailure> {
-    let content = response
-        .get("choices")
-        .and_then(|choices| choices.get(0))
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or(IntelligenceFailure::InvalidStructuredResult)?;
+    let content =
+        response_output_text(response).ok_or(IntelligenceFailure::InvalidStructuredResult)?;
     let result: LiteLlmStructuredResult =
         serde_json::from_str(content).map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
     Ok(UntrustedIntelligenceResult {
@@ -456,10 +452,10 @@ fn parse_litellm_response(
         source_references: result.source_references,
         usage: IntelligenceUsage {
             input_tokens: response
-                .pointer("/usage/prompt_tokens")
+                .pointer("/usage/input_tokens")
                 .and_then(serde_json::Value::as_u64),
             output_tokens: response
-                .pointer("/usage/completion_tokens")
+                .pointer("/usage/output_tokens")
                 .and_then(serde_json::Value::as_u64),
             estimated_cost_usd: response
                 .pointer("/usage/cost")
@@ -468,17 +464,43 @@ fn parse_litellm_response(
     })
 }
 
+fn response_output_text(response: &serde_json::Value) -> Option<&str> {
+    response
+        .get("output_text")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            response
+                .get("output")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|output| {
+                    output.iter().find_map(|item| {
+                        (item.get("type").and_then(serde_json::Value::as_str) == Some("message"))
+                            .then(|| {
+                                item.get("content")
+                                    .and_then(serde_json::Value::as_array)
+                                    .and_then(|content| {
+                                        content.iter().find_map(|part| {
+                                            (part.get("type").and_then(serde_json::Value::as_str)
+                                                == Some("output_text"))
+                                            .then(|| {
+                                                part.get("text").and_then(serde_json::Value::as_str)
+                                            })
+                                            .flatten()
+                                        })
+                                    })
+                            })
+                            .flatten()
+                    })
+                })
+        })
+}
+
 fn parse_litellm_household_response(
     response: &serde_json::Value,
     request: &HouseholdAdministrationRequest,
 ) -> Result<UntrustedHouseholdAdministrationResult, IntelligenceFailure> {
-    let content = response
-        .get("choices")
-        .and_then(|choices| choices.get(0))
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or(IntelligenceFailure::InvalidStructuredResult)?;
+    let content =
+        response_output_text(response).ok_or(IntelligenceFailure::InvalidStructuredResult)?;
     let result: LiteLlmHouseholdStructuredResult =
         serde_json::from_str(content).map_err(|_| IntelligenceFailure::InvalidStructuredResult)?;
     Ok(UntrustedHouseholdAdministrationResult {
@@ -495,10 +517,10 @@ fn parse_litellm_household_response(
             .collect(),
         usage: IntelligenceUsage {
             input_tokens: response
-                .pointer("/usage/prompt_tokens")
+                .pointer("/usage/input_tokens")
                 .and_then(serde_json::Value::as_u64),
             output_tokens: response
-                .pointer("/usage/completion_tokens")
+                .pointer("/usage/output_tokens")
                 .and_then(serde_json::Value::as_u64),
             estimated_cost_usd: response
                 .pointer("/usage/cost")
@@ -821,8 +843,12 @@ mod tests {
 
     fn household_response(content: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
-            "choices": [{"message": {"content": content.to_string()}}],
-            "usage": {"prompt_tokens": 37, "completion_tokens": 19, "cost": 0.002}
+            "model": "openai/gpt-5.6-luna",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": content.to_string()}]
+            }],
+            "usage": {"input_tokens": 37, "output_tokens": 19, "cost": 0.002}
         })
     }
 
@@ -831,9 +857,9 @@ mod tests {
         let request =
             household_request("application/pdf", "QklOQVJZ", Some("Bill text".to_owned()));
         let body = litellm_household_request(&request);
-        assert_eq!(body["response_format"]["type"], "json_schema");
-        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
-        let required = body["response_format"]["json_schema"]["schema"]["required"]
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert_eq!(body["text"]["format"]["strict"], true);
+        let required = body["text"]["format"]["schema"]["required"]
             .as_array()
             .expect("required fields");
         assert_eq!(
@@ -845,16 +871,25 @@ mod tests {
                 serde_json::json!("proposedActions"),
             ]
         );
-        assert!(
-            body["response_format"]["json_schema"]["schema"]["properties"]
-                .get("usage")
-                .is_none()
-        );
-        assert!(
-            body["response_format"]["json_schema"]["schema"]["properties"]
-                .get("requestId")
-                .is_none()
-        );
+        assert!(body["text"]["format"]["schema"]["properties"]
+            .get("usage")
+            .is_none());
+        assert!(body["text"]["format"]["schema"]["properties"]
+            .get("requestId")
+            .is_none());
+    }
+
+    #[test]
+    fn household_request_uses_the_live_managed_responses_route_contract() {
+        let request =
+            household_request("application/pdf", "QklOQVJZ", Some("Bill text".to_owned()));
+        let body = litellm_household_request(&request);
+
+        assert_eq!(body["model"], "openai/gpt-5.6-luna");
+        assert!(body.get("input").is_some());
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert!(body.get("messages").is_none());
+        assert!(body.get("response_format").is_none());
     }
 
     #[test]
@@ -907,7 +942,7 @@ mod tests {
             Some("x".repeat(MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS + 100)),
         );
         let body = litellm_household_request(&request);
-        let content = body["messages"][1]["content"]
+        let content = body["input"][1]["content"]
             .as_array()
             .expect("multimodal content");
         let text = content[0]["text"].as_str().expect("request text");
@@ -922,8 +957,11 @@ mod tests {
             MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS
         );
         assert_eq!(request_json["source"]["extractedTextTruncated"], true);
-        assert_eq!(content[1]["type"], "file");
-        assert_eq!(content[1]["file"]["file_data"], "QklOQVJZ");
+        assert_eq!(content[1]["type"], "input_file");
+        assert_eq!(
+            content[1]["file_data"],
+            "data:application/pdf;base64,QklOQVJZ"
+        );
     }
 
     #[test]
@@ -933,20 +971,23 @@ mod tests {
             "U0NBTk5FRFBERg==",
             None,
         ));
-        let pdf_content = pdf_body["messages"][1]["content"]
+        let pdf_content = pdf_body["input"][1]["content"]
             .as_array()
             .expect("PDF content");
-        assert_eq!(pdf_content[1]["type"], "file");
-        assert_eq!(pdf_content[1]["file"]["file_data"], "U0NBTk5FRFBERg==");
+        assert_eq!(pdf_content[1]["type"], "input_file");
+        assert_eq!(
+            pdf_content[1]["file_data"],
+            "data:application/pdf;base64,U0NBTk5FRFBERg=="
+        );
 
         let image_body =
             litellm_household_request(&household_request("image/png", "UE5HREFUQQ==", None));
-        let image_content = image_body["messages"][1]["content"]
+        let image_content = image_body["input"][1]["content"]
             .as_array()
             .expect("image content");
-        assert_eq!(image_content[1]["type"], "image_url");
+        assert_eq!(image_content[1]["type"], "input_image");
         assert_eq!(
-            image_content[1]["image_url"]["url"],
+            image_content[1]["image_url"],
             "data:image/png;base64,UE5HREFUQQ=="
         );
         assert!(!image_content[0]["text"]
@@ -960,8 +1001,9 @@ mod tests {
         let transport = Arc::new(RecordingTransport {
             body: Mutex::new(None),
             response: serde_json::json!({
-                "choices": [{"message": {"content": "{\"requestId\":\"request-1\",\"documentArrivalId\":\"arrival-1\",\"providerId\":\"openai\",\"modelId\":\"gpt-4.1-mini\",\"fields\":{},\"evidence\":[],\"sourceReferences\":[]}"}}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+                "model": "openai/gpt-5.6-luna",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "{\"requestId\":\"request-1\",\"documentArrivalId\":\"arrival-1\",\"providerId\":\"openai\",\"modelId\":\"gpt-5.6-luna\",\"fields\":{},\"evidence\":[],\"sourceReferences\":[]}"}]}],
+                "usage": {"input_tokens": 10, "output_tokens": 5}
             }),
         });
         let gateway = LiteLlmGateway::with_transport("https://example.invalid", transport.clone());
@@ -970,7 +1012,7 @@ mod tests {
             document_arrival_id: "arrival-1".to_owned(),
             capability: IntelligenceCapability::DirectionInterpretation,
             provider_id: "openai".to_owned(),
-            model_id: "gpt-4.1-mini".to_owned(),
+            model_id: "gpt-5.6-luna".to_owned(),
             evidence: Vec::new(),
             content_excerpts: vec![DocumentContentExcerpt {
                 source: "local excerpt".to_owned(),
@@ -997,7 +1039,7 @@ mod tests {
             .expect("recording transport lock")
             .clone()
             .expect("recorded body");
-        assert_eq!(body["model"], "openai/gpt-4.1-mini");
+        assert_eq!(body["model"], "openai/gpt-5.6-luna");
         assert_eq!(body["num_retries"], 0);
         assert_eq!(body["fallbacks"], serde_json::json!([]));
         assert!(body.get("api_key").is_none());
@@ -1009,8 +1051,9 @@ mod tests {
         let transport = Arc::new(ByokRecordingTransport {
             observation: Mutex::new(None),
             response: serde_json::json!({
-                "choices": [{"message": {"content": "{\"requestId\":\"request-byok\",\"documentArrivalId\":\"synthetic-provider-connection-test\",\"providerId\":\"openai-byok\",\"modelId\":\"gpt-4.1-mini\",\"fields\":{},\"evidence\":[],\"sourceReferences\":[]}"}}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+                "model": "byok/openai/gpt-5.6-luna",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "{\"requestId\":\"request-byok\",\"documentArrivalId\":\"synthetic-provider-connection-test\",\"providerId\":\"openai-byok\",\"modelId\":\"gpt-5.6-luna\",\"fields\":{},\"evidence\":[],\"sourceReferences\":[]}"}]}],
+                "usage": {"input_tokens": 10, "output_tokens": 5}
             }),
         });
         let gateway =
@@ -1020,7 +1063,7 @@ mod tests {
             document_arrival_id: "synthetic-provider-connection-test".to_owned(),
             capability: IntelligenceCapability::DirectionInterpretation,
             provider_id: BYOK_OPENAI_PROVIDER_ID.to_owned(),
-            model_id: "gpt-4.1-mini".to_owned(),
+            model_id: "gpt-5.6-luna".to_owned(),
             evidence: Vec::new(),
             content_excerpts: Vec::new(),
             expected_response: IntelligenceResponseSchema {
@@ -1048,10 +1091,10 @@ mod tests {
             .expect("BYOK observation lock")
             .clone()
             .expect("BYOK observation");
-        assert_eq!(endpoint, "https://byok.example.invalid/v1/chat/completions");
+        assert_eq!(endpoint, "https://byok.example.invalid/v1/responses");
         assert_eq!(gateway_key, "narrow-byok-gateway-token");
         assert_eq!(provider_key, "customer-provider-token");
-        assert_eq!(body["model"], "byok/openai/gpt-4.1-mini");
+        assert_eq!(body["model"], "byok/openai/gpt-5.6-luna");
         assert_eq!(body["num_retries"], 0);
         assert_eq!(body["fallbacks"], serde_json::json!([]));
         assert!(body.get("api_key").is_none());
@@ -1059,18 +1102,14 @@ mod tests {
 
     #[test]
     fn cleartext_gateway_endpoints_are_allowed_only_on_loopback() {
+        assert!(endpoint_is_secure("http://127.0.0.1:4001/v1/responses"));
+        assert!(endpoint_is_secure("http://[::1]:4001/v1/responses"));
+        assert!(endpoint_is_secure("http://localhost:4001/v1/responses"));
         assert!(endpoint_is_secure(
-            "http://127.0.0.1:4001/v1/chat/completions"
-        ));
-        assert!(endpoint_is_secure("http://[::1]:4001/v1/chat/completions"));
-        assert!(endpoint_is_secure(
-            "http://localhost:4001/v1/chat/completions"
-        ));
-        assert!(endpoint_is_secure(
-            "https://byok-intelligence.luna.example/v1/chat/completions"
+            "https://byok-intelligence.luna.example/v1/responses"
         ));
         assert!(!endpoint_is_secure(
-            "http://byok-intelligence.luna.example/v1/chat/completions"
+            "http://byok-intelligence.luna.example/v1/responses"
         ));
         assert!(!endpoint_is_secure("not a URL"));
     }

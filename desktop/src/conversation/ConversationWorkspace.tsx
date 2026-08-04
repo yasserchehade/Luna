@@ -88,6 +88,50 @@ const duplicateResolutionLabels: Record<DuplicateDecision, string> = {
   updatedVersion: "Kept both Originals as an updated version",
 };
 
+export async function loadDocumentCloudAssistanceData(
+  conversationService: Pick<
+    ConversationService,
+    "listIntelligenceProviderStatuses" | "listCloudConsentScopes"
+  >,
+  householdId: string,
+): Promise<{
+  providers: IntelligenceProviderStatus[];
+  scopes: CloudConsentScope[];
+  providerError: string;
+  scopeError: string;
+}> {
+  const [providers, scopes] = await Promise.allSettled([
+    conversationService.listIntelligenceProviderStatuses(householdId),
+    conversationService.listCloudConsentScopes(householdId),
+  ]);
+  return {
+    providers: providers.status === "fulfilled" ? providers.value : [],
+    scopes: scopes.status === "fulfilled" ? scopes.value : [],
+    providerError: providers.status === "rejected" ? String(providers.reason) : "",
+    scopeError: scopes.status === "rejected" ? String(scopes.reason) : "",
+  };
+}
+
+const householdAgentMessagePattern = /take care|handle this|organis|organize|already paid|paid it|irrelevant|dismiss|when is|what amount|how much/i;
+
+export function resolveHouseholdAgentArrival(
+  arrivals: Array<Pick<DocumentArrival, "id">>,
+  householdWorks: Array<Pick<HouseholdWork, "sourceRefs" | "status">>,
+  focusedArrivalId: number | null,
+  message: string,
+): Pick<DocumentArrival, "id"> | null {
+  const linkedOpenWork = (arrivalId: number) => householdWorks.find((work) => (
+    !["completed", "dismissed", "noLongerRelevant"].includes(work.status)
+    && work.sourceRefs.includes(`document-${arrivalId}`)
+  ));
+  const focusedArrival = arrivals.find(({ id }) => id === focusedArrivalId) ?? null;
+  if (focusedArrival && (linkedOpenWork(focusedArrival.id) || householdAgentMessagePattern.test(message))) {
+    return focusedArrival;
+  }
+  const openWorkArrivals = arrivals.filter(({ id }) => linkedOpenWork(id));
+  return openWorkArrivals.length === 1 ? openWorkArrivals[0] : null;
+}
+
 const conversationActionLabels: Record<Exclude<ConversationAction, "reviewDetails">, string> = {
   yes: "Yes",
   no: "No",
@@ -260,15 +304,18 @@ function DocumentReviewEditor({
     setCloudBusy(true);
     setCloudError("");
     try {
-      const [providers, scopes] = await Promise.all([
-        conversationService.listIntelligenceProviderStatuses(householdId),
-        conversationService.listCloudConsentScopes(householdId),
-      ]);
+      const {
+        providers,
+        scopes,
+        providerError,
+        scopeError,
+      } = await loadDocumentCloudAssistanceData(conversationService, householdId);
       setCloudProviders(providers);
       setCloudScopes(scopes);
       const selected = providers.find(({ configured }) => configured) ?? providers[0];
       setCloudProviderId((current) => current || selected?.descriptor.id || "");
       setCloudModelId((current) => current || selected?.descriptor.models[0]?.id || "");
+      setCloudError(providerError || scopeError);
     } catch (reason) {
       setCloudError(String(reason));
     } finally {
@@ -898,26 +945,23 @@ export function ConversationWorkspace({
     ) ?? [...selectedArrivals]
       .reverse()
       .find((arrival) => documentConversations[arrival.id]?.prompt);
-    const focusedArrival = selectedArrivals.find(({ id }) => id === focusedArrivalId) ?? null;
-    const focusedWork = focusedArrival
-      ? householdWorks.find((work) => work.sourceRefs.includes(`document-${focusedArrival.id}`))
-      : undefined;
-    const asksHouseholdAgent = Boolean(
-      focusedArrival
-      && (focusedWork
-        || /take care|handle this|organis|organize|already paid|paid it|irrelevant|dismiss|when is|what amount|how much/i.test(messageBody)),
+    const householdAgentArrival = resolveHouseholdAgentArrival(
+      selectedArrivals,
+      householdWorks,
+      focusedArrivalId,
+      messageBody,
     );
     try {
-      if (asksHouseholdAgent && focusedArrival) {
+      if (householdAgentArrival) {
         const outcome = await conversationService.submitHouseholdAdministration(
           householdId,
           selectedConversationId,
-          focusedArrival.id,
+          householdAgentArrival.id,
           messageBody,
         );
         setMessages(await conversationService.listMessages(householdId, selectedConversationId));
-        setTurnMessages((current) => ({ ...current, [focusedArrival.id]: outcome.message }));
-        setFocusedArrivalId(focusedArrival.id);
+        setTurnMessages((current) => ({ ...current, [householdAgentArrival.id]: outcome.message }));
+        setFocusedArrivalId(householdAgentArrival.id);
         await loadHouseholdWork();
       } else if (promptedArrival) {
         await submitUtterance(promptedArrival.id, messageBody);

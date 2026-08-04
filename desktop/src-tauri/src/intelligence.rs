@@ -32,7 +32,7 @@ use crate::{
 };
 
 pub const MANAGED_INTELLIGENCE_PROVIDER_ID: &str = "openai";
-pub const MANAGED_INTELLIGENCE_MODEL_ID: &str = "gpt-4.1-mini";
+pub const MANAGED_INTELLIGENCE_MODEL_ID: &str = "gpt-5.6-luna";
 pub const BYOK_OPENAI_PROVIDER_ID: &str = "openai-byok";
 pub const MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS: usize = 12_000;
 const MAX_SAFE_RETRY_ATTEMPTS: usize = 2;
@@ -798,7 +798,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         trusted_device: TrustedDeviceManager<V>,
     ) -> Result<Self, IntelligenceFailure> {
         let endpoint = std::env::var("LUNA_MANAGED_INTELLIGENCE_URL")
-            .unwrap_or_else(|_| "https://intelligence.luna.invalid/v1/chat/completions".to_owned());
+            .unwrap_or_else(|_| "https://intelligence.luna.invalid/v1/responses".to_owned());
         Self::open_with_gateway(
             database,
             trusted_device,
@@ -1714,10 +1714,92 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
 
 fn validate_household_result(
     request: &HouseholdAdministrationRequest,
-    result: UntrustedHouseholdAdministrationResult,
+    mut result: UntrustedHouseholdAdministrationResult,
 ) -> Result<HouseholdAdministrationResult, IntelligenceFailure> {
     let validated_member_direction =
         validated_household_work_direction(request.current_message.as_str());
+    if let Some(status) =
+        validated_member_direction.and_then(|direction| direction.terminal_status())
+    {
+        let target = request.source_linked_household_work.as_ref().or_else(|| {
+            (request.active_household_work.len() == 1).then(|| &request.active_household_work[0])
+        });
+        if let Some(target) = target {
+            result.work.kind = None;
+            result.work.summary = None;
+            result.work.facts.clear();
+            result.work.due_at = None;
+            result.work.urgency = None;
+            result.clarification = None;
+            result.proposed_actions.clear();
+            if target.status == status {
+                result.work.operation = HouseholdWorkOperation::None;
+                result.work.work_id = None;
+                result.work.status = None;
+            } else {
+                result.work.operation = HouseholdWorkOperation::Update;
+                result.work.work_id = Some(target.id.clone());
+                result.work.status = Some(status);
+            }
+            result.reply = match validated_member_direction {
+                Some(ValidatedHouseholdWorkDirection::Complete) => {
+                    "I've marked that Household Work as completed.".to_owned()
+                }
+                Some(ValidatedHouseholdWorkDirection::Dismiss) => {
+                    "I've dismissed that Household Work.".to_owned()
+                }
+                Some(ValidatedHouseholdWorkDirection::MarkNoLongerRelevant) => {
+                    "I've marked that Household Work as no longer relevant.".to_owned()
+                }
+                Some(ValidatedHouseholdWorkDirection::Reopen) | None => unreachable!(),
+            };
+        }
+    }
+    if validated_member_direction.is_none()
+        && is_clearly_read_only_household_question(request.current_message.as_str())
+        && result
+            .work
+            .status
+            .is_none_or(|status| !status.is_terminal())
+    {
+        result.work = HouseholdWorkProposal {
+            operation: HouseholdWorkOperation::None,
+            work_id: None,
+            kind: None,
+            summary: None,
+            status: None,
+            facts: Vec::new(),
+            due_at: None,
+            urgency: None,
+        };
+        result.proposed_actions.clear();
+    }
+    if let Some(target) = request.source_linked_household_work.as_ref() {
+        if target.status.is_open()
+            && matches!(
+                result.work.operation,
+                HouseholdWorkOperation::Create | HouseholdWorkOperation::Update
+            )
+            && result
+                .work
+                .status
+                .is_none_or(|status| !status.is_terminal())
+        {
+            result.work.operation = HouseholdWorkOperation::Update;
+            result.work.work_id = Some(target.id.clone());
+        }
+    }
+    if result.clarification.as_ref().is_some_and(|clarification| {
+        clarification
+            .question
+            .trim()
+            .eq_ignore_ascii_case(request.current_message.trim())
+    }) {
+        result.clarification = None;
+    }
+    if result.clarification.is_some() && result.reply.contains('?') {
+        result.reply = declarative_clarification_context(result.reply.as_str());
+    }
     if result.request_id != request.request_id
         || result.provider_id != MANAGED_INTELLIGENCE_PROVIDER_ID
         || result.model_id != MANAGED_INTELLIGENCE_MODEL_ID
@@ -1869,10 +1951,69 @@ fn validated_household_work_direction(message: &str) -> Option<ValidatedHousehol
         "ignore this",
         "don't need this",
         "do not need this",
+        "don't need to act",
+        "do not need to act",
     ]) {
         return Some(ValidatedHouseholdWorkDirection::Dismiss);
     }
     None
+}
+
+fn is_clearly_read_only_household_question(message: &str) -> bool {
+    let message = message.trim().to_ascii_lowercase();
+    let asks_for_information = message.ends_with('?')
+        && [
+            "what ",
+            "when ",
+            "where ",
+            "who ",
+            "why ",
+            "how ",
+            "can you explain",
+            "could you explain",
+            "tell me ",
+            "does ",
+            "do ",
+            "is ",
+            "are ",
+        ]
+        .iter()
+        .any(|prefix| message.starts_with(prefix));
+    let requests_mutation = [
+        "take care",
+        "handle",
+        "pay ",
+        "dismiss",
+        "complete",
+        "mark ",
+        "remind",
+        "draft",
+        "send ",
+        "update",
+        "change",
+        "correct",
+        "set ",
+        "schedule",
+        "reopen",
+        "cancel",
+    ]
+    .iter()
+    .any(|phrase| message.contains(phrase));
+
+    asks_for_information && !requests_mutation
+}
+
+fn declarative_clarification_context(reply: &str) -> String {
+    let question_start = reply.find('?').unwrap_or(reply.len());
+    let before_question = &reply[..question_start];
+    let sentence_end = before_question
+        .rfind(['.', '!'])
+        .map(|index| index + 1)
+        .or_else(|| before_question.rfind('\n'));
+    sentence_end
+        .map(|end| reply[..end].trim().to_owned())
+        .filter(|context| !context.is_empty())
+        .unwrap_or_else(|| "I need one detail before I can continue.".to_owned())
 }
 
 impl IntelligenceFailure {
@@ -1923,7 +2064,7 @@ pub(crate) fn managed_provider_catalog() -> Vec<IntelligenceProviderDescriptor> 
             .to_owned(),
         models: vec![IntelligenceModelDescriptor {
             id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
-            name: "GPT-4.1 mini".to_owned(),
+            name: "GPT-5.6 Luna".to_owned(),
         }],
         managed_by_luna: true,
         auth_url: None,
@@ -2120,7 +2261,7 @@ pub(crate) fn provider_catalog() -> Vec<IntelligenceProviderDescriptor> {
         description: "OpenAI Cloud Assistance billed directly to your provider account.".to_owned(),
         models: vec![IntelligenceModelDescriptor {
             id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
-            name: "GPT-4.1 mini".to_owned(),
+            name: "GPT-5.6 Luna".to_owned(),
         }],
         managed_by_luna: false,
         auth_url: Some("https://platform.openai.com/api-keys".to_owned()),
@@ -2260,7 +2401,7 @@ mod tests {
     fn luna_sends_the_explicit_provider_and_model_through_the_gateway_contract() {
         let gateway = DeterministicIntelligenceGateway::new(
             "openai",
-            "gpt-4.1-mini",
+            "gpt-5.6-luna",
             BTreeMap::from([("documentType".to_owned(), "electricity bill".to_owned())]),
         );
         let store = store_with_gateway(gateway.clone());
@@ -2270,7 +2411,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 authorised_request("arrival-42"),
                 CloudConsentDecision::AllowOnce,
@@ -2280,11 +2421,11 @@ mod tests {
             .expect("evaluate document");
 
         assert_eq!(result.provider_id, "openai");
-        assert_eq!(result.model_id, "gpt-4.1-mini");
+        assert_eq!(result.model_id, "gpt-5.6-luna");
         let requests = gateway.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].provider_id, "openai");
-        assert_eq!(requests[0].model_id, "gpt-4.1-mini");
+        assert_eq!(requests[0].model_id, "gpt-5.6-luna");
     }
 
     #[test]
@@ -2301,7 +2442,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 authorised_request("arrival-invalid"),
                 CloudConsentDecision::AllowOnce,
@@ -2316,7 +2457,7 @@ mod tests {
             .expect("list Cloud Assistance History");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].provider_id, "openai");
-        assert_eq!(events[0].model_id, "gpt-4.1-mini");
+        assert_eq!(events[0].model_id, "gpt-5.6-luna");
         assert_eq!(events[0].outcome, CloudAssistanceOutcome::WaitingForRetry);
     }
 
@@ -2344,7 +2485,7 @@ mod tests {
         let store = store_with_gateway_and_catalog(gateway.clone(), providers);
         let openai = IntelligenceSelection {
             provider_id: "openai".to_owned(),
-            model_id: "gpt-4.1-mini".to_owned(),
+            model_id: "gpt-5.6-luna".to_owned(),
         };
         let scope_request = authorised_request("arrival-a");
         let grant = store
@@ -2382,11 +2523,11 @@ mod tests {
     #[test]
     fn allow_once_consent_is_persisted_consumed_and_cannot_be_reused() {
         let gateway =
-            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+            DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
         let store = store_with_gateway(gateway.clone());
         let selection = IntelligenceSelection {
             provider_id: "openai".to_owned(),
-            model_id: "gpt-4.1-mini".to_owned(),
+            model_id: "gpt-5.6-luna".to_owned(),
         };
         let result = store
             .evaluate_document(
@@ -2424,11 +2565,11 @@ mod tests {
     #[test]
     fn reusable_consent_is_inspectable_and_revocable() {
         let gateway =
-            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+            DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
         let store = store_with_gateway(gateway.clone());
         let selection = IntelligenceSelection {
             provider_id: "openai".to_owned(),
-            model_id: "gpt-4.1-mini".to_owned(),
+            model_id: "gpt-5.6-luna".to_owned(),
         };
         let request = authorised_request("arrival-scope");
         let grant = store
@@ -2445,7 +2586,7 @@ mod tests {
         assert_eq!(grant.kind, ConsentGrantKind::Reusable);
         assert_eq!(grant.granted_by, "organiser-1");
         assert_eq!(grant.provider_id, "openai");
-        assert_eq!(grant.model_id, "gpt-4.1-mini");
+        assert_eq!(grant.model_id, "gpt-5.6-luna");
         assert!(grant.future_scope.is_some());
 
         store
@@ -2475,14 +2616,14 @@ mod tests {
     #[test]
     fn keep_local_records_the_choice_without_transmitting_document_information() {
         let gateway =
-            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+            DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
         let store = store_with_gateway(gateway.clone());
         assert_eq!(
             store.evaluate_document(
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 authorised_request("arrival-local"),
                 CloudConsentDecision::KeepLocal,
@@ -2500,7 +2641,7 @@ mod tests {
     #[test]
     fn safe_retry_reuses_the_exact_provider_model_and_request() {
         let gateway =
-            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+            DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
         gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
         let store = store_with_gateway(gateway.clone());
         store
@@ -2508,7 +2649,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 authorised_request("arrival-retry"),
                 CloudConsentDecision::AllowOnce,
@@ -2520,14 +2661,14 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0], requests[1]);
         assert_eq!(requests[0].provider_id, "openai");
-        assert_eq!(requests[0].model_id, "gpt-4.1-mini");
+        assert_eq!(requests[0].model_id, "gpt-5.6-luna");
     }
 
     #[test]
     fn candidate_disposition_appends_history_without_rewriting_the_presented_event() {
         let gateway = DeterministicIntelligenceGateway::new(
             "openai",
-            "gpt-4.1-mini",
+            "gpt-5.6-luna",
             BTreeMap::from([("documentType".to_owned(), "electricity bill".to_owned())]),
         );
         let store = store_with_gateway(gateway);
@@ -2538,7 +2679,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 request.clone(),
                 CloudConsentDecision::AllowOnce,
@@ -2573,7 +2714,7 @@ mod tests {
     #[test]
     fn gateway_credentials_remain_in_the_vault_and_out_of_public_history() {
         let gateway =
-            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+            DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
         let trusted_device = trusted_device();
         let vault = trusted_device.vault().clone();
         let database = std::env::temp_dir().join(format!(
@@ -2597,7 +2738,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 authorised_request("arrival-secret"),
                 CloudConsentDecision::AllowOnce,
@@ -2692,15 +2833,15 @@ mod tests {
     #[test]
     fn reusable_consent_cannot_expand_to_new_local_scope_response_fields_or_models() {
         let gateway =
-            DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+            DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
         let providers = vec![IntelligenceProviderDescriptor {
             id: "openai".to_owned(),
             name: "OpenAI".to_owned(),
             description: "Test routes".to_owned(),
             models: vec![
                 IntelligenceModelDescriptor {
-                    id: "gpt-4.1-mini".to_owned(),
-                    name: "GPT-4.1 mini".to_owned(),
+                    id: "gpt-5.6-luna".to_owned(),
+                    name: "GPT-5.6 Luna".to_owned(),
                 },
                 IntelligenceModelDescriptor {
                     id: "another-model".to_owned(),
@@ -2713,7 +2854,7 @@ mod tests {
         let store = store_with_gateway_and_catalog(gateway.clone(), providers);
         let selection = IntelligenceSelection {
             provider_id: "openai".to_owned(),
-            model_id: "gpt-4.1-mini".to_owned(),
+            model_id: "gpt-5.6-luna".to_owned(),
         };
         let request = authorised_request("arrival-scope");
         let grant = store
@@ -2789,7 +2930,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 authorised_request("arrival-auth"),
                 CloudConsentDecision::AllowOnce,
@@ -2974,7 +3115,7 @@ mod tests {
                 "household",
                 IntelligenceSelection {
                     provider_id: "openai".to_owned(),
-                    model_id: "gpt-4.1-mini".to_owned(),
+                    model_id: "gpt-5.6-luna".to_owned(),
                 },
                 request,
                 CloudConsentDecision::AllowOnce,
@@ -3078,6 +3219,59 @@ mod tests {
     }
 
     #[test]
+    fn explicit_member_payment_derives_the_target_and_completion_inside_luna() {
+        let request = household_validation_request(
+            "I already paid that.",
+            HouseholdWorkStatus::AwaitingApproval,
+        );
+        let mut proposal = household_update(HouseholdWorkStatus::Active);
+        proposal.work = HouseholdWorkProposal {
+            operation: HouseholdWorkOperation::None,
+            work_id: None,
+            kind: None,
+            summary: None,
+            status: None,
+            facts: Vec::new(),
+            due_at: None,
+            urgency: None,
+        };
+
+        let result = validate_household_result(&request, proposal)
+            .expect("derive explicit completion without trusting the model transition");
+
+        assert_eq!(result.work.operation, HouseholdWorkOperation::Update);
+        assert_eq!(result.work.work_id.as_deref(), Some("work-1"));
+        assert_eq!(result.work.status, Some(HouseholdWorkStatus::Completed));
+        assert_eq!(
+            result.validated_member_direction,
+            Some(ValidatedHouseholdWorkDirection::Complete)
+        );
+    }
+
+    #[test]
+    fn explicit_member_no_action_direction_derives_dismissal_inside_luna() {
+        let request = household_validation_request(
+            "We do not need to act on this.",
+            HouseholdWorkStatus::NeedsClarification,
+        );
+        let mut proposal = household_update(HouseholdWorkStatus::NeedsClarification);
+        proposal.work.operation = HouseholdWorkOperation::None;
+        proposal.work.work_id = None;
+        proposal.work.status = None;
+
+        let result = validate_household_result(&request, proposal)
+            .expect("derive explicit dismissal from member direction");
+
+        assert_eq!(result.work.operation, HouseholdWorkOperation::Update);
+        assert_eq!(result.work.work_id.as_deref(), Some("work-1"));
+        assert_eq!(result.work.status, Some(HouseholdWorkStatus::Dismissed));
+        assert_eq!(
+            result.validated_member_direction,
+            Some(ValidatedHouseholdWorkDirection::Dismiss)
+        );
+    }
+
+    #[test]
     fn a_read_only_question_cannot_close_household_work() {
         let mut proposal = household_update(HouseholdWorkStatus::Completed);
         proposal.work.operation = HouseholdWorkOperation::None;
@@ -3092,6 +3286,125 @@ mod tests {
             ),
             Err(IntelligenceFailure::InvalidStructuredResult)
         );
+    }
+
+    #[test]
+    fn a_read_only_answer_drops_a_clarification_that_repeats_the_member_question() {
+        let request = household_validation_request(
+            "What period does this bill cover?",
+            HouseholdWorkStatus::AwaitingApproval,
+        );
+        let mut proposal = household_update(HouseholdWorkStatus::Active);
+        proposal.reply = "The bill covers 1 July to 31 July.".to_owned();
+        proposal.work.operation = HouseholdWorkOperation::None;
+        proposal.work.work_id = None;
+        proposal.work.status = None;
+        proposal.clarification = Some(HouseholdClarification {
+            question: "What period does this bill cover?".to_owned(),
+            reason: None,
+            field: Some(WorkFactKey::DueDate),
+        });
+
+        let result = validate_household_result(&request, proposal)
+            .expect("accept read-only answer without redundant clarification");
+
+        assert_eq!(result.work.operation, HouseholdWorkOperation::None);
+        assert_eq!(result.clarification, None);
+    }
+
+    #[test]
+    fn a_structured_clarification_is_not_duplicated_in_the_reply() {
+        let request = household_validation_request(
+            "Take care of this.",
+            HouseholdWorkStatus::NeedsClarification,
+        );
+        let mut proposal = household_update(HouseholdWorkStatus::NeedsClarification);
+        proposal.reply = "I found the bill, but it does not identify the property. Which property should I assign it to?".to_owned();
+        proposal.clarification = Some(HouseholdClarification {
+            question: "Which property should this bill be assigned to?".to_owned(),
+            reason: Some("The document does not identify a property.".to_owned()),
+            field: Some(WorkFactKey::Property),
+        });
+
+        let result = validate_household_result(&request, proposal)
+            .expect("accept one focused structured clarification");
+
+        assert_eq!(
+            result.reply,
+            "I found the bill, but it does not identify the property."
+        );
+        assert_eq!(
+            result
+                .clarification
+                .as_ref()
+                .map(|item| item.question.as_str()),
+            Some("Which property should this bill be assigned to?")
+        );
+    }
+
+    #[test]
+    fn a_read_only_question_discards_model_proposed_work_mutations_and_actions() {
+        let mut request = household_validation_request(
+            "What period does this bill cover?",
+            HouseholdWorkStatus::AwaitingApproval,
+        );
+        request.household_context.push(HouseholdContextItem {
+            category: "period".to_owned(),
+            value: "1 July to 31 July".to_owned(),
+            source_reference: "document-1".to_owned(),
+        });
+        let mut proposal = household_update(HouseholdWorkStatus::Active);
+        proposal.work.facts.push(WorkFact {
+            key: WorkFactKey::Other,
+            value: "Bill period: 1 July to 31 July".to_owned(),
+            evidence_refs: vec!["document-1".to_owned()],
+            certainty: WorkFactCertainty::Likely,
+        });
+        proposal.proposed_actions.push(HouseholdActionProposal {
+            kind: ProposedActionKind::Reminder,
+            summary: "Add another reminder".to_owned(),
+            arguments: BTreeMap::new(),
+            approval_required: true,
+        });
+
+        let result = validate_household_result(&request, proposal)
+            .expect("accept the answer while discarding untrusted mutations");
+
+        assert_eq!(result.work.operation, HouseholdWorkOperation::None);
+        assert_eq!(result.work.work_id, None);
+        assert_eq!(result.work.status, None);
+        assert!(result.work.facts.is_empty());
+        assert!(result.proposed_actions.is_empty());
+    }
+
+    #[test]
+    fn a_source_linked_clarification_cannot_create_duplicate_household_work() {
+        let mut request = household_validation_request(
+            "The rental property.",
+            HouseholdWorkStatus::NeedsClarification,
+        );
+        request
+            .relevant_conversation
+            .push(HouseholdAdministrationMessage {
+                author: "member".to_owned(),
+                body: "The rental property.".to_owned(),
+            });
+        let mut proposal = household_update(HouseholdWorkStatus::Active);
+        proposal.work.operation = HouseholdWorkOperation::Create;
+        proposal.work.work_id = None;
+        proposal.work.facts.push(WorkFact {
+            key: WorkFactKey::Property,
+            value: "The rental property".to_owned(),
+            evidence_refs: vec!["conversation-member".to_owned()],
+            certainty: WorkFactCertainty::Confirmed,
+        });
+
+        let result = validate_household_result(&request, proposal)
+            .expect("refine the source-linked work rather than create a duplicate");
+
+        assert_eq!(result.work.operation, HouseholdWorkOperation::Update);
+        assert_eq!(result.work.work_id.as_deref(), Some("work-1"));
+        assert_eq!(result.work.status, Some(HouseholdWorkStatus::Active));
     }
 
     #[test]
