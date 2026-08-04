@@ -2,6 +2,12 @@
 
 **Status:** Governing web product experience
 
+## Founder acceptance
+
+On 5 August 2026, the founder selected **Variant A — Briefing stream** as the structural direction for Luna's web MVP. It is the accepted foundation because it makes the proactive `Today` briefing primary, separates work requiring attention from upcoming and completed outcomes, and preserves conversation and working context without turning the experience into a dashboard.
+
+The three-variant prototype remains primary-source design evidence on branch `codex/web-first-mvp-prototype`, starting at commit `3047f435d214c3e59bd0469873acea704176e289`. Future implementation must promote Variant A into a real, production-quality route rather than merging the throwaway switcher or the losing Variant B and C implementations into the product.
+
 ## Experience promise
 
 Opening Luna should feel like checking in with a competent household employee who has already been working. Luna starts the conversation with a concise briefing, presents household outcomes in plain language and keeps a natural conversation available without making the member operate a workflow.
