@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
-import type { TodayService } from "./contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConversationInput, MutationResult, TodayService } from "./contracts";
 import { createMockTodayService } from "./mockTodayService";
 import { TodayRoute } from "./TodayRoute";
 
@@ -14,6 +14,21 @@ function renderToday(options: Parameters<typeof createMockTodayService>[0] = {},
 
 async function ready() {
   return screen.findByRole("heading", { name: "Good afternoon, Yasser." });
+}
+
+function delayedMessageService() {
+  const base = createMockTodayService({ latencyMs: 0 });
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const sendMessage = vi.fn(async (input: ConversationInput): Promise<MutationResult> => {
+    await gate;
+    return base.sendMessage(input);
+  });
+  return {
+    service: { ...base, sendMessage },
+    sendMessage,
+    release: () => release?.(),
+  };
 }
 
 describe("production Today route", () => {
@@ -127,6 +142,88 @@ describe("production Today route", () => {
     expect((composer as HTMLTextAreaElement).value).toBe("");
   });
 
+  it("submits with the send button and restores focus after Luna responds", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    const composer = screen.getByLabelText("Instruction for Luna") as HTMLTextAreaElement;
+    await user.type(composer, "Keep watching for the receipt");
+    await user.click(screen.getByRole("button", { name: "Send instruction" }));
+    expect(await screen.findByText("Keep watching for the receipt")).toBeTruthy();
+    expect(screen.getAllByText("I have added that direction to Electricity bill needs approval.").length).toBeGreaterThan(0);
+    expect(composer.value).toBe("");
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("renders the member message optimistically and prevents duplicate pending sends", async () => {
+    const user = userEvent.setup();
+    const delayed = delayedMessageService();
+    render(<TodayRoute service={delayed.service} />);
+    await ready();
+    const composer = screen.getByLabelText("Instruction for Luna") as HTMLTextAreaElement;
+    const form = screen.getByRole("form", { name: "Delegate to Luna" });
+    await user.type(composer, "Please keep this in view");
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(document.querySelector('[data-pending="true"]')?.textContent).toContain("Please keep this in view");
+    expect(delayed.sendMessage).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Send instruction" }).hasAttribute("disabled")).toBe(true);
+    expect(composer.value).toBe("Please keep this in view");
+
+    delayed.release();
+    expect((await screen.findAllByText("I have added that direction to Electricity bill needs approval.")).length).toBeGreaterThan(0);
+    expect(composer.value).toBe("");
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("completes selected work from an existing conversational direction without resetting context", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    const composer = screen.getByLabelText("Instruction for Luna");
+    await user.type(composer, "I already paid it.");
+    await user.click(screen.getByRole("button", { name: "Send instruction" }));
+
+    expect((await screen.findByRole("status")).textContent).toContain("marked this complete");
+    const completed = screen.getByText("Completed while you were away").closest("section");
+    if (!completed) throw new Error("completed section missing");
+    expect(within(completed).getByRole("button", { name: "Open Electricity bill needs approval" })).toBeTruthy();
+    const context = screen.getByRole("complementary", { name: "Working context" });
+    expect(within(context).getByText("Electricity bill needs approval")).toBeTruthy();
+    expect(screen.getAllByText("I already paid it.")).toHaveLength(1);
+  });
+
+  it("applies an existing fact correction through conversation without duplicating work", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    const composer = screen.getByLabelText("Instruction for Luna");
+    await user.type(composer, "That's for the rental property.");
+    await user.click(screen.getByRole("button", { name: "Send instruction" }));
+
+    const context = screen.getByRole("complementary", { name: "Working context" });
+    await waitFor(() => expect(within(context).getAllByText("Rental property").length).toBeGreaterThan(0));
+    expect(screen.getAllByRole("button", { name: "Open Electricity bill needs approval" })).toHaveLength(1);
+    expect(screen.getAllByText("That's for the rental property.")).toHaveLength(1);
+  });
+
+  it("sends an existing mocked attachment with a message and clears it only on success", async () => {
+    const user = userEvent.setup();
+    const { container } = renderToday();
+    await ready();
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error("attachment control missing");
+    await user.upload(input, new File(["safe fixture"], "northstar-bill.pdf", { type: "application/pdf" }));
+    const composer = screen.getByLabelText("Instruction for Luna");
+    await user.type(composer, "Take care of this.");
+    await user.click(screen.getByRole("button", { name: "Send instruction" }));
+
+    expect((await screen.findAllByText("I have the document and will keep this instruction with it.")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Take care of this.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove northstar-bill.pdf" })).toBeNull();
+  });
+
   it("sends a new delegation outside selected work and keeps it in today's stream", async () => {
     const user = userEvent.setup();
     renderToday();
@@ -150,6 +247,7 @@ describe("production Today route", () => {
     expect(composer.value).toBe("Arrange a locksmith visit");
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("Arrange a locksmith visit")).toBeTruthy();
+    expect(screen.getAllByText("Arrange a locksmith visit")).toHaveLength(1);
   });
 
   it("keeps a draft while navigating between mocked destinations", async () => {

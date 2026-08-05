@@ -1,5 +1,9 @@
+"use client";
+
+import { useEffect, useRef } from "react";
 import { AppIcon } from "../../../components/AppIcon";
 import type { HouseholdWorkStatus, HouseholdWorkView, TodayBriefing } from "../contracts";
+import type { PendingConversation } from "../useToday";
 import { LunaMark } from "./PrimaryNavigation";
 import { EmptyBriefing, PartialFailure } from "./TodayStates";
 
@@ -50,30 +54,47 @@ function BriefingIntro({ briefing }: { briefing: TodayBriefing }) {
   );
 }
 
-export function ConversationTransition({ work }: { work: HouseholdWorkView }) {
-  if (work.conversation.length === 0) return null;
+function PendingConversationEntry({ pending }: { pending: PendingConversation }) {
+  const entry = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    entry.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  }, []);
+
   return (
-    <div className="conversation-transitions" aria-label={`Conversation about ${work.title}`}>
+    <div ref={entry} className="conversation-entry member" data-pending="true">
+      <strong>You</strong>
+      <p>{pending.entry.message}</p>
+    </div>
+  );
+}
+
+export function ConversationTransition({ work, pending }: { work: HouseholdWorkView; pending: PendingConversation | null }) {
+  if (work.conversation.length === 0 && !pending) return null;
+  return (
+    <div className="conversation-transitions" aria-label={`Conversation about ${work.title}`} aria-live="polite" aria-relevant="additions">
       {work.conversation.map((entry) => (
         <div className={`conversation-entry ${entry.speaker}`} key={entry.id}>
           <strong>{entry.speaker === "luna" ? "Luna" : "You"}</strong>
           <p>{entry.message}</p>
         </div>
       ))}
+      {pending && <PendingConversationEntry pending={pending} />}
     </div>
   );
 }
 
-function TodayConversation({ briefing }: { briefing: TodayBriefing }) {
-  if (briefing.conversation.length === 0) return null;
+function TodayConversation({ briefing, pending }: { briefing: TodayBriefing; pending: PendingConversation | null }) {
+  if (briefing.conversation.length === 0 && !pending) return null;
   return (
-    <section className="today-conversation" aria-label="Today's conversation">
+    <section className="today-conversation" aria-label="Today's conversation" aria-live="polite" aria-relevant="additions">
       {briefing.conversation.map((entry) => (
         <div className={`conversation-entry ${entry.speaker}`} key={entry.id}>
           <strong>{entry.speaker === "luna" ? "Luna" : "You"}</strong>
           <p>{entry.message}</p>
         </div>
       ))}
+      {pending && <PendingConversationEntry pending={pending} />}
     </section>
   );
 }
@@ -90,6 +111,7 @@ export function HouseholdWorkReport({
   onDiscuss,
   onComplete,
   onDismiss,
+  pendingConversation,
 }: {
   work: HouseholdWorkView;
   selected: boolean;
@@ -102,6 +124,7 @@ export function HouseholdWorkReport({
   onDiscuss: () => void;
   onComplete: () => void;
   onDismiss: () => void;
+  pendingConversation: PendingConversation | null;
 }) {
   return (
     <article className={`today-work-report ${selected ? "selected" : ""} ${compact ? "compact" : ""}`} data-status={work.status} aria-busy={pending || undefined}>
@@ -116,7 +139,7 @@ export function HouseholdWorkReport({
           <>
             <div className="work-source"><AppIcon name="source" /><span>{work.source.label}</span><span aria-hidden="true">·</span><span>{work.householdEntity}</span>{work.amountLabel && <><span aria-hidden="true">·</span><span>{work.amountLabel}</span></>}</div>
             <div className="work-recommendation"><span>Luna recommends</span><p>{work.recommendation}</p></div>
-            <ConversationTransition work={work} />
+            <ConversationTransition work={work} pending={pendingConversation?.workId === work.id ? pendingConversation : null} />
           </>
         )}
         {!compact && work.status !== "completed" && work.status !== "dismissed" && (
@@ -148,6 +171,7 @@ export function BriefingStream({
   onDiscuss,
   onComplete,
   onDismiss,
+  pendingConversation,
 }: {
   briefing: TodayBriefing;
   selectedWorkId: string | null;
@@ -159,6 +183,7 @@ export function BriefingStream({
   onDiscuss: (work: HouseholdWorkView) => void;
   onComplete: (id: string) => void;
   onDismiss: (id: string) => void;
+  pendingConversation: PendingConversation | null;
 }) {
   const visible = briefing.work.filter((work) => work.status !== "dismissed");
   const attention = visible.filter((work) => ["needsAttention", "awaitingApproval", "needsClarification"].includes(work.status));
@@ -179,6 +204,7 @@ export function BriefingStream({
       onDiscuss={() => onDiscuss(work)}
       onComplete={() => onComplete(work.id)}
       onDismiss={() => onDismiss(work.id)}
+      pendingConversation={pendingConversation}
     />
   );
 
@@ -186,7 +212,7 @@ export function BriefingStream({
     return (
       <div className="today-briefing-stream">
         <BriefingIntro briefing={briefing} />
-        <TodayConversation briefing={briefing} />
+        <TodayConversation briefing={briefing} pending={pendingConversation?.workId === null ? pendingConversation : null} />
         <EmptyBriefing />
       </div>
     );
@@ -195,13 +221,13 @@ export function BriefingStream({
   return (
     <div className="today-briefing-stream">
       <BriefingIntro briefing={briefing} />
-      <TodayConversation briefing={briefing} />
+      <TodayConversation briefing={briefing} pending={pendingConversation?.workId === null ? pendingConversation : null} />
       {briefing.partialFailures.map((failure) => <PartialFailure key={failure.id} title={failure.title} message={failure.message} />)}
       {attention.length > 0 ? <BriefingSection title="Needs your attention">{attention.map((work) => report(work))}</BriefingSection> : (
         <section className="nothing-urgent"><AppIcon name="check" /><div><h2>Nothing urgent</h2><p>I do not need a decision from you right now.</p></div></section>
       )}
       {upcoming.length > 0 && <BriefingSection title="Upcoming">{upcoming.map((work) => report(work, true))}</BriefingSection>}
-      {completed.length > 0 && <BriefingSection title="Completed while you were away">{completed.map((work) => report(work, true))}</BriefingSection>}
+      {completed.length > 0 && <BriefingSection title="Completed while you were away">{completed.map((work) => report(work, work.id !== selectedWorkId))}</BriefingSection>}
     </div>
   );
 }

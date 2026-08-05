@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
 import { AppIcon } from "../../../components/AppIcon";
 import type { AttachmentResult, HouseholdWorkView } from "../contracts";
 
@@ -28,6 +28,14 @@ export function PersistentComposer({
   onSend: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const wasSending = useRef(false);
+
+  useEffect(() => {
+    if (wasSending.current && !sending) composer.current?.focus();
+    wasSending.current = sending;
+  }, [sending]);
+
   const submit = (event: FormEvent) => { event.preventDefault(); onSend(); };
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -53,6 +61,7 @@ export function PersistentComposer({
         <input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.png,.jpg,.jpeg" aria-label="Attach a household document" onChange={chooseFile} />
         <button type="button" className="icon-button" aria-label="Attach a household document" disabled={attachmentPending} onClick={() => fileInput.current?.click()}><AppIcon name="paperclip" /></button>
         <textarea
+          ref={composer}
           rows={1}
           aria-label="Instruction for Luna"
           value={draft}

@@ -6,8 +6,8 @@ The production frontend foundation is available at `http://localhost:3001/today`
 
 ## Automated evidence
 
-- 40 web tests pass across the historical prototype, production `Today` interactions and mock-adapter contracts.
-- The 21 production-route tests cover briefing, navigation, work selection, approval, retry, correction, dismissal, completion, bounded attachment selection, contextual and new instructions, draft preservation, loading, empty, unavailable, recoverable-error, partial-failure and mobile drawer behavior.
+- 45 web tests pass across the historical prototype, production `Today` interactions and mock-adapter contracts.
+- The 26 production-route tests cover briefing, navigation, work selection, approval, retry, correction, dismissal, completion, bounded attachment selection, button and keyboard submission, optimistic conversation updates, duplicate-send prevention, focus restoration, attachment-plus-message handling, draft preservation, loading, empty, unavailable, recoverable-error, partial-failure and mobile drawer behavior.
 - TypeScript type checking passes.
 - The Next.js production build passes and emits `/today` as a static route.
 - No lint script or standalone accessibility runner is currently configured in `apps/web`.

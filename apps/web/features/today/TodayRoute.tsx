@@ -69,6 +69,7 @@ export function TodayRoute({ service }: { service?: TodayService }) {
               onDiscuss={(work) => today.discuss(work.id, work.title)}
               onComplete={(id) => void today.complete(id)}
               onDismiss={(id) => void today.dismiss(id)}
+              pendingConversation={today.pendingConversation}
             />
           ) : null}
         </div>

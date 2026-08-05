@@ -224,7 +224,7 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
       }
 
       const work = input.workId ? findWork(input.workId) : null;
-      const confirmation = input.attachmentId
+      let confirmation = input.attachmentId
         ? "I have the document and will keep this instruction with it."
         : work
           ? `I have added that direction to ${work.title}.`
@@ -232,6 +232,23 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
 
       if (work) {
         if (message) work.conversation.push({ id: `member-${++sequence}`, speaker: "member", message });
+
+        const normalizedMessage = message.toLocaleLowerCase();
+        if (!input.attachmentId && /\b(already paid|paid (it|that|this)|have paid)\b/.test(normalizedMessage)) {
+          work.status = "completed";
+          work.dueLabel = "Completed";
+          work.needs = null;
+          work.proposedAction = undefined;
+          confirmation = "Thanks — I marked this complete and moved it out of today's attention.";
+        } else if (!input.attachmentId && normalizedMessage.includes("rental property")) {
+          const property = work.facts.find((fact) => fact.key === "property");
+          if (property) {
+            property.value = "Rental property";
+            work.householdEntity = "Rental property";
+            confirmation = "I updated the property to Rental property and kept the other details unchanged.";
+          }
+        }
+
         work.conversation.push({ id: `luna-${++sequence}`, speaker: "luna", message: confirmation });
       } else {
         if (message) briefing.conversation.push({ id: `member-${++sequence}`, speaker: "member", message });

@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   TodayServiceError,
   type AttachmentResult,
+  type ConversationEntry,
   type FactCorrectionInput,
   type MutationResult,
   type TodayBriefing,
@@ -18,6 +19,11 @@ type PendingMutation =
   | { kind: "correct"; input: FactCorrectionInput };
 
 const DRAFT_KEY = "luna.today.draft";
+
+export type PendingConversation = {
+  workId: string | null;
+  entry: ConversationEntry;
+};
 
 function safeMessage(error: unknown): string {
   if (error instanceof TodayServiceError) return error.message;
@@ -41,6 +47,8 @@ export function useToday(service: TodayService) {
   const [draft, setDraftState] = useState("");
   const [sending, setSending] = useState(false);
   const [failedSend, setFailedSend] = useState(false);
+  const [pendingConversation, setPendingConversation] = useState<PendingConversation | null>(null);
+  const sendingRef = useRef(false);
 
   const setDraft = useCallback((value: string) => {
     setDraftState(value);
@@ -110,9 +118,17 @@ export function useToday(service: TodayService) {
   }, [applyResult, service]);
 
   const send = useCallback(async () => {
-    if (!draft.trim() && !attachment) return;
+    if (sendingRef.current || (!draft.trim() && !attachment)) return;
+    sendingRef.current = true;
     setSending(true);
     setActionError(null);
+    const message = draft.trim();
+    if (message) {
+      setPendingConversation({
+        workId: selectedWorkId,
+        entry: { id: "pending-member-message", speaker: "member", message },
+      });
+    }
     try {
       const result = await service.sendMessage({
         message: draft,
@@ -127,6 +143,8 @@ export function useToday(service: TodayService) {
       setActionError(safeMessage(error));
       setFailedSend(true);
     } finally {
+      setPendingConversation(null);
+      sendingRef.current = false;
       setSending(false);
     }
   }, [applyResult, attachment, draft, selectedWorkId, service, setDraft]);
@@ -200,6 +218,7 @@ export function useToday(service: TodayService) {
     send,
     failedSend,
     sending,
+    pendingConversation,
     attachment,
     attach,
     clearAttachment: () => setAttachment(null),
