@@ -483,7 +483,7 @@ fn a_recovered_trusted_device_rebuilds_relationship_consent_and_history_projecti
             },
             state: PortableConsentState::Denied,
             details: PortableConsentDetails {
-                model_id: "gpt-4.1-mini".to_owned(),
+                model_id: "gpt-5.6-luna".to_owned(),
                 capability: PortableIntelligenceCapability::DirectionInterpretation,
                 purpose: PortableConsentPurpose::DocumentEvaluation,
                 kind: PortableConsentGrantKind::OneTime,
@@ -980,15 +980,15 @@ fn synchronization_rebuilds_a_reusable_consent_grant_that_authorizes_matching_ev
         name: "OpenAI".to_owned(),
         description: "Managed Cloud Assistance".to_owned(),
         models: vec![IntelligenceModelDescriptor {
-            id: "gpt-4.1-mini".to_owned(),
-            name: "GPT-4.1 mini".to_owned(),
+            id: "gpt-5.6-luna".to_owned(),
+            name: "GPT-5.6 Luna".to_owned(),
         }],
         managed_by_luna: true,
         auth_url: None,
     };
     let selection = IntelligenceSelection {
         provider_id: "openai".to_owned(),
-        model_id: "gpt-4.1-mini".to_owned(),
+        model_id: "gpt-5.6-luna".to_owned(),
     };
     let scope_evidence = vec![IntelligenceEvidence {
         field: "mediaType".to_owned(),
@@ -1004,7 +1004,7 @@ fn synchronization_rebuilds_a_reusable_consent_grant_that_authorizes_matching_ev
         first_device.clone(),
         DeterministicIntelligenceGateway::new(
             "openai",
-            "gpt-4.1-mini",
+            "gpt-5.6-luna",
             BTreeMap::from([("documentType".to_owned(), "Electricity bill".to_owned())]),
         ),
         vec![provider.clone()],
@@ -1040,7 +1040,7 @@ fn synchronization_rebuilds_a_reusable_consent_grant_that_authorizes_matching_ev
         second_device.clone(),
         DeterministicIntelligenceGateway::new(
             "openai",
-            "gpt-4.1-mini",
+            "gpt-5.6-luna",
             BTreeMap::from([("documentType".to_owned(), "Electricity bill".to_owned())]),
         ),
         vec![provider],
@@ -1077,7 +1077,7 @@ fn synchronization_rebuilds_a_reusable_consent_grant_that_authorizes_matching_ev
                 document_arrival_id: "arrival-recovered".to_owned(),
                 capability: IntelligenceCapability::DirectionInterpretation,
                 provider_id: "openai".to_owned(),
-                model_id: "gpt-4.1-mini".to_owned(),
+                model_id: "gpt-5.6-luna".to_owned(),
                 evidence: scope_evidence,
                 content_excerpts: Vec::new(),
                 expected_response: IntelligenceResponseSchema {
@@ -1243,7 +1243,7 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
     let database = local.path().join("luna.db");
     let conversations =
         ConversationStore::open(&database, device.clone()).expect("open Conversation behavior");
-    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
     let intelligence = CloudIntelligenceStore::open_with_gateway(
         &database,
         device.clone(),
@@ -1253,8 +1253,8 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
             name: "OpenAI".to_owned(),
             description: "Managed Cloud Assistance".to_owned(),
             models: vec![IntelligenceModelDescriptor {
-                id: "gpt-4.1-mini".to_owned(),
-                name: "GPT-4.1 mini".to_owned(),
+                id: "gpt-5.6-luna".to_owned(),
+                name: "GPT-5.6 Luna".to_owned(),
             }],
             managed_by_luna: true,
             auth_url: None,
@@ -1263,7 +1263,7 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
     .expect("open Cloud Assistance behavior");
     let selection = IntelligenceSelection {
         provider_id: "openai".to_owned(),
-        model_id: "gpt-4.1-mini".to_owned(),
+        model_id: "gpt-5.6-luna".to_owned(),
     };
     let request = |request_id: &str| IntelligenceRequest {
         request_id: request_id.to_owned(),
@@ -1278,7 +1278,7 @@ fn owning_cloud_denial_and_provider_failure_become_portable_resilience_history()
         ),
         capability: IntelligenceCapability::DirectionInterpretation,
         provider_id: "openai".to_owned(),
-        model_id: "gpt-4.1-mini".to_owned(),
+        model_id: "gpt-5.6-luna".to_owned(),
         evidence: Vec::new(),
         content_excerpts: Vec::new(),
         expected_response: IntelligenceResponseSchema {

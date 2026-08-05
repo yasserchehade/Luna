@@ -17,6 +17,8 @@ The MVP must prove that Luna reduces real family administration. It needs to und
 
 For the MVP, Luna is one household-administration agent and OpenAI is its reasoning and document-reading engine.
 
+Direct OpenAI is the MVP reasoning path. Luna calls the OpenAI Responses API from a trusted backend/runtime boundary using a server-side `OPENAI_API_KEY` and an explicitly configured `LUNA_OPENAI_MODEL`. LiteLLM, BYOK, provider-neutral routing and multi-provider support are deferred until justified by validated product demand. The internal `HouseholdAdministrationReasoning` port remains so this transport decision does not leak into Household Work or make model output trusted.
+
 All relevant user messages, emails and documents enter one Luna-owned context assembly and reasoning loop. Luna provides OpenAI with authorised recent relevant conversation, household context, active work, email content and attachments when those are needed for useful reasoning. The model may read, interpret, summarise, ask a question, propose a durable work update or propose a tool call.
 
 Household work is the central durable domain. An internal work item may be called `Obligation`; user-facing language should describe things needing attention, household work or what needs taking care of. Emails and documents are sources and evidence. Conversation is the primary interaction layer. Tools are the execution layer.
@@ -67,7 +69,7 @@ These remain possible future capabilities. They must not shape the MVP interacti
 2. Add the first email source and attachment ingestion path.
 3. Build Luna-owned context assembly for recent relevant conversation, household context, active work, email and attachments.
 4. Replace the latest-message-only conversation request and separate document questionnaire with one agent reasoning contract.
-5. Reuse the OpenAI Responses transport, secure gateway credential, attachment handling, validation and audit seams where they fit the new contract.
+5. Use a direct server-side OpenAI Responses transport, supported PDF/image inputs, strict structured output, Luna-owned envelope metadata, validation and audit seams. Do not require a managed gateway for the MVP Household Administration path.
 6. Move extraction and document review from the primary workflow into supporting evidence and correction surfaces.
 7. Add Luna-owned proposals, approval and execution for a small reply/reminder tool set.
 8. Add monitoring and end-to-end tests for active work through completion, dismissal and irrelevance.
@@ -86,7 +88,7 @@ Positive consequences:
 Costs and trade-offs:
 
 - authorised household context must be assembled and transmitted deliberately;
-- the MVP depends on a managed OpenAI route and OpenAI usage cost;
+- the MVP depends on a direct OpenAI API route, server-side key management and OpenAI usage cost;
 - the current document-centred state model and tests require migration or replacement;
 - some existing provider-neutral and consent infrastructure will be temporarily more capability than the MVP needs; and
 - local-only operation cannot be promised for the first intelligence-dependent loop.
@@ -114,4 +116,4 @@ Local models or other providers may be reconsidered after the MVP demonstrates t
 
 ## Superseded records
 
-ADR 0003's product-level commitment to local-first, provider-neutral intelligence is superseded for the MVP by this decision. ADR 0015's Luna-owned gateway, server-side credential and untrusted-result boundaries remain useful infrastructure, but its multi-provider and BYOK framing is deferred. ADRs 0016 and 0017 remain historical records of deferred commercial/provider work, not MVP requirements.
+ADR 0003's product-level commitment to local-first, provider-neutral intelligence is superseded for the MVP by this decision. ADR 0015's server-side credential and untrusted-result boundaries remain useful, but its gateway, multi-provider and BYOK framing is deferred and is not the default MVP execution path. ADRs 0016 and 0017 remain historical records of deferred commercial/provider work, not MVP requirements.

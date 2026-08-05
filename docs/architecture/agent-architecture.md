@@ -33,6 +33,22 @@ Natural explanation to the user
 
 The loop may pause for missing information, approval, connectivity or a tool result. A pause is a state of the same household work, not a hand-off to an unrelated document workflow.
 
+## Callable engine seam
+
+The first implementation seam for this loop is `HouseholdAdministrationEngine::handle_turn` in `desktop/src-tauri/src/household_administration/`. It accepts platform-independent household, conversation, actor, message, source/work reference, authorised context, action-definition and correlation values. It returns a natural response, resulting Household Work, clarification/action proposals, audit events and a typed safe failure category.
+
+The engine uses narrow Rust interfaces for:
+
+- recent conversation reads and member/Luna message appends;
+- Household Work listing and persistence;
+- bounded logical source retrieval;
+- untrusted Household Administration reasoning; and
+- deterministic time.
+
+The same interface is exercised by in-memory integration adapters and the Tauri compatibility adapter. The MVP production implementation is `OpenAiHouseholdAdministrationReasoningAdapter`, which receives a server-side API key and explicit model configuration and calls the OpenAI Responses API directly. Opt-in headless live diagnostics compose that adapter without Tauri, Device PIN, an operating-system vault, LiteLLM or a managed gateway.
+
+Tauri remains responsible for the desktop session, legacy `DocumentArrival` translation, local file access, encrypted SQLite, OS-vault credentials and desktop compatibility capture. A future web host should supply server-side adapters to this same engine interface; this decision does not introduce a web endpoint, web authentication, storage connector or background worker.
+
 ## Conceptual responsibilities
 
 ### Sources
@@ -67,6 +83,8 @@ The MVP uses OpenAI as the reasoning and document-reading engine. OpenAI may:
 - propose a tool call.
 
 OpenAI does not own Luna's household memory, authentication, permissions, authority, durable state, tool implementation, execution, audit record or recovery. Provider output is untrusted data until Luna validates it.
+
+Direct OpenAI is the MVP reasoning path. `HouseholdAdministrationReasoning` is the stable internal port; the direct adapter owns HTTP translation, supported PDF/image input parts, strict JSON Schema output requests, response-envelope metadata and provider error classification. `OPENAI_API_KEY` and `LUNA_OPENAI_MODEL` are trusted runtime configuration and must never be sent to a browser or selected through the household interface. LiteLLM, BYOK and multiple-provider routing remain deferred historical infrastructure.
 
 ### Conversational response and proposed tools
 
@@ -129,4 +147,4 @@ An invalid model proposal is a failed interpretation, not a member approval and 
 
 ## MVP implementation boundary
 
-The existing Luna-managed OpenAI gateway, secure credential vault, attachment transport, persistence, audit and deterministic test seams can support this architecture. The current split between `ConversationReply` and `DirectionInterpretation`, the latest-message-only disclosure contract and the document-led `Document Handling` lifecycle are migration targets, not the intended product boundary. See [the MVP reset assessment](../plans/mvp-reset-assessment.md).
+The direct OpenAI adapter, strict Household Administration contract, bounded attachment transport, persistence, audit and deterministic test seams support this architecture. Existing LiteLLM, gateway provisioning and provider-neutral code remains deferred compatibility infrastructure and is not the MVP Household Administration route. The current split between `ConversationReply` and `DirectionInterpretation`, the latest-message-only disclosure contract and the document-led `Document Handling` lifecycle are migration targets, not the intended product boundary. See [the MVP reset assessment](../plans/mvp-reset-assessment.md).

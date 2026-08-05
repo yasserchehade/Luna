@@ -1,7 +1,7 @@
 use std::{
     env,
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     process::Command,
@@ -16,8 +16,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cabinet::ensure_incoming_folder;
+use crate::household_administration::{apply_result, HouseholdAdministrationFailureCategory};
+use crate::household_work::HouseholdWork;
 use crate::intelligence::{
-    CandidateDirectionInterpretation, CloudConsentDecision, IntelligenceResult,
+    CandidateDirectionInterpretation, CloudConsentDecision, HouseholdAdministrationResult,
+    IntelligenceResult,
 };
 use crate::portable_memory::{
     PortableDocumentRelationshipKind, PortableHistoryEvent, PortableReference,
@@ -26,6 +29,8 @@ use crate::portable_memory::{PortableFilingRuleDefinition, PortableFilingRuleSta
 use crate::trusted_device::{
     CredentialVault, ProtectedHouseholdState, TrustedDeviceError, TrustedDeviceManager,
 };
+
+pub const MAX_MVP_DOCUMENT_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -980,6 +985,8 @@ pub enum ConversationError {
     NotFound,
     #[error("Only PDF, JPG, and PNG documents can be attached.")]
     UnsupportedDocument,
+    #[error("The selected document is larger than Luna's 5 MiB MVP processing limit.")]
+    DocumentTooLarge,
     #[error("The selected document does not match its declared file type.")]
     InvalidDocument,
     #[error("A different Original already occupies this document's preserved location.")]
@@ -998,6 +1005,10 @@ pub enum ConversationError {
     StaleConversationPrompt,
     #[error("The interpreted Member Direction does not answer the current question.")]
     InvalidMemberDirection,
+    #[error(
+        "The requested Household Work transition is not authorised by validated member direction."
+    )]
+    InvalidHouseholdWorkTransition,
     #[error("The Cabinet Destination must be a safe relative path ending in the chosen filename.")]
     InvalidCabinetDestination,
     #[error("The selected document is unavailable.")]
@@ -1111,6 +1122,13 @@ impl<V: CredentialVault> ConversationStore<V> {
             );
             CREATE INDEX IF NOT EXISTS duplicate_events_household
                 ON duplicate_events(household_id, id);
+            CREATE TABLE IF NOT EXISTS household_work (
+                id TEXT PRIMARY KEY,
+                household_id TEXT NOT NULL,
+                protected_payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS household_work_household
+                ON household_work(household_id);
             CREATE INDEX IF NOT EXISTS audit_events_household
                 ON audit_events(household_id, id);
             CREATE UNIQUE INDEX IF NOT EXISTS audit_events_arrival
@@ -1269,7 +1287,16 @@ impl<V: CredentialVault> ConversationStore<V> {
             Some("png") => "image/png",
             _ => return Err(ConversationError::UnsupportedDocument),
         };
-        let original = fs::read(path)?;
+        if fs::metadata(path)?.len() > MAX_MVP_DOCUMENT_BYTES {
+            return Err(ConversationError::DocumentTooLarge);
+        }
+        let mut original = Vec::new();
+        fs::File::open(path)?
+            .take(MAX_MVP_DOCUMENT_BYTES + 1)
+            .read_to_end(&mut original)?;
+        if original.len() as u64 > MAX_MVP_DOCUMENT_BYTES {
+            return Err(ConversationError::DocumentTooLarge);
+        }
         let media_type = detected_media_type(&original)?;
         if media_type != declared_media_type {
             return Err(ConversationError::InvalidDocument);
@@ -1385,6 +1412,22 @@ impl<V: CredentialVault> ConversationStore<V> {
         self.add_conversation_message(household_id, conversation_id, "member", body, None)
     }
 
+    pub fn add_luna_message(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        body: &str,
+        linked_document_arrival: Option<i64>,
+    ) -> Result<ConversationMessage, ConversationError> {
+        self.add_conversation_message(
+            household_id,
+            conversation_id,
+            "luna",
+            body,
+            linked_document_arrival,
+        )
+    }
+
     fn add_conversation_message(
         &self,
         household_id: &str,
@@ -1451,6 +1494,129 @@ impl<V: CredentialVault> ConversationStore<V> {
                 })
             })
             .collect()
+    }
+
+    pub fn list_household_work(
+        &self,
+        household_id: &str,
+    ) -> Result<Vec<HouseholdWork>, ConversationError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT id, protected_payload FROM household_work
+             WHERE household_id = ?1 ORDER BY rowid DESC",
+        )?;
+        let rows = statement
+            .query_map(params![household_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, protected)| {
+                let mut work: HouseholdWork = self.open_protected(household_id, &protected)?;
+                work.id = id;
+                Ok(work)
+            })
+            .collect()
+    }
+
+    pub fn save_household_work(
+        &self,
+        household_id: &str,
+        work: &HouseholdWork,
+    ) -> Result<(), ConversationError> {
+        if work.household_id != household_id || work.id.trim().is_empty() {
+            return Err(ConversationError::NotFound);
+        }
+        let protected = self.protect(household_id, work)?;
+        self.connect()?.execute(
+            "INSERT INTO household_work (id, household_id, protected_payload)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+               household_id = excluded.household_id,
+               protected_payload = excluded.protected_payload",
+            params![work.id, household_id, protected],
+        )?;
+        Ok(())
+    }
+
+    pub fn find_household_work(
+        &self,
+        household_id: &str,
+        work_id: &str,
+    ) -> Result<HouseholdWork, ConversationError> {
+        self.list_household_work(household_id)?
+            .into_iter()
+            .find(|work| work.id == work_id)
+            .ok_or(ConversationError::NotFound)
+    }
+
+    pub fn active_household_work_for_source(
+        &self,
+        household_id: &str,
+        source_ref: &str,
+    ) -> Result<Option<HouseholdWork>, ConversationError> {
+        Ok(self
+            .list_household_work(household_id)?
+            .into_iter()
+            .find(|work| {
+                work.status.is_open() && work.source_refs.iter().any(|item| item == source_ref)
+            }))
+    }
+
+    pub fn household_work_for_source(
+        &self,
+        household_id: &str,
+        source_ref: &str,
+    ) -> Result<Option<HouseholdWork>, ConversationError> {
+        Ok(self
+            .list_household_work(household_id)?
+            .into_iter()
+            .find(|work| work.source_refs.iter().any(|item| item == source_ref)))
+    }
+
+    pub fn apply_household_administration_result(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        arrival_id: Option<i64>,
+        result: &HouseholdAdministrationResult,
+        now: &str,
+    ) -> Result<Option<HouseholdWork>, ConversationError> {
+        let source_ref = arrival_id.map(|id| format!("document-{id}"));
+        let existing = result
+            .work
+            .work_id
+            .as_deref()
+            .map(|id| self.find_household_work(household_id, id))
+            .transpose()?
+            .or_else(|| {
+                source_ref.as_deref().and_then(|source| {
+                    self.household_work_for_source(household_id, source)
+                        .ok()
+                        .flatten()
+                })
+            });
+        let work = apply_result(
+            household_id,
+            conversation_id,
+            source_ref.as_deref(),
+            existing,
+            result,
+            now,
+        )
+        .map_err(|failure| match failure.category {
+            HouseholdAdministrationFailureCategory::MissingExistingWork => {
+                ConversationError::NotFound
+            }
+            _ => ConversationError::InvalidHouseholdWorkTransition,
+        })?;
+        if matches!(result.work.operation, crate::HouseholdWorkOperation::None) {
+            return Ok(work);
+        }
+        if let Some(work) = work.as_ref() {
+            self.save_household_work(household_id, work)?;
+        }
+        Ok(work)
     }
 
     pub fn list_document_arrivals(
@@ -1599,9 +1765,20 @@ impl<V: CredentialVault> ConversationStore<V> {
 
     pub fn list_todo_items(&self, household_id: &str) -> Result<Vec<TodoItem>, ConversationError> {
         let arrivals = self.list_document_arrivals(household_id)?;
+        let household_work = self.list_household_work(household_id)?;
         arrivals
             .into_iter()
             .filter(|arrival| {
+                let source_ref = format!("document-{}", arrival.id);
+                let linked_work = household_work
+                    .iter()
+                    .filter(|work| work.source_refs.iter().any(|source| source == &source_ref))
+                    .collect::<Vec<_>>();
+                if !linked_work.is_empty() {
+                    return linked_work.iter().any(|work| work.status.is_open());
+                }
+                // Transitional compatibility: arrivals without Household Work still use the
+                // legacy Document Handling projection until that migration is complete.
                 matches!(
                     arrival.processing_state,
                     DocumentProcessingState::NeedsCloudConsent

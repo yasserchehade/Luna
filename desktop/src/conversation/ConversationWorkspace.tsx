@@ -20,6 +20,7 @@ import type {
   DocumentProcessingState,
   DuplicateDecision,
   FilingDecisionDirection,
+  HouseholdWork,
   IntelligenceResult,
   IntelligenceSelection,
   IntelligenceProviderStatus,
@@ -86,6 +87,50 @@ const duplicateResolutionLabels: Record<DuplicateDecision, string> = {
   discardNew: "Discarded the new Original",
   updatedVersion: "Kept both Originals as an updated version",
 };
+
+export async function loadDocumentCloudAssistanceData(
+  conversationService: Pick<
+    ConversationService,
+    "listIntelligenceProviderStatuses" | "listCloudConsentScopes"
+  >,
+  householdId: string,
+): Promise<{
+  providers: IntelligenceProviderStatus[];
+  scopes: CloudConsentScope[];
+  providerError: string;
+  scopeError: string;
+}> {
+  const [providers, scopes] = await Promise.allSettled([
+    conversationService.listIntelligenceProviderStatuses(householdId),
+    conversationService.listCloudConsentScopes(householdId),
+  ]);
+  return {
+    providers: providers.status === "fulfilled" ? providers.value : [],
+    scopes: scopes.status === "fulfilled" ? scopes.value : [],
+    providerError: providers.status === "rejected" ? String(providers.reason) : "",
+    scopeError: scopes.status === "rejected" ? String(scopes.reason) : "",
+  };
+}
+
+const householdAgentMessagePattern = /take care|handle this|organis|organize|already paid|paid it|irrelevant|dismiss|when is|what amount|how much/i;
+
+export function resolveHouseholdAgentArrival(
+  arrivals: Array<Pick<DocumentArrival, "id">>,
+  householdWorks: Array<Pick<HouseholdWork, "sourceRefs" | "status">>,
+  focusedArrivalId: number | null,
+  message: string,
+): Pick<DocumentArrival, "id"> | null {
+  const linkedOpenWork = (arrivalId: number) => householdWorks.find((work) => (
+    !["completed", "dismissed", "noLongerRelevant"].includes(work.status)
+    && work.sourceRefs.includes(`document-${arrivalId}`)
+  ));
+  const focusedArrival = arrivals.find(({ id }) => id === focusedArrivalId) ?? null;
+  if (focusedArrival && (linkedOpenWork(focusedArrival.id) || householdAgentMessagePattern.test(message))) {
+    return focusedArrival;
+  }
+  const openWorkArrivals = arrivals.filter(({ id }) => linkedOpenWork(id));
+  return openWorkArrivals.length === 1 ? openWorkArrivals[0] : null;
+}
 
 const conversationActionLabels: Record<Exclude<ConversationAction, "reviewDetails">, string> = {
   yes: "Yes",
@@ -259,15 +304,18 @@ function DocumentReviewEditor({
     setCloudBusy(true);
     setCloudError("");
     try {
-      const [providers, scopes] = await Promise.all([
-        conversationService.listIntelligenceProviderStatuses(householdId),
-        conversationService.listCloudConsentScopes(householdId),
-      ]);
+      const {
+        providers,
+        scopes,
+        providerError,
+        scopeError,
+      } = await loadDocumentCloudAssistanceData(conversationService, householdId);
       setCloudProviders(providers);
       setCloudScopes(scopes);
       const selected = providers.find(({ configured }) => configured) ?? providers[0];
       setCloudProviderId((current) => current || selected?.descriptor.id || "");
       setCloudModelId((current) => current || selected?.descriptor.models[0]?.id || "");
+      setCloudError(providerError || scopeError);
     } catch (reason) {
       setCloudError(String(reason));
     } finally {
@@ -599,6 +647,7 @@ export function ConversationWorkspace({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [arrivals, setArrivals] = useState<DocumentArrival[]>([]);
+  const [householdWorks, setHouseholdWorks] = useState<HouseholdWork[]>([]);
   const [documentConversations, setDocumentConversations] = useState<Record<number, DocumentConversationView>>({});
   const [turnMessages, setTurnMessages] = useState<Record<number, string>>({});
   const [cloudTurnOutcomes, setCloudTurnOutcomes] = useState<Record<number, {
@@ -659,7 +708,7 @@ export function ConversationWorkspace({
   } = {}) => {
     const effectiveSearch = options.search ?? search;
     const effectiveIncludeArchived = options.includeArchived ?? includeArchived;
-    const [loadedConversations, loadedArrivals, loadedTodos] = await Promise.all([
+    const [loadedConversations, loadedArrivals, loadedTodos, loadedHouseholdWorks] = await Promise.all([
       conversationService.listConversations(
         householdId,
         effectiveSearch,
@@ -667,12 +716,14 @@ export function ConversationWorkspace({
       ),
       conversationService.listDocumentArrivals(householdId),
       conversationService.listTodoItems(householdId),
+      conversationService.listHouseholdWork(householdId),
     ]);
     setConversations(loadedConversations);
     if (!effectiveSearch) {
       onRecentConversationsChange(loadedConversations.filter(({ archived }) => !archived));
     }
     setArrivals(loadedArrivals);
+    setHouseholdWorks(loadedHouseholdWorks);
     await loadDocumentConversations(loadedArrivals);
     setTodos(loadedTodos);
     onTodoCountChange(loadedTodos.length);
@@ -894,8 +945,25 @@ export function ConversationWorkspace({
     ) ?? [...selectedArrivals]
       .reverse()
       .find((arrival) => documentConversations[arrival.id]?.prompt);
+    const householdAgentArrival = resolveHouseholdAgentArrival(
+      selectedArrivals,
+      householdWorks,
+      focusedArrivalId,
+      messageBody,
+    );
     try {
-      if (promptedArrival) {
+      if (householdAgentArrival) {
+        const outcome = await conversationService.submitHouseholdAdministration(
+          householdId,
+          selectedConversationId,
+          householdAgentArrival.id,
+          messageBody,
+        );
+        setMessages(await conversationService.listMessages(householdId, selectedConversationId));
+        setTurnMessages((current) => ({ ...current, [householdAgentArrival.id]: outcome.message }));
+        setFocusedArrivalId(householdAgentArrival.id);
+        await loadHouseholdWork();
+      } else if (promptedArrival) {
         await submitUtterance(promptedArrival.id, messageBody);
       } else {
         const message = await conversationService.addMemberMessage(
@@ -1004,7 +1072,9 @@ export function ConversationWorkspace({
   }
   const arrivalById = new Map(selectedArrivals.map((arrival) => [arrival.id, arrival]));
   const unlinkedArrivals = selectedArrivals.filter((arrival) => !lastLinkedMessage.has(arrival.id));
-  const renderDocumentArrival = (arrival: DocumentArrival) => <article
+  const renderDocumentArrival = (arrival: DocumentArrival) => {
+    const work = householdWorks.find((candidate) => candidate.sourceRefs.includes(`document-${arrival.id}`));
+    return <article
     className="document-arrival"
     data-arrival-id={arrival.id}
     data-focused={arrival.id === focusedArrivalId ? "true" : undefined}
@@ -1017,6 +1087,16 @@ export function ConversationWorkspace({
         <strong>{arrival.originalName}</strong>
       </div>
       {arrival.processingState === "cabinetUnavailable" && <p role="status" className="session-notice">The remembered Cabinet is unavailable. Luna kept this Original staged and will retry when the Cabinet returns.</p>}
+      {work ? <section className="household-work-card" aria-label="Household Work">
+        <small>{work.status === "needsClarification" ? "Needs your answer" : work.status}</small>
+        <h2>{work.summary}</h2>
+        {work.facts.length > 0 && <dl>
+          {work.facts.map((fact) => <div key={`${fact.key}-${fact.value}`}><dt>{fact.key}</dt><dd>{fact.value}</dd></div>)}
+        </dl>}
+        {work.proposedActions.length > 0 && <ul>
+          {work.proposedActions.map((action) => <li key={action.id}>{action.summary} ({action.approval === "required" ? "approval required" : "proposed"})</li>)}
+        </ul>}
+      </section> : <>
       {documentConversations[arrival.id] && <article className="luna-message document-luna-message">
         <span aria-hidden="true">L</span>
         <div>
@@ -1053,9 +1133,11 @@ export function ConversationWorkspace({
         onRefresh={async () => { await loadHouseholdWork(); }}
       />
       {!documentConversations[arrival.id] && <p>{stateLabel(arrival)}</p>}
+      </>}
     </div>
     {arrival.processingState === "needsMemberDirection" && <button type="button" onClick={() => void dismissArrival(arrival.id)}>Dismiss</button>}
   </article>;
+  };
 
   if (destination === "To do") {
     return <main className="conversation todo-view">

@@ -16,7 +16,7 @@ use luna_core::{
     FilingDecisionDirection, FilingRuleSummary, IntelligenceFailure, IntelligenceModelDescriptor,
     IntelligenceProviderDescriptor, IntelligenceSelection, InterpretationConfidence, LocalOcr,
     MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance, TrustedDeviceManager,
-    VaultError,
+    VaultError, MAX_MVP_DOCUMENT_BYTES,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -174,7 +174,7 @@ fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_
         .expect("attach difficult Document");
     let gateway = DeterministicIntelligenceGateway::new(
         "openai",
-        "gpt-4.1-mini",
+        "gpt-5.6-luna",
         BTreeMap::from([
             ("documentType".to_owned(), "Electricity bill".to_owned()),
             ("serviceProvider".to_owned(), "AGL".to_owned()),
@@ -190,8 +190,8 @@ fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_
             name: "OpenAI".to_owned(),
             description: "Evaluated test route".to_owned(),
             models: vec![IntelligenceModelDescriptor {
-                id: "gpt-4.1-mini".to_owned(),
-                name: "GPT-4.1 mini".to_owned(),
+                id: "gpt-5.6-luna".to_owned(),
+                name: "GPT-5.6 Luna".to_owned(),
             }],
             managed_by_luna: true,
             auth_url: None,
@@ -206,7 +206,7 @@ fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_
             arrival.id,
             IntelligenceSelection {
                 provider_id: "openai".to_owned(),
-                model_id: "gpt-4.1-mini".to_owned(),
+                model_id: "gpt-5.6-luna".to_owned(),
             },
             CloudConsentDecision::AllowOnce,
             "sam-rivera",
@@ -244,7 +244,7 @@ fn allow_once_cloud_assistance_returns_a_validated_candidate_without_filing_the_
     );
     assert!(after.filed_original.is_none());
     assert!(after.cloud_assistance_history.iter().any(|entry| {
-        entry.contains("openai gpt-4.1-mini")
+        entry.contains("openai gpt-5.6-luna")
             && entry.contains("one-time consent")
             && entry.contains("untrusted candidate Evidence")
     }));
@@ -271,7 +271,7 @@ fn invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state() {
         .expect("attach difficult Document");
     let gateway = DeterministicIntelligenceGateway::new(
         "openai",
-        "gpt-4.1-mini",
+        "gpt-5.6-luna",
         BTreeMap::from([("amount".to_owned(), "not an amount".to_owned())]),
     );
     let intelligence = CloudIntelligenceStore::open_with_gateway(
@@ -283,8 +283,8 @@ fn invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state() {
             name: "OpenAI".to_owned(),
             description: "Evaluated test route".to_owned(),
             models: vec![IntelligenceModelDescriptor {
-                id: "gpt-4.1-mini".to_owned(),
-                name: "GPT-4.1 mini".to_owned(),
+                id: "gpt-5.6-luna".to_owned(),
+                name: "GPT-5.6 Luna".to_owned(),
             }],
             managed_by_luna: true,
             auth_url: None,
@@ -300,7 +300,7 @@ fn invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state() {
             arrival.id,
             IntelligenceSelection {
                 provider_id: "openai".to_owned(),
-                model_id: "gpt-4.1-mini".to_owned(),
+                model_id: "gpt-5.6-luna".to_owned(),
             },
             CloudConsentDecision::AllowOnce,
             "sam-rivera",
@@ -447,7 +447,7 @@ fn provider_failure_retries_only_the_selected_route_and_preserves_waiting_work()
     let arrival = conversations
         .attach_document("rivera-household", conversation.id, &source, &cabinet)
         .expect("attach difficult Document");
-    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
     gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
     gateway.fail_next(IntelligenceFailure::ProviderUnavailable);
     let intelligence = CloudIntelligenceStore::open_with_gateway(
@@ -459,8 +459,8 @@ fn provider_failure_retries_only_the_selected_route_and_preserves_waiting_work()
             name: "OpenAI".to_owned(),
             description: "Evaluated test route".to_owned(),
             models: vec![IntelligenceModelDescriptor {
-                id: "gpt-4.1-mini".to_owned(),
-                name: "GPT-4.1 mini".to_owned(),
+                id: "gpt-5.6-luna".to_owned(),
+                name: "GPT-5.6 Luna".to_owned(),
             }],
             managed_by_luna: true,
             auth_url: None,
@@ -475,7 +475,7 @@ fn provider_failure_retries_only_the_selected_route_and_preserves_waiting_work()
             arrival.id,
             IntelligenceSelection {
                 provider_id: "openai".to_owned(),
-                model_id: "gpt-4.1-mini".to_owned(),
+                model_id: "gpt-5.6-luna".to_owned(),
             },
             CloudConsentDecision::AllowOnce,
             "sam-rivera",
@@ -487,7 +487,7 @@ fn provider_failure_retries_only_the_selected_route_and_preserves_waiting_work()
     assert_eq!(requests.len(), 2);
     assert!(requests
         .iter()
-        .all(|request| request.provider_id == "openai" && request.model_id == "gpt-4.1-mini"));
+        .all(|request| request.provider_id == "openai" && request.model_id == "gpt-5.6-luna"));
     let after = conversations
         .list_document_arrivals("rivera-household")
         .expect("list arrivals")
@@ -892,6 +892,35 @@ fn only_pdf_jpg_and_png_files_can_enter_the_document_workflow() {
             directory.path()
         )
         .is_err());
+}
+
+#[test]
+fn an_oversized_document_is_rejected_before_it_is_read_or_preserved() {
+    let directory = tempfile::tempdir().expect("temporary device directory");
+    let (store, _) = open_conversation_store(directory.path().join("luna.db"));
+    let conversation = store
+        .create_conversation("rivera-household", "Oversized document")
+        .expect("create Conversation");
+    let oversized = directory.path().join("oversized.pdf");
+    fs::File::create(&oversized)
+        .expect("create oversized fixture")
+        .set_len(MAX_MVP_DOCUMENT_BYTES + 1)
+        .expect("size oversized fixture");
+
+    assert!(matches!(
+        store.attach_document(
+            "rivera-household",
+            conversation.id,
+            &oversized,
+            directory.path()
+        ),
+        Err(ConversationError::DocumentTooLarge)
+    ));
+    assert!(store
+        .list_document_arrivals("rivera-household")
+        .expect("list Document Arrivals")
+        .is_empty());
+    assert!(!directory.path().join("document-arrivals").exists());
 }
 
 #[test]
@@ -1488,7 +1517,7 @@ fn cloud_assistance_can_be_kept_local_through_the_conversation() {
     );
     assert_eq!(outcome.status, ConversationTurnStatus::ActionPrepared);
 
-    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-4.1-mini", BTreeMap::new());
+    let gateway = DeterministicIntelligenceGateway::new("openai", "gpt-5.6-luna", BTreeMap::new());
     let intelligence = CloudIntelligenceStore::open_with_gateway(
         &database,
         trusted_device,

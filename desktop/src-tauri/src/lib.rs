@@ -2,6 +2,8 @@ mod account_session;
 mod cabinet;
 mod conversation;
 mod document_intelligence;
+mod household_administration;
+mod household_work;
 mod intelligence;
 mod litellm;
 mod portable_memory;
@@ -27,21 +29,41 @@ pub use conversation::{
     FilingRuleUpdate, InterpretationConfidence, LocalOcr, ManualMoveCandidate,
     MemberDirectionCommand, MemberDirectionInterpreter, MemberUtterance,
     RebuiltDocumentRelationship, ReviewCard, ReviewEvidence, ReviewField, TesseractOcr, TodoItem,
+    MAX_MVP_DOCUMENT_BYTES,
 };
 pub use document_intelligence::{
     CloudAssistanceResolution, DocumentIntelligenceError, DocumentIntelligenceService,
 };
-pub use intelligence::{
-    AdditionalIntelligenceEvidence, CandidateDirectionInterpretation, CandidateDisposition,
-    CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision, CloudConsentScope,
-    CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
-    DocumentContentExcerpt, IntelligenceCapability, IntelligenceEvidence,
-    IntelligenceExecutionConstraints, IntelligenceFailure, IntelligenceGateway,
-    IntelligenceModelDescriptor, IntelligenceProviderDescriptor, IntelligenceProviderStatus,
-    IntelligenceRequest, IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection,
-    IntelligenceUsage, UntrustedIntelligenceResult, MANAGED_INTELLIGENCE_MODEL_ID,
-    MANAGED_INTELLIGENCE_PROVIDER_ID,
+pub use household_administration::{
+    ConversationPort, ConversationPortError, FixedHouseholdAdministrationClock,
+    HandleHouseholdAdministrationTurn, HouseholdAdministrationClock, HouseholdAdministrationEngine,
+    HouseholdAdministrationFailure, HouseholdAdministrationFailureCategory,
+    HouseholdAdministrationOutcome, HouseholdAdministrationReasoning, HouseholdWorkPort,
+    HouseholdWorkPortError, OpenAiHouseholdAdministrationReasoningAdapter, ReasoningPortError,
+    SourcePort, SourcePortError, SystemHouseholdAdministrationClock,
+    HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION,
 };
+pub use household_work::{
+    ActionApproval, ActionExecution, HouseholdWork, HouseholdWorkKind, HouseholdWorkStatus,
+    HouseholdWorkSummary, ProposedAction, ProposedActionKind, ValidatedHouseholdWorkDirection,
+    WorkFact, WorkFactCertainty, WorkFactKey,
+};
+pub use intelligence::{
+    AdditionalIntelligenceEvidence, AvailableHouseholdTool, CandidateDirectionInterpretation,
+    CandidateDisposition, CloudAssistanceAuditEvent, CloudAssistanceOutcome, CloudConsentDecision,
+    CloudConsentScope, CloudIntelligenceStore, ConsentGrantKind, DeterministicIntelligenceGateway,
+    DocumentContentExcerpt, HouseholdActionProposal, HouseholdAdministrationMessage,
+    HouseholdAdministrationRequest, HouseholdAdministrationResult, HouseholdAdministrationSource,
+    HouseholdClarification, HouseholdContextItem, HouseholdWorkOperation, HouseholdWorkProposal,
+    IntelligenceCapability, IntelligenceEvidence, IntelligenceExecutionConstraints,
+    IntelligenceFailure, IntelligenceGateway, IntelligenceModelDescriptor,
+    IntelligenceProviderDescriptor, IntelligenceProviderStatus, IntelligenceRequest,
+    IntelligenceResponseSchema, IntelligenceResult, IntelligenceSelection, IntelligenceUsage,
+    UntrustedHouseholdAdministrationResult, UntrustedIntelligenceResult,
+    MANAGED_INTELLIGENCE_MODEL_ID, MANAGED_INTELLIGENCE_PROVIDER_ID,
+    MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS,
+};
+pub use litellm::ManagedHouseholdAdministrationReasoningAdapter;
 pub use portable_memory::{
     PortableAuditEventKind, PortableAuthority, PortableAuthorizationCutoff,
     PortableCandidateDisposition, PortableConflict, PortableConflictResolutionDraft,
@@ -63,6 +85,11 @@ pub use trusted_device::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::Read,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tauri::{Manager, State};
 #[cfg(not(feature = "e2e"))]
 use tauri_plugin_dialog::DialogExt;
@@ -362,6 +389,281 @@ fn list_conversation_messages(
         .map_err(|error| error.to_string())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitHouseholdAdministrationRequest {
+    household_id: String,
+    conversation_id: i64,
+    arrival_id: Option<i64>,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TauriHouseholdAdministrationOutcome {
+    request_id: String,
+    message: String,
+    work: Option<HouseholdWork>,
+}
+
+fn bounded_household_administration_source(
+    arrival: &DocumentArrival,
+) -> Result<HouseholdAdministrationSource, SourcePortError> {
+    let metadata =
+        fs::metadata(&arrival.original_path).map_err(|_| SourcePortError::Unavailable)?;
+    if metadata.len() > MAX_MVP_DOCUMENT_BYTES {
+        return Err(SourcePortError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&arrival.original_path)
+        .map_err(|_| SourcePortError::Unavailable)?
+        .take(MAX_MVP_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| SourcePortError::Unavailable)?;
+    if bytes.len() as u64 > MAX_MVP_DOCUMENT_BYTES {
+        return Err(SourcePortError::TooLarge);
+    }
+    let extracted_text_truncated = arrival
+        .extracted_text
+        .as_ref()
+        .is_some_and(|text| text.chars().count() > MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS);
+    let extracted_text = arrival.extracted_text.as_ref().map(|text| {
+        text.chars()
+            .take(MAX_HOUSEHOLD_EXTRACTED_TEXT_CHARS)
+            .collect()
+    });
+    Ok(HouseholdAdministrationSource {
+        reference: format!("document-{}", arrival.id),
+        filename: arrival.original_name.clone(),
+        media_type: arrival.media_type.clone(),
+        original_base64: BASE64.encode(&bytes),
+        extracted_text,
+        original_size_bytes: bytes.len() as u64,
+        extracted_text_truncated,
+    })
+}
+
+struct DesktopConversationAdapter<'a> {
+    store: &'a ConversationState,
+}
+
+impl ConversationPort for DesktopConversationAdapter<'_> {
+    fn recent_messages(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        limit: usize,
+    ) -> Result<Vec<HouseholdAdministrationMessage>, ConversationPortError> {
+        self.store
+            .list_messages(household_id, conversation_id)
+            .map(|messages| {
+                messages
+                    .into_iter()
+                    .rev()
+                    .take(limit)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .map(|message| HouseholdAdministrationMessage {
+                        author: message.author,
+                        body: message.body,
+                    })
+                    .collect()
+            })
+            .map_err(|_| ConversationPortError::Unavailable)
+    }
+
+    fn append_member_message(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        body: &str,
+    ) -> Result<(), ConversationPortError> {
+        self.store
+            .add_member_message(household_id, conversation_id, body)
+            .map(|_| ())
+            .map_err(|_| ConversationPortError::Unavailable)
+    }
+
+    fn append_luna_message(
+        &self,
+        household_id: &str,
+        conversation_id: i64,
+        body: &str,
+        source_reference: Option<&str>,
+    ) -> Result<(), ConversationPortError> {
+        let arrival_id = source_reference
+            .and_then(|reference| reference.strip_prefix("document-"))
+            .and_then(|id| id.parse::<i64>().ok());
+        self.store
+            .add_luna_message(household_id, conversation_id, body, arrival_id)
+            .map(|_| ())
+            .map_err(|_| ConversationPortError::Unavailable)
+    }
+}
+
+struct DesktopHouseholdWorkAdapter<'a> {
+    store: &'a ConversationState,
+}
+
+impl HouseholdWorkPort for DesktopHouseholdWorkAdapter<'_> {
+    fn list(&self, household_id: &str) -> Result<Vec<HouseholdWork>, HouseholdWorkPortError> {
+        self.store
+            .list_household_work(household_id)
+            .map_err(|_| HouseholdWorkPortError::Unavailable)
+    }
+
+    fn save(&self, household_id: &str, work: &HouseholdWork) -> Result<(), HouseholdWorkPortError> {
+        self.store
+            .save_household_work(household_id, work)
+            .map_err(|_| HouseholdWorkPortError::Unavailable)
+    }
+}
+
+struct DesktopSourceAdapter<'a> {
+    arrival: Option<&'a DocumentArrival>,
+}
+
+impl SourcePort for DesktopSourceAdapter<'_> {
+    fn load(
+        &self,
+        _household_id: &str,
+        source_reference: &str,
+    ) -> Result<HouseholdAdministrationSource, SourcePortError> {
+        let arrival = self.arrival.ok_or(SourcePortError::NotFound)?;
+        if source_reference != format!("document-{}", arrival.id) {
+            return Err(SourcePortError::NotFound);
+        }
+        bounded_household_administration_source(arrival)
+    }
+}
+
+struct DesktopReasoningAdapter;
+
+impl HouseholdAdministrationReasoning for DesktopReasoningAdapter {
+    fn reason(
+        &self,
+        request: &HouseholdAdministrationRequest,
+    ) -> Result<UntrustedHouseholdAdministrationResult, ReasoningPortError> {
+        OpenAiHouseholdAdministrationReasoningAdapter::from_env()?.reason(request)
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn submit_household_administration(
+    store: State<'_, ConversationState>,
+    intelligence: State<'_, IntelligenceState>,
+    portable: State<'_, PortableState>,
+    cabinet: State<'_, CabinetState>,
+    sessions: State<'_, AccountSessionManager>,
+    request: SubmitHouseholdAdministrationRequest,
+) -> Result<TauriHouseholdAdministrationOutcome, String> {
+    let actor = current_household_actor(sessions.inner(), &request.household_id)?;
+    let message = request.message.trim();
+    if message.is_empty() {
+        return Err("The household message cannot be empty.".to_owned());
+    }
+    let arrival = if let Some(arrival_id) = request.arrival_id {
+        let arrival = store
+            .list_document_arrivals(&request.household_id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|arrival| arrival.id == arrival_id)
+            .ok_or_else(|| "The uploaded document is no longer available.".to_owned())?;
+        if arrival.conversation_id != request.conversation_id {
+            return Err("The uploaded document belongs to a different Conversation.".to_owned());
+        }
+        Some(arrival)
+    } else {
+        None
+    };
+    let household_context = arrival
+        .as_ref()
+        .map(|arrival| {
+            let context = &arrival.review_card.context;
+            [
+                ("documentType", &context.document_type),
+                ("serviceProvider", &context.service_provider),
+                ("addressee", &context.addressee),
+                ("property", &context.property),
+                ("account", &context.account),
+                ("amount", &context.amount),
+            ]
+            .into_iter()
+            .filter_map(|(category, field)| {
+                field.value.as_ref().map(|value| HouseholdContextItem {
+                    category: category.to_owned(),
+                    value: value.clone(),
+                    source_reference: format!("document-{}", arrival.id),
+                })
+            })
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let source_reference = arrival
+        .as_ref()
+        .map(|arrival| format!("document-{}", arrival.id));
+    let request_id = format!(
+        "household-work-{}-{}",
+        request.conversation_id,
+        household_work_timestamp()
+    );
+    let conversations = DesktopConversationAdapter {
+        store: store.inner(),
+    };
+    let household_work = DesktopHouseholdWorkAdapter {
+        store: store.inner(),
+    };
+    let sources = DesktopSourceAdapter {
+        arrival: arrival.as_ref(),
+    };
+    let reasoning = DesktopReasoningAdapter;
+    let clock = SystemHouseholdAdministrationClock;
+    let engine = HouseholdAdministrationEngine::new(
+        &conversations,
+        &household_work,
+        &sources,
+        &reasoning,
+        &clock,
+    );
+    let outcome = engine
+        .handle_turn(HandleHouseholdAdministrationTurn {
+            household_id: request.household_id.clone(),
+            conversation_id: request.conversation_id,
+            member_message: message.to_owned(),
+            source_reference,
+            active_work_reference: None,
+            authorised_household_context: household_context,
+            available_actions: vec![
+                AvailableHouseholdTool {
+                    name: "draftReply".to_owned(),
+                    description: "Prepare a reply draft without sending it.".to_owned(),
+                },
+                AvailableHouseholdTool {
+                    name: "reminder".to_owned(),
+                    description: "Propose a reminder without scheduling or executing it."
+                        .to_owned(),
+                },
+            ],
+            authorised_actor: actor,
+            request_id,
+        })
+        .map_err(|error| error.to_string())?;
+    capture_portable_state(
+        portable.inner(),
+        store.inner(),
+        intelligence.inner(),
+        cabinet.inner(),
+        &request.household_id,
+    )?;
+    Ok(TauriHouseholdAdministrationOutcome {
+        request_id: outcome.request_id,
+        message: outcome.message,
+        work: outcome.work,
+    })
+}
+
 #[tauri::command]
 fn attach_document(
     store: State<'_, ConversationState>,
@@ -396,6 +698,16 @@ fn list_document_arrivals(
 ) -> Result<Vec<DocumentArrival>, String> {
     store
         .list_document_arrivals(&household_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_household_work(
+    store: State<'_, ConversationState>,
+    household_id: String,
+) -> Result<Vec<HouseholdWork>, String> {
+    store
+        .list_household_work(&household_id)
         .map_err(|error| error.to_string())
 }
 
@@ -587,9 +899,17 @@ fn capture_portable_state(
         conversations,
         intelligence,
     ) {
-        Ok(()) | Err(PortableMemoryError::CabinetUnavailable) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(error) if portable_capture_failure_is_non_blocking(&error) => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn portable_capture_failure_is_non_blocking(error: &PortableMemoryError) -> bool {
+    matches!(
+        error,
+        PortableMemoryError::CabinetUnavailable | PortableMemoryError::Intelligence(_)
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -1618,6 +1938,13 @@ fn open_household_state(
     String::from_utf8(plaintext).map_err(|_| "Protected Household state is not UTF-8.".to_owned())
 }
 
+fn household_work_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| format!("{}-{}", duration.as_secs(), duration.subsec_nanos()))
+        .unwrap_or_else(|_| "0-0".to_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
@@ -1699,8 +2026,10 @@ pub fn run() {
         delete_conversation,
         add_member_message,
         list_conversation_messages,
+        submit_household_administration,
         attach_document,
         list_document_arrivals,
+        list_household_work,
         resume_document_filings,
         list_todo_items,
         list_filed_originals,
@@ -1775,7 +2104,10 @@ pub fn run() {
 mod tests {
     use std::future::Future;
 
-    use super::select_document_files;
+    use super::{
+        portable_capture_failure_is_non_blocking, select_document_files, IntelligenceFailure,
+        PortableMemoryError,
+    };
 
     fn assert_async_document_picker<F, Fut>(command: F)
     where
@@ -1788,5 +2120,12 @@ mod tests {
     #[test]
     fn document_picker_command_does_not_block_the_tauri_main_thread() {
         assert_async_document_picker(select_document_files);
+    }
+
+    #[test]
+    fn unavailable_portable_intelligence_history_does_not_fail_local_work() {
+        assert!(portable_capture_failure_is_non_blocking(
+            &PortableMemoryError::Intelligence(IntelligenceFailure::ProtectedStateUnavailable),
+        ));
     }
 }
