@@ -52,7 +52,14 @@ export function TodayRoute({ service }: { service?: TodayService }) {
         <div className="today-scroll-region">
           <div className="today-announcements" aria-live="polite" aria-atomic="true">
             {today.notice && <div className="today-notice" role="status">{today.notice}</div>}
-            {today.actionError && !today.failedMutation && <div className="today-inline-error" role="alert"><span>{today.actionError}</span>{today.failedSend && <button type="button" onClick={() => void today.send()}>Retry</button>}</div>}
+            {today.actionError && (!today.failedMutation || !today.selectedWork) && (
+              <div className="today-inline-error" role="alert">
+                <span>{today.actionError}</span>
+                {(today.failedSend || today.failedMutation) && (
+                  <button type="button" onClick={() => today.failedMutation ? void today.retryMutation() : void today.send()}>Retry</button>
+                )}
+              </div>
+            )}
           </div>
 
           {today.activeNavigation !== "Today" ? <PlaceholderDestination destination={today.activeNavigation} /> : today.loading ? <BriefingSkeleton /> : today.loadError ? (
@@ -75,13 +82,13 @@ export function TodayRoute({ service }: { service?: TodayService }) {
         </div>
 
         <PersistentComposer
-          work={today.selectedWork}
+          contextualWork={today.conversationContextWork}
           draft={today.draft}
           attachment={today.attachment}
           sending={today.sending}
           attachmentPending={today.attachmentPending}
           onDraftChange={today.setDraft}
-          onClearWork={today.clearWorkContext}
+          onClearContext={today.clearConversationContext}
           onAttach={(file) => void today.attach(file)}
           onClearAttachment={today.clearAttachment}
           onSend={() => void today.send()}

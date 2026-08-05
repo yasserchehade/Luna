@@ -5,24 +5,24 @@ import { AppIcon } from "../../../components/AppIcon";
 import type { AttachmentResult, HouseholdWorkView } from "../contracts";
 
 export function PersistentComposer({
-  work,
+  contextualWork,
   draft,
   attachment,
   sending,
   attachmentPending,
   onDraftChange,
-  onClearWork,
+  onClearContext,
   onAttach,
   onClearAttachment,
   onSend,
 }: {
-  work: HouseholdWorkView | null;
+  contextualWork: HouseholdWorkView | null;
   draft: string;
   attachment: AttachmentResult | null;
   sending: boolean;
   attachmentPending: boolean;
   onDraftChange: (value: string) => void;
-  onClearWork: () => void;
+  onClearContext: () => void;
   onAttach: (file: File) => void;
   onClearAttachment: () => void;
   onSend: () => void;
@@ -51,10 +51,8 @@ export function PersistentComposer({
 
   return (
     <form className="today-composer" aria-label="Delegate to Luna" onSubmit={submit}>
-      {(work || attachment) && <div className="today-composer-context" aria-label="Active context">
-        {work && <span><AppIcon name="spark" />{work.title}<button type="button" aria-label="Clear active work context" onClick={onClearWork}><AppIcon name="close" /></button></span>}
-        {work && <span><AppIcon name="home" />{work.householdEntity}</span>}
-        {work?.status === "awaitingApproval" && <span>Awaiting approval</span>}
+      {(contextualWork || attachment) && <div className="today-composer-context" aria-label="Conversation context">
+        {contextualWork && <span><AppIcon name="spark" />{contextualWork.title}<button type="button" aria-label={`Remove ${contextualWork.title} from conversation context`} onClick={onClearContext}><AppIcon name="close" /></button></span>}
         {attachment && <span><AppIcon name="paperclip" />{attachment.displayName} · {attachment.sizeLabel}<button type="button" aria-label={`Remove ${attachment.displayName}`} onClick={onClearAttachment}><AppIcon name="close" /></button></span>}
       </div>}
       <div className="today-composer-row">
@@ -67,7 +65,7 @@ export function PersistentComposer({
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={submitFromKeyboard}
-          placeholder={work ? `Reply about ${work.title.toLowerCase()}…` : "What would you like me to take care of?"}
+          placeholder="What would you like me to take care of?"
         />
         <button type="submit" className="send-button" aria-label="Send instruction" disabled={sending || (!draft.trim() && !attachment)}><AppIcon name="send" /></button>
       </div>

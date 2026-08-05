@@ -22,11 +22,56 @@ describe("mock Today service", () => {
     expect(corrected?.source).toEqual(before.source);
   });
 
-  it("keeps message replies on the selected household work", async () => {
+  it("records messages in one global conversation instead of on household work", async () => {
     const service = createMockTodayService({ latencyMs: 0 });
-    const result = await service.sendMessage({ workId: "electricity-bill", message: "Please keep this open until I pay it." });
+    const result = await service.sendMessage({ contextualWorkIds: ["electricity-bill"], message: "Please keep this open until I pay it." });
     expect(result.briefing.work).toHaveLength(4);
-    expect(result.work?.conversation.map((entry) => entry.message)).toContain("Please keep this open until I pay it.");
+    expect(result.briefing.conversation.map((entry) => entry.body)).toContain("Please keep this open until I pay it.");
+    expect(result.briefing.work.every((work) => !("conversation" in work))).toBe(true);
+  });
+
+  it("resolves an explicit electricity reference without selected context", async () => {
+    const service = createMockTodayService({ latencyMs: 0 });
+    const result = await service.sendMessage({ message: "I already paid the electricity bill." });
+
+    expect(result.affectedWorkIds).toEqual(["electricity-bill"]);
+    expect(result.briefing.work.find((work) => work.id === "electricity-bill")?.status).toBe("completed");
+    expect(result.briefing.work.find((work) => work.id === "school-form")?.status).toBe("upcoming");
+  });
+
+  it("asks for clarification and changes no work when a pronoun is ambiguous", async () => {
+    const service = createMockTodayService({ latencyMs: 0 });
+    const before = await service.getBriefing();
+    const result = await service.sendMessage({ message: "I already paid it." });
+
+    expect(result.clarification?.question).toBe("Which item did you pay?");
+    expect(result.affectedWorkIds).toEqual([]);
+    expect(result.briefing.work.map(({ id, status }) => ({ id, status }))).toEqual(
+      before.work.map(({ id, status }) => ({ id, status })),
+    );
+  });
+
+  it("uses selected context as a hint without constraining a global attention question", async () => {
+    const service = createMockTodayService({ latencyMs: 0 });
+    const hinted = await service.sendMessage({ contextualWorkIds: ["insurance-renewal"], message: "Keep the current excess." });
+    expect(hinted.affectedWorkIds).toEqual(["insurance-renewal"]);
+    expect(hinted.briefing.work.find((work) => work.id === "insurance-renewal")?.needs).toBeNull();
+
+    const global = await service.sendMessage({ contextualWorkIds: ["electricity-bill"], message: "What else needs attention?" });
+    expect(global.lunaMessage.body).toContain("Rental insurance renewal");
+    expect(global.lunaMessage.body).toContain("School excursion form prepared");
+  });
+
+  it("applies two explicit safe work updates in one conversational turn", async () => {
+    const service = createMockTodayService({ latencyMs: 0 });
+    const result = await service.sendMessage({ message: "Mark the electricity bill paid and dismiss the school form." });
+
+    expect(result.affectedWorkIds).toEqual(["electricity-bill", "school-form"]);
+    expect(result.briefing.work.find((work) => work.id === "electricity-bill")?.status).toBe("completed");
+    expect(result.briefing.work.find((work) => work.id === "school-form")?.status).toBe("dismissed");
+    expect(result.briefing.conversation.map((entry) => entry.createdAt)).toEqual(
+      [...result.briefing.conversation.map((entry) => entry.createdAt)].sort(),
+    );
   });
 
   it("accepts bounded MVP sources and rejects unsupported or oversized files", async () => {

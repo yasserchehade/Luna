@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConversationInput, MutationResult, TodayService } from "./contracts";
+import type { ConversationInput, ConversationResult, TodayService } from "./contracts";
 import { createMockTodayService } from "./mockTodayService";
 import { TodayRoute } from "./TodayRoute";
 
@@ -20,7 +20,7 @@ function delayedMessageService() {
   const base = createMockTodayService({ latencyMs: 0 });
   let release: (() => void) | null = null;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const sendMessage = vi.fn(async (input: ConversationInput): Promise<MutationResult> => {
+  const sendMessage = vi.fn(async (input: ConversationInput): Promise<ConversationResult> => {
     await gate;
     return base.sendMessage(input);
   });
@@ -64,6 +64,103 @@ describe("production Today route", () => {
     const context = screen.getByRole("complementary", { name: "Working context" });
     expect(within(context).getByText("Rental insurance renewal")).toBeTruthy();
     expect(within(context).getByText("Harbour Mutual")).toBeTruthy();
+  });
+
+  it("opens with a global composer and no selected or contextual work", async () => {
+    renderToday();
+    await ready();
+
+    expect(screen.getByPlaceholderText("What would you like me to take care of?")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Remove .* conversation context/ })).toBeNull();
+    expect(screen.getByRole("complementary", { name: "Working context" }).textContent).toContain("Nothing selected");
+  });
+
+  it("completes explicitly referenced work without selecting a report and keeps the exchange global", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    const composer = screen.getByLabelText("Instruction for Luna");
+
+    await user.type(composer, "I already paid the electricity bill.{enter}");
+
+    const conversation = await screen.findByRole("log", { name: "Household conversation" });
+    expect(within(conversation).getByText("I already paid the electricity bill.")).toBeTruthy();
+    expect(within(conversation).getByText(/marked this complete/)).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Working context" }).textContent).toContain("Nothing selected");
+  });
+
+  it("removes optional conversation context without clearing the draft or viewed work", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "Open Rental insurance renewal" }));
+    const composer = screen.getByLabelText("Instruction for Luna") as HTMLTextAreaElement;
+    await user.type(composer, "Keep the current excess");
+
+    await user.click(screen.getByRole("button", { name: "Remove Rental insurance renewal from conversation context" }));
+
+    expect(composer.value).toBe("Keep the current excess");
+    expect(screen.getByRole("complementary", { name: "Working context" }).textContent).toContain("Rental insurance renewal");
+    expect(screen.getByPlaceholderText("What would you like me to take care of?")).toBeTruthy();
+  });
+
+  it("keeps one conversation visible while viewing different reports", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    await user.type(screen.getByLabelText("Instruction for Luna"), "What still needs my attention?{enter}");
+    const conversation = await screen.findByRole("log", { name: "Household conversation" });
+    const conversationText = conversation.textContent;
+
+    await user.click(screen.getByRole("button", { name: "Open Rental insurance renewal" }));
+    await user.click(screen.getByRole("button", { name: "Open School excursion form prepared" }));
+
+    expect(screen.getByRole("log", { name: "Household conversation" }).textContent).toBe(conversationText);
+    expect(screen.queryByLabelText(/Conversation about/)).toBeNull();
+  });
+
+  it("uses selected insurance as an optional hint and updates that work in the global conversation", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "Open Rental insurance renewal" }));
+
+    await user.type(screen.getByLabelText("Instruction for Luna"), "Keep the current excess.{enter}");
+
+    const conversation = await screen.findByRole("log", { name: "Household conversation" });
+    expect(within(conversation).getByText("Keep the current excess.")).toBeTruthy();
+    expect(within(conversation).getByText(/kept the \$900 excess/)).toBeTruthy();
+    const context = screen.getByRole("complementary", { name: "Working context" });
+    expect(within(context).getByText("Rental insurance renewal")).toBeTruthy();
+    expect(within(context).getByText("Keep the $900 excess and continue reviewing the renewal.")).toBeTruthy();
+  });
+
+  it("answers a global attention question even while electricity work is selected", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "Open Electricity bill needs approval" }));
+
+    await user.type(screen.getByLabelText("Instruction for Luna"), "What else needs attention?{enter}");
+
+    const conversation = await screen.findByRole("log", { name: "Household conversation" });
+    const response = within(conversation).getByText(/still need attention/);
+    expect(response.textContent).toContain("Rental insurance renewal");
+    expect(response.textContent).toContain("School excursion form prepared");
+    expect(screen.getByRole("complementary", { name: "Working context" }).textContent).toContain("Electricity bill needs approval");
+  });
+
+  it("asks for clarification without mutating work when an unscoped reference is ambiguous", async () => {
+    const user = userEvent.setup();
+    renderToday();
+    await ready();
+
+    await user.type(screen.getByLabelText("Instruction for Luna"), "I already paid it.{enter}");
+
+    const conversation = await screen.findByRole("log", { name: "Household conversation" });
+    expect(within(conversation).getByText("Which item did you pay?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approve reminder" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open School excursion form prepared" })).toBeTruthy();
   });
 
   it("approves a proposed action and reports the optimistic transition", async () => {
@@ -150,7 +247,7 @@ describe("production Today route", () => {
     await user.type(composer, "Keep watching for the receipt");
     await user.click(screen.getByRole("button", { name: "Send instruction" }));
     expect(await screen.findByText("Keep watching for the receipt")).toBeTruthy();
-    expect(screen.getAllByText("I have added that direction to Electricity bill needs approval.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("I have added that instruction to today's conversation.").length).toBeGreaterThan(0);
     expect(composer.value).toBe("");
     expect(document.activeElement).toBe(composer);
   });
@@ -172,7 +269,7 @@ describe("production Today route", () => {
     expect(composer.value).toBe("Please keep this in view");
 
     delayed.release();
-    expect((await screen.findAllByText("I have added that direction to Electricity bill needs approval.")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("I have added that instruction to today's conversation.")).length).toBeGreaterThan(0);
     expect(composer.value).toBe("");
     expect(document.activeElement).toBe(composer);
   });
@@ -181,6 +278,7 @@ describe("production Today route", () => {
     const user = userEvent.setup();
     renderToday();
     await ready();
+    await user.click(screen.getByRole("button", { name: "Open Electricity bill needs approval" }));
     const composer = screen.getByLabelText("Instruction for Luna");
     await user.type(composer, "I already paid it.");
     await user.click(screen.getByRole("button", { name: "Send instruction" }));
@@ -202,6 +300,7 @@ describe("production Today route", () => {
     await user.type(composer, "That's for the rental property.");
     await user.click(screen.getByRole("button", { name: "Send instruction" }));
 
+    await user.click(screen.getByRole("button", { name: "Open Electricity bill needs approval" }));
     const context = screen.getByRole("complementary", { name: "Working context" });
     await waitFor(() => expect(within(context).getAllByText("Rental property").length).toBeGreaterThan(0));
     expect(screen.getAllByRole("button", { name: "Open Electricity bill needs approval" })).toHaveLength(1);
@@ -228,7 +327,6 @@ describe("production Today route", () => {
     const user = userEvent.setup();
     renderToday();
     await ready();
-    await user.click(screen.getByRole("button", { name: "Clear active work context" }));
     const composer = screen.getByLabelText("Instruction for Luna");
     await user.type(composer, "Arrange a locksmith visit{enter}");
     expect(await screen.findByText("Arrange a locksmith visit")).toBeTruthy();
@@ -239,7 +337,6 @@ describe("production Today route", () => {
     const user = userEvent.setup();
     renderToday({ messageFailures: 1 });
     await ready();
-    await user.click(screen.getByRole("button", { name: "Clear active work context" }));
     const composer = screen.getByLabelText("Instruction for Luna") as HTMLTextAreaElement;
     await user.type(composer, "Arrange a locksmith visit{enter}");
     const alert = await screen.findByRole("alert");

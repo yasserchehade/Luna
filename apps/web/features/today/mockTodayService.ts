@@ -2,6 +2,8 @@ import {
   TodayServiceError,
   type AttachmentResult,
   type ConversationInput,
+  type ConversationMessage,
+  type ConversationResult,
   type FactCorrectionInput,
   type HouseholdWorkView,
   type MutationResult,
@@ -55,7 +57,6 @@ const fixtureBriefing: TodayBriefing = {
         description: "Remind the household on 12 August.",
         approvalRequired: true,
       },
-      conversation: [],
     },
     {
       id: "insurance-renewal",
@@ -77,13 +78,6 @@ const fixtureBriefing: TodayBriefing = {
         { key: "premium", label: "Premium", value: "$1,248 yearly" },
         { key: "excess", label: "New excess", value: "$900" },
         { key: "previous-excess", label: "Previous excess", value: "$650" },
-      ],
-      conversation: [
-        {
-          id: "insurance-question",
-          speaker: "luna",
-          message: "The premium is close to last year, but the excess increased by $250. Is that acceptable?",
-        },
       ],
     },
     {
@@ -107,7 +101,6 @@ const fixtureBriefing: TodayBriefing = {
         { key: "cost", label: "Cost", value: "$18" },
         { key: "member", label: "Household member", value: "Amira" },
       ],
-      conversation: [],
     },
     {
       id: "repair-followup",
@@ -127,7 +120,6 @@ const fixtureBriefing: TodayBriefing = {
         { key: "provider", label: "Provider", value: "Bayside Plumbing" },
         { key: "visit", label: "Visit", value: "Tuesday, 9–11 am" },
       ],
-      conversation: [],
     },
   ],
 };
@@ -179,10 +171,63 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
     return work;
   };
 
+  const nextMessage = (
+    role: ConversationMessage["role"],
+    body: string,
+    contextualWorkIds: string[] = [],
+  ): ConversationMessage => {
+    sequence += 1;
+    return {
+      id: `${role}-${sequence}`,
+      role,
+      body,
+      createdAt: new Date(Date.UTC(2026, 7, 5, 6, 12, sequence)).toISOString(),
+      ...(contextualWorkIds.length > 0 ? { contextualWorkIds: [...contextualWorkIds] } : {}),
+    };
+  };
+
+  const validContextIds = (ids: string[] | undefined): string[] => (
+    [...new Set(ids ?? [])].filter((id) => briefing.work.some((work) => work.id === id))
+  );
+
+  const recentSingleWorkId = (): string | null => {
+    for (let index = briefing.conversation.length - 1; index >= 0; index -= 1) {
+      const ids = briefing.conversation[index].contextualWorkIds ?? [];
+      if (ids.length === 1) return ids[0];
+    }
+    return null;
+  };
+
+  const explicitWorkIds = (message: string): string[] => {
+    const ids: string[] = [];
+    const add = (id: string) => { if (!ids.includes(id)) ids.push(id); };
+
+    if (message.includes("both bills")) {
+      add("electricity-bill");
+      add("insurance-renewal");
+    }
+    if (/\b(electricity|northstar|electric bill)\b/.test(message) || (/\bbill\b/.test(message) && !message.includes("both bills"))) add("electricity-bill");
+    if (/\b(insurance|renewal|excess|harbour mutual)\b/.test(message)) add("insurance-renewal");
+    if (/\b(school|excursion|permission form)\b/.test(message)) add("school-form");
+    if (/\b(plumber|plumbing|leaking tap)\b/.test(message)) add("repair-followup");
+
+    return ids;
+  };
+
+  const activeWork = () => briefing.work.filter((work) => !["completed", "dismissed"].includes(work.status));
+
+  const attentionSummary = (): string => {
+    const titles = activeWork().map((work) => work.title);
+    if (titles.length === 0) return "Nothing else needs your attention right now.";
+    if (titles.length === 1) return `${titles[0]} still needs attention.`;
+    return `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)} still need attention.`;
+  };
+
   const mutate = async (
     workId: string,
     confirmation: string,
     update: (work: HouseholdWorkView) => void,
+    conversationResponse = confirmation,
   ): Promise<MutationResult> => {
     await delay();
     if (remainingMutationFailures > 0) {
@@ -191,6 +236,7 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
     }
     const work = findWork(workId);
     update(work);
+    briefing.conversation.push(nextMessage("luna", conversationResponse, [workId]));
     return { briefing: cloneBriefing(briefing), work: structuredClone(work), confirmation };
   };
 
@@ -212,7 +258,7 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
       return structuredClone(findWork(id));
     },
 
-    async sendMessage(input: ConversationInput) {
+    async sendMessage(input: ConversationInput): Promise<ConversationResult> {
       await delay();
       if (remainingMessageFailures > 0) {
         remainingMessageFailures -= 1;
@@ -223,42 +269,116 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
         throw new TodayServiceError("mutationFailed", "Add an instruction or attachment before sending.");
       }
 
-      const work = input.workId ? findWork(input.workId) : null;
-      let confirmation = input.attachmentId
-        ? "I have the document and will keep this instruction with it."
-        : work
-          ? `I have added that direction to ${work.title}.`
-          : "I have added that instruction to today's conversation.";
+      const normalizedMessage = message.toLocaleLowerCase();
+      const contextIds = validContextIds(input.contextualWorkIds);
+      const explicitIds = explicitWorkIds(normalizedMessage);
+      const recentId = recentSingleWorkId();
+      const asksForAttention = /\bwhat\b.*\b(else|still|needs?)\b.*\b(attention|need)|\bwhat still needs my attention\b/.test(normalizedMessage);
+      const paidIntent = /\b(already paid|mark(?:ed)? .* paid|paid (it|that|this)|have paid)\b/.test(normalizedMessage);
+      const dismissIntent = /\bdismiss\b/.test(normalizedMessage);
+      const rentalCorrection = normalizedMessage.includes("rental property");
+      const keepExcess = normalizedMessage.includes("keep the current excess");
+      const referential = /\b(it|that|this|current)\b/.test(normalizedMessage);
 
-      if (work) {
-        if (message) work.conversation.push({ id: `member-${++sequence}`, speaker: "member", message });
+      let resolvedIds = [...explicitIds];
+      if (resolvedIds.length === 0 && rentalCorrection) resolvedIds = ["electricity-bill"];
+      if (resolvedIds.length === 0 && referential && contextIds.length === 1) resolvedIds = [...contextIds];
+      if (resolvedIds.length === 0 && referential && recentId) resolvedIds = [recentId];
 
-        const normalizedMessage = message.toLocaleLowerCase();
-        if (!input.attachmentId && /\b(already paid|paid (it|that|this)|have paid)\b/.test(normalizedMessage)) {
-          work.status = "completed";
-          work.dueLabel = "Completed";
-          work.needs = null;
-          work.proposedAction = undefined;
-          confirmation = "Thanks — I marked this complete and moved it out of today's attention.";
-        } else if (!input.attachmentId && normalizedMessage.includes("rental property")) {
+      const memberContextIds = asksForAttention ? [] : resolvedIds.length > 0 ? resolvedIds : contextIds;
+      const memberMessage = nextMessage("member", message || "I attached a household document.", memberContextIds);
+      briefing.conversation.push(memberMessage);
+
+      let affectedWorkIds: string[] = [];
+      let clarification: ConversationResult["clarification"];
+      let response: string;
+      let responseContextIds: string[] = [];
+
+      if (asksForAttention) {
+        response = attentionSummary();
+        responseContextIds = activeWork().map((work) => work.id);
+      } else if (paidIntent && resolvedIds.length !== 1 && !dismissIntent) {
+        clarification = {
+          question: "Which item did you pay?",
+          candidateWorkIds: activeWork().map((work) => work.id),
+        };
+        response = clarification.question;
+        responseContextIds = clarification.candidateWorkIds ?? [];
+      } else {
+        const confirmations: string[] = [];
+
+        if (paidIntent) {
+          const paidWorkId = resolvedIds.find((id) => id === "electricity-bill") ?? (resolvedIds.length === 1 ? resolvedIds[0] : null);
+          if (paidWorkId) {
+            const work = findWork(paidWorkId);
+            work.status = "completed";
+            work.dueLabel = "Completed";
+            work.needs = null;
+            work.proposedAction = undefined;
+            affectedWorkIds.push(work.id);
+            confirmations.push(`I marked ${work.title} complete`);
+          }
+        }
+
+        if (dismissIntent) {
+          for (const workId of resolvedIds.filter((id) => id === "school-form" || !paidIntent)) {
+            const work = findWork(workId);
+            work.status = "dismissed";
+            work.needs = null;
+            if (!affectedWorkIds.includes(work.id)) affectedWorkIds.push(work.id);
+            confirmations.push(`I dismissed ${work.title}`);
+          }
+        }
+
+        if (rentalCorrection && resolvedIds.includes("electricity-bill")) {
+          const work = findWork("electricity-bill");
           const property = work.facts.find((fact) => fact.key === "property");
           if (property) {
             property.value = "Rental property";
             work.householdEntity = "Rental property";
-            confirmation = "I updated the property to Rental property and kept the other details unchanged.";
+            if (!affectedWorkIds.includes(work.id)) affectedWorkIds.push(work.id);
+            confirmations.push("I updated the electricity bill's property to Rental property and kept the other details unchanged");
           }
         }
 
-        work.conversation.push({ id: `luna-${++sequence}`, speaker: "luna", message: confirmation });
-      } else {
-        if (message) briefing.conversation.push({ id: `member-${++sequence}`, speaker: "member", message });
-        briefing.conversation.push({ id: `luna-${++sequence}`, speaker: "luna", message: confirmation });
+        if (keepExcess && resolvedIds.includes("insurance-renewal")) {
+          const work = findWork("insurance-renewal");
+          const excess = work.facts.find((fact) => fact.key === "excess")?.value ?? "current excess";
+          work.status = "upcoming";
+          work.needs = null;
+          work.recommendation = `Keep the ${excess} excess and continue reviewing the renewal.`;
+          if (!affectedWorkIds.includes(work.id)) affectedWorkIds.push(work.id);
+          confirmations.push(`I kept the ${excess} excess for the insurance renewal`);
+        }
+
+        if (paidIntent && affectedWorkIds.length === 1 && confirmations.length === 1) {
+          response = `Thanks — I marked this complete and moved ${findWork(affectedWorkIds[0]).title} out of today's attention.`;
+        } else if (confirmations.length > 0) {
+          response = `${confirmations.join(" and ")}.`;
+        } else if (input.attachmentId) {
+          response = "I have the document and will keep this instruction with it.";
+        } else if (normalizedMessage.includes("both bills") && resolvedIds.length === 2) {
+          affectedWorkIds = [...resolvedIds];
+          response = "I will keep the electricity bill and insurance renewal in view together. No external action was taken.";
+        } else if (resolvedIds.length > 0) {
+          affectedWorkIds = [...resolvedIds];
+          const titles = resolvedIds.map((id) => findWork(id).title);
+          response = `I have added that direction with ${titles.join(" and ")} as relevant context.`;
+        } else {
+          response = "I have added that instruction to today's conversation.";
+        }
+        responseContextIds = affectedWorkIds.length > 0 ? affectedWorkIds : resolvedIds;
       }
+
+      const lunaMessage = nextMessage("luna", response, responseContextIds);
+      briefing.conversation.push(lunaMessage);
 
       return {
         briefing: cloneBriefing(briefing),
-        work: work ? structuredClone(work) : null,
-        confirmation,
+        memberMessage: structuredClone(memberMessage),
+        lunaMessage: structuredClone(lunaMessage),
+        affectedWorkIds,
+        ...(clarification ? { clarification } : {}),
       };
     },
 
@@ -271,15 +391,13 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
         work.needs = null;
         work.recommendation = "Reminder scheduled for 12 August. I will keep watching for a payment confirmation.";
         work.proposedAction = undefined;
-        work.conversation.push({ id: `luna-${++sequence}`, speaker: "luna", message: "Reminder approved. I will keep this bill in view until it is resolved." });
-      });
+      }, "Reminder scheduled for 12 August. I will keep watching for a payment confirmation.");
     },
 
     dismissWork(workId) {
       return mutate(workId, "I dismissed that household work.", (work) => {
         work.status = "dismissed";
         work.needs = null;
-        work.conversation.push({ id: `luna-${++sequence}`, speaker: "luna", message: "Understood. I dismissed this and removed it from today's attention." });
       });
     },
 
@@ -289,7 +407,6 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
         work.dueLabel = "Completed";
         work.needs = null;
         work.proposedAction = undefined;
-        work.conversation.push({ id: `luna-${++sequence}`, speaker: "luna", message: "Done. I marked this complete and moved it out of attention." });
       });
     },
 
@@ -300,11 +417,6 @@ export function createMockTodayService(options: MockTodayServiceOptions = {}): T
           throw new TodayServiceError("notFound", "That fact could not be corrected.");
         }
         fact.value = input.value.trim();
-        work.conversation.push({
-          id: `luna-${++sequence}`,
-          speaker: "luna",
-          message: `I corrected ${fact.label.toLowerCase()} to ${fact.value} and kept the other details unchanged.`,
-        });
       });
     },
 

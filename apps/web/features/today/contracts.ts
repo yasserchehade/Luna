@@ -15,10 +15,12 @@ export type HouseholdWorkStatus =
   | "completed"
   | "dismissed";
 
-export type ConversationEntry = {
+export type ConversationMessage = {
   id: string;
-  speaker: "member" | "luna";
-  message: string;
+  role: "member" | "luna";
+  body: string;
+  createdAt: string;
+  contextualWorkIds?: string[];
 };
 
 export type HouseholdFactView = {
@@ -51,7 +53,6 @@ export type HouseholdWorkView = {
   needs: string | null;
   facts: HouseholdFactView[];
   proposedAction?: ProposedActionView;
-  conversation: ConversationEntry[];
 };
 
 export type TodayBriefing = {
@@ -67,7 +68,7 @@ export type TodayBriefing = {
     documents: number;
     calendar: boolean;
   };
-  conversation: ConversationEntry[];
+  conversation: ConversationMessage[];
   work: HouseholdWorkView[];
   partialFailures: Array<{
     id: string;
@@ -78,8 +79,19 @@ export type TodayBriefing = {
 
 export type ConversationInput = {
   message: string;
-  workId?: string;
+  contextualWorkIds?: string[];
   attachmentId?: string;
+};
+
+export type ConversationResult = {
+  briefing: TodayBriefing;
+  memberMessage: ConversationMessage;
+  lunaMessage: ConversationMessage;
+  affectedWorkIds: string[];
+  clarification?: {
+    question: string;
+    candidateWorkIds?: string[];
+  };
 };
 
 export type FactCorrectionInput = {
@@ -115,7 +127,7 @@ export class TodayServiceError extends Error {
 export interface TodayService {
   getBriefing(): Promise<TodayBriefing>;
   getWorkItem(id: string): Promise<HouseholdWorkView>;
-  sendMessage(input: ConversationInput): Promise<MutationResult>;
+  sendMessage(input: ConversationInput): Promise<ConversationResult>;
   approveAction(workId: string, actionId: string): Promise<MutationResult>;
   dismissWork(workId: string): Promise<MutationResult>;
   completeWork(workId: string): Promise<MutationResult>;

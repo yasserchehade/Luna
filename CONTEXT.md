@@ -209,11 +209,11 @@ The primary web home where Luna proactively briefs the member on completed work,
 _Avoid_: Dashboard, home dashboard
 
 **Working Context**:
-The concise visible context for selected Household Work: current activity, relevant source, household entity, understood facts, unresolved need and proposed action. Detailed evidence remains behind explicit inspection.
+The concise visible context for selected Household Work: current activity, relevant source, household entity, understood facts, unresolved need and proposed action. It controls what the member is viewing, not the scope or ownership of Conversation. Detailed evidence remains behind explicit inspection.
 _Avoid_: Inspector, model reasoning, debug context
 
 **Persistent Composer**:
-The conversation input anchored to the primary workspace. It may show active Household Work, household entity or attached-source context and must not resemble a search bar.
+The global conversation input anchored to the primary workspace. It starts without requiring work selection and may show a removable Household Work, household entity or attached-source context hint without making that hint an exclusive routing target. It must not resemble a search bar.
 _Avoid_: Search, command palette
 
 **Conversation**:

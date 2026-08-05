@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   TodayServiceError,
   type AttachmentResult,
-  type ConversationEntry,
+  type ConversationMessage,
+  type ConversationResult,
   type FactCorrectionInput,
   type MutationResult,
   type TodayBriefing,
@@ -21,8 +22,7 @@ type PendingMutation =
 const DRAFT_KEY = "luna.today.draft";
 
 export type PendingConversation = {
-  workId: string | null;
-  entry: ConversationEntry;
+  entry: ConversationMessage;
 };
 
 function safeMessage(error: unknown): string {
@@ -36,6 +36,7 @@ export function useToday(service: TodayService) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeNavigation, setActiveNavigation] = useState<TodayNavigationKey>("Today");
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
+  const [conversationContextWorkId, setConversationContextWorkId] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -65,7 +66,8 @@ export function useToday(service: TodayService) {
     try {
       const next = await service.getBriefing();
       setBriefing(next);
-      setSelectedWorkId((current) => current ?? next.work.find((work) => work.status !== "dismissed")?.id ?? null);
+      setSelectedWorkId((current) => current && next.work.some((work) => work.id === current) ? current : null);
+      setConversationContextWorkId((current) => current && next.work.some((work) => work.id === current) ? current : null);
     } catch (error) {
       setLoadError(safeMessage(error));
     } finally {
@@ -82,17 +84,28 @@ export function useToday(service: TodayService) {
     void load();
   }, [load]);
 
-  const applyResult = useCallback((result: MutationResult) => {
+  const applyMutationResult = useCallback((result: MutationResult) => {
     setBriefing(result.briefing);
     setNotice(result.confirmation);
     setActionError(null);
     setFailedMutation(null);
     if (result.work?.status === "dismissed") {
-      setSelectedWorkId(result.briefing.work.find((work) => work.status !== "dismissed")?.id ?? null);
+      setSelectedWorkId((current) => current === result.work?.id ? null : current);
+      setConversationContextWorkId((current) => current === result.work?.id ? null : current);
       setCorrectionOpen(false);
-    } else if (result.work) {
-      setSelectedWorkId(result.work.id);
     }
+  }, []);
+
+  const applyConversationResult = useCallback((result: ConversationResult) => {
+    setBriefing(result.briefing);
+    setNotice(result.lunaMessage.body);
+    setActionError(null);
+    setFailedMutation(null);
+    setConversationContextWorkId((current) => {
+      if (!current) return null;
+      const work = result.briefing.work.find((candidate) => candidate.id === current);
+      return work?.status === "dismissed" ? null : current;
+    });
   }, []);
 
   const runMutation = useCallback(async (mutation: PendingMutation) => {
@@ -100,13 +113,13 @@ export function useToday(service: TodayService) {
     setActionError(null);
     try {
       if (mutation.kind === "approve") {
-        applyResult(await service.approveAction(mutation.workId, mutation.actionId));
+        applyMutationResult(await service.approveAction(mutation.workId, mutation.actionId));
       } else if (mutation.kind === "dismiss") {
-        applyResult(await service.dismissWork(mutation.workId));
+        applyMutationResult(await service.dismissWork(mutation.workId));
       } else if (mutation.kind === "complete") {
-        applyResult(await service.completeWork(mutation.workId));
+        applyMutationResult(await service.completeWork(mutation.workId));
       } else {
-        applyResult(await service.correctFact(mutation.input));
+        applyMutationResult(await service.correctFact(mutation.input));
         setCorrectionOpen(false);
       }
     } catch (error) {
@@ -115,7 +128,7 @@ export function useToday(service: TodayService) {
     } finally {
       setPendingMutation(null);
     }
-  }, [applyResult, service]);
+  }, [applyMutationResult, service]);
 
   const send = useCallback(async () => {
     if (sendingRef.current || (!draft.trim() && !attachment)) return;
@@ -125,17 +138,22 @@ export function useToday(service: TodayService) {
     const message = draft.trim();
     if (message) {
       setPendingConversation({
-        workId: selectedWorkId,
-        entry: { id: "pending-member-message", speaker: "member", message },
+        entry: {
+          id: "pending-member-message",
+          role: "member",
+          body: message,
+          createdAt: new Date().toISOString(),
+          ...(conversationContextWorkId ? { contextualWorkIds: [conversationContextWorkId] } : {}),
+        },
       });
     }
     try {
       const result = await service.sendMessage({
         message: draft,
-        workId: selectedWorkId ?? undefined,
+        contextualWorkIds: conversationContextWorkId ? [conversationContextWorkId] : undefined,
         attachmentId: attachment?.attachmentId,
       });
-      applyResult(result);
+      applyConversationResult(result);
       setDraft("");
       setAttachment(null);
       setFailedSend(false);
@@ -147,7 +165,7 @@ export function useToday(service: TodayService) {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [applyResult, attachment, draft, selectedWorkId, service, setDraft]);
+  }, [applyConversationResult, attachment, conversationContextWorkId, draft, service, setDraft]);
 
   const attach = useCallback(async (file: File) => {
     setAttachmentPending(true);
@@ -165,15 +183,14 @@ export function useToday(service: TodayService) {
 
   const selectWork = useCallback((workId: string, openContext = false) => {
     setSelectedWorkId(workId);
+    setConversationContextWorkId(workId);
     setCorrectionOpen(false);
     setActionError(null);
     if (openContext) setContextOpen(true);
   }, []);
 
-  const clearWorkContext = useCallback(() => {
-    setSelectedWorkId(null);
-    setCorrectionOpen(false);
-    setContextOpen(false);
+  const clearConversationContext = useCallback(() => {
+    setConversationContextWorkId(null);
   }, []);
 
   const discuss = useCallback((workId: string, title: string) => {
@@ -188,6 +205,7 @@ export function useToday(service: TodayService) {
   }, []);
 
   const selectedWork = briefing?.work.find((work) => work.id === selectedWorkId) ?? null;
+  const conversationContextWork = briefing?.work.find((work) => work.id === conversationContextWorkId) ?? null;
 
   return {
     briefing,
@@ -197,8 +215,9 @@ export function useToday(service: TodayService) {
     activeNavigation,
     navigate,
     selectedWork,
+    conversationContextWork,
     selectWork,
-    clearWorkContext,
+    clearConversationContext,
     contextOpen,
     setContextOpen,
     correctionOpen,

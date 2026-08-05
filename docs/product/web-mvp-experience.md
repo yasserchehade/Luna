@@ -12,7 +12,9 @@ The three-variant prototype remains primary-source design evidence on branch `co
 
 Variant A is promoted into the production frontend foundation at `/today` on branch `codex/promote-variant-a-today`. The root web route redirects to `Today`. The production route has no variant switcher, founder-review controls, query-driven fixture states or visible implementation notes. The historical three-variant prototype remains available only at its explicit `/prototype/web-first` path as design evidence.
 
-The route currently consumes the web-facing `TodayService` interface through an in-browser mock adapter. The adapter owns fixture briefing data and local mutation behavior for selection, approval, correction, dismissal, completion, attachment and conversation. UI modules do not import fixture data directly and do not copy Rust domain types. This is a frontend contract and interaction foundation, not evidence of production authentication, persistence, background review, OpenAI, email or storage connectivity.
+The route currently consumes the web-facing `TodayService` interface through an in-browser mock adapter. The adapter owns fixture briefing data and local mutation behavior for approval, correction, dismissal, completion, attachment and conversation. UI modules do not import fixture data directly and do not copy Rust domain types. This is a frontend contract and interaction foundation, not evidence of production authentication, persistence, background review, OpenAI, email or storage connectivity.
+
+`TodayService` exposes one chronological household conversation. Messages may cite zero, one or several contextual Household Work identifiers, and a conversational result identifies every affected work item or a clarification request. Household Work does not own a separate per-report conversation. The mock adapter resolves explicit work references first, treats selected work only as an optional hint, preserves unrelated work and asks a clarifying question when a consequential reference is ambiguous.
 
 Backend integration remains blocked on founder acceptance of the production route. Once accepted, the next implementation design should map the approved web-facing contracts to a minimal authenticated household service without changing the accepted information hierarchy.
 
@@ -27,9 +29,9 @@ The experience is not a generic chatbot, document manager, email client, metrics
 1. The member opens Luna on `Today`.
 2. Luna states what it reviewed, what it completed, what needs the member and what is upcoming.
 3. Matters appear as structured Household Work reports inside the briefing or conversation.
-4. Selecting work updates a concise visible working context.
+4. Selecting work updates a concise visible working context without changing the conversation's scope.
 5. The member approves, corrects, dismisses, completes or discusses the matter naturally.
-6. The persistent composer retains the active work, household entity or attached source as visible context.
+6. The persistent composer remains global by default and may show a removable Household Work, household entity or attached-source context hint.
 7. Detailed evidence and audit information are available only when requested.
 
 The first prototype uses clearly identified fixture data. It does not imply that background review, email intake or external execution already exists.
@@ -83,7 +85,7 @@ Reports are structured parts of the conversation, not generic dashboard cards. T
 
 ## Working-context panel
 
-On desktop, the right panel shows only the selected work's current context:
+On desktop, the right panel shows only the selected work's current context. Selection controls what the member is viewing; it does not create a separate conversation or require subsequent messages to target that work:
 
 - what Luna is currently working on;
 - the relevant source;
@@ -102,7 +104,7 @@ The composer remains anchored at the bottom of the main workspace and is visuall
 
 > What would you like me to take care of?
 
-It supports natural language and PDF/JPG/PNG attachment selection in the prototype. When work or a source is active, a compact context token identifies it. The design reserves space for future voice without implementing voice controls now.
+It supports natural language and PDF/JPG/PNG attachment selection in the prototype. The composer starts without a selected target. When work or a source is relevant, a compact removable context token presents it as a routing hint; removing that token preserves both the draft and the work being viewed. Explicit language can target other work, global questions remain household-wide, and ambiguous consequential instructions produce clarification instead of mutation. The design reserves space for future voice without implementing voice controls now.
 
 The composer remains available in ready, empty, loading and recoverable-failure states.
 
@@ -147,6 +149,9 @@ The production route demonstrates through the mock adapter:
 
 - selecting navigation and Household Work;
 - context-panel updates;
+- one continuous household conversation across all reports;
+- global conversation without preselection, optional removable context hints and clarification for ambiguous references;
+- explicit and multi-work conversational updates without duplicating Household Work;
 - approval, discussion, dismissal and completion;
 - correction without replacing unrelated information;
 - attachment selection without upload;

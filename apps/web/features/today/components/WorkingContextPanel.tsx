@@ -45,7 +45,7 @@ export function WorkingContextPanel({
   return (
     <aside ref={panel} className={`today-context-panel ${drawer ? "drawer" : ""}`} aria-label="Working context" role={drawer ? "dialog" : undefined} aria-modal={drawer || undefined}>
       <header>
-        <div><span>Working context</span><strong>{work?.title ?? "Nothing selected"}</strong></div>
+        <div><span>Viewing</span><strong>{work?.title ?? "Nothing selected"}</strong></div>
         {drawer && <button type="button" aria-label="Close work details" onClick={onClose}><AppIcon name="close" /></button>}
       </header>
       {work ? (
@@ -77,7 +77,7 @@ export function WorkingContextPanel({
             <p>Source: {work.source.detail}</p>
           </details>
         </div>
-      ) : <div className="today-context-empty"><AppIcon name="details" /><p>Select household work to see the context Luna is using.</p></div>}
+      ) : <div className="today-context-empty"><AppIcon name="details" /><p>Select household work to view its details.</p></div>}
     </aside>
   );
 }
