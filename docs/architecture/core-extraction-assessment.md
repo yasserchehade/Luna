@@ -1,10 +1,26 @@
 # Household Administration core extraction assessment
 
-Status: proposed architecture assessment
+Status: first narrow extraction implemented locally; live managed diagnostics pending
 
 Assessed implementation: PR #76 head `0b42ca0`
 
-Scope: architecture and extraction sequencing only; no runtime refactor is included
+Scope: assessment plus the first narrow engine extraction; no broad runtime reorganisation is included
+
+## Implementation update — 5 August 2026
+
+The first narrow extraction is implemented in `desktop/src-tauri/src/household_administration/` behind the public interface:
+
+```rust
+HouseholdAdministrationEngine::handle_turn(HandleHouseholdAdministrationTurn)
+```
+
+The module now owns application-independent turn orchestration, recent-conversation loading, source loading through a logical reference, active and source-linked Household Work selection, request construction, untrusted-result validation, merge/no-op/terminal rules, Household Work audit events, persistence calls, natural response assembly and typed failure categories.
+
+The production Tauri command delegates to the same interface through desktop adapters. Tauri retains session/actor validation, legacy `DocumentArrival` lookup and authorised review-card context translation, local bounded file loading, encrypted SQLite adapters, OS-vault managed reasoning and portable-memory compatibility capture. None of those types enters the engine input.
+
+The implementation remains a coherent module in the existing Rust library rather than a new workspace crate. This is the smallest extraction that avoids a broad package reorganisation. The module itself imports no Tauri, SQLite, credential-vault, Cabinet, navigation, frontend or filesystem-path type. A later packaging change is still required before a web host can depend on a Rust crate that does not compile the surrounding desktop runtime.
+
+Headless integration coverage is in `desktop/src-tauri/tests/household_administration_engine.rs`. Twelve deterministic tests pass without a Tauri runtime, Device PIN, OS vault, application launch or network. Three ignored live diagnostics compose the same engine with fixture sources, in-memory persistence and `ManagedHouseholdAdministrationReasoningAdapter`, which accepts an explicitly injected endpoint and narrow gateway credential. The current environment has neither required variable, so clarification, correction and scanned-image live failures have not been rerun and their original provider-side cause remains unknown.
 
 ## Decision summary
 
@@ -230,8 +246,8 @@ The previously observed generic failure can therefore be reproduced through the 
 | The exact PR #76 live failure is still unknown | Preserve the scenario as a fixture and require the new harness to expose a typed category before attempting a behavioural fix. |
 | Web-first documentation and PR #76 branch history may be temporarily divergent | Do not mix unrelated web implementation into this extraction. Rebase/cherry-pick only through the normal reviewed branch process. |
 
-## Exact next implementation task
+## Implemented extraction task
 
-Create one narrow extraction PR that introduces `crates/household-administration-core` with `HouseholdAdministrationEngine::handle_turn`, an in-memory turn repository, fixture reasoning/source adapters and a complete-turn integration test. Move only the existing Household Work types, request construction, untrusted-result validation and mutation calculation needed by that test. Keep the Tauri command operational through a thin compatibility adapter; do not change React, the web interface, Household Work semantics, connectors, background processing or the Daily Briefing.
+The narrow extraction introduced `HouseholdAdministrationEngine::handle_turn`, fixture reasoning/source adapters and in-memory repository coverage without changing React, the web interface, Household Work semantics, connectors, background processing or the Daily Briefing. The existing desktop crate was retained to avoid broad package movement; the module can move to a standalone crate when a real non-desktop host is ready to consume it.
 
-Acceptance for that task is that the PR #76 Household Administration scenario produces a validated result or an exact typed failure in `cargo test` without launching Luna Desktop or unlocking a device.
+The next decision is whether to provide an ephemeral narrow managed-gateway credential and endpoint for the three opt-in headless diagnostics. Until that evidence exists, the deterministic PR #76 behaviours are independently validated but the previously observed live managed-provider failures are not cleared.

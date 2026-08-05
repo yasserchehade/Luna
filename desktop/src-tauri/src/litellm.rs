@@ -7,6 +7,7 @@ use std::{io::Read, net::IpAddr, sync::Arc, time::Duration};
 
 use reqwest::StatusCode;
 
+use crate::household_administration::{HouseholdAdministrationReasoning, ReasoningPortError};
 use crate::household_work::{
     HouseholdWorkKind, HouseholdWorkStatus, ProposedActionKind, WorkFact, WorkFactKey,
 };
@@ -91,6 +92,41 @@ pub(crate) struct LiteLlmGateway {
     managed_endpoint: String,
     byok_endpoint: String,
     transport: Arc<dyn LiteLlmTransport>,
+}
+
+pub struct ManagedHouseholdAdministrationReasoningAdapter {
+    gateway: LiteLlmGateway,
+    access_credential: Vec<u8>,
+}
+
+impl ManagedHouseholdAdministrationReasoningAdapter {
+    pub fn new(endpoint: impl Into<String>, access_credential: Vec<u8>) -> Self {
+        Self {
+            gateway: LiteLlmGateway::new(endpoint),
+            access_credential,
+        }
+    }
+}
+
+impl HouseholdAdministrationReasoning for ManagedHouseholdAdministrationReasoningAdapter {
+    fn reason(
+        &self,
+        request: &HouseholdAdministrationRequest,
+    ) -> Result<UntrustedHouseholdAdministrationResult, ReasoningPortError> {
+        self.gateway
+            .reason_about_household_administration(
+                request,
+                Some(self.access_credential.as_slice()),
+                None,
+            )
+            .map_err(|error| match error {
+                IntelligenceFailure::InvalidStructuredResult => ReasoningPortError::MalformedResult,
+                IntelligenceFailure::UnsupportedCapability => {
+                    ReasoningPortError::IncompatibleContractVersion
+                }
+                _ => ReasoningPortError::Unavailable,
+            })
+    }
 }
 
 impl LiteLlmGateway {

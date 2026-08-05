@@ -29,6 +29,9 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Bounded household document input | `an_oversized_document_is_rejected_before_it_is_read_or_preserved`, `text_pdf_input_is_bounded_and_binary_is_a_file_part` and `image_only_pdf_and_image_use_supported_non_text_content_parts` |
 | Household Work transition authority | `hallucinated_terminal_household_work_states_are_rejected`, `explicit_member_payment_authorises_completion_inside_luna`, `a_read_only_question_cannot_close_household_work` and `explicit_correction_can_reopen_source_linked_terminal_work` |
 | Household Work no-op and attention | `a_none_operation_preserves_existing_awaiting_approval_work_exactly` and `terminal_household_work_is_removed_from_attention_for_every_terminal_state` |
+| Headless Household Administration engine | `desktop/src-tauri/tests/household_administration_engine.rs` covers clear PDF-like content, clarification, correction, read-only questions, completion, dismissal and scanned-image/OCR content through `HouseholdAdministrationEngine::handle_turn` with no Tauri runtime, Device PIN, OS vault, application launch or network |
+| Headless engine failure categories | `malformed_provider_result_has_an_exact_failure_category`, `incompatible_contract_version_has_an_exact_failure_category`, `missing_existing_work_has_an_exact_failure_category`, `invalid_correction_target_has_an_exact_failure_category` and `persistence_failure_has_an_exact_failure_category` |
+| Opt-in live engine diagnostics | the ignored `live_managed_reasoning_isolates_*_without_desktop_state` tests substitute an injected managed reasoning adapter while source, conversation and Household Work remain fixtures/in memory |
 | Untrusted Evidence bounds and provenance | `oversized_or_untraceable_provider_evidence_is_rejected_through_the_gateway_boundary` |
 | No provider-owned mutation | the allow-once application test proves the Original remains unfiled |
 | Owning-domain validation | `invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state`, `invalid_candidate_calendar_date_is_rejected_by_document_handling` and `candidate_cannot_replace_context_that_already_has_member_direction` |
@@ -54,6 +57,12 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Installed Household Plan states | `desktop/e2e/conversation.spec.ts` proves the free checkout prompt and complimentary-ready state in the rebuilt desktop |
 
 The OpenAI/LiteLLM canary is an explicit release-environment check, not an automated-suite dependency. For prototype acceptance it may run through the pinned, operator-run loopback deployment using only the fixed synthetic request and disposable credentials. On 28 July 2026 the real OpenAI `gpt-4.1-mini` canary passed through the exact `openai/gpt-4.1-mini` LiteLLM route with a strict structured result and privacy-safe usage of 397 input, 214 output and 611 total tokens. The disposable virtual key was revoked and proved unusable; the synthetic marker, upstream key, master key and database password were absent from container logs; the encrypted handoff, containers, networks and volume were removed. Privacy-safe evidence is attached to issue #13 and PR #33.
+
+## PR #76 core-extraction validation
+
+The extracted engine's deterministic suite passes all required Household Administration scenarios and exposes exact failure categories without desktop orchestration. Household Work success audit events remain part of the work mutation and are persisted through the same Household Work repository save; a separate audit interface was intentionally not added because it would duplicate that owning persistence seam and make the first extraction shallower.
+
+The live managed diagnostic interface is ready, but no `LUNA_MANAGED_INTELLIGENCE_URL` or `LUNA_MANAGED_INTELLIGENCE_GATEWAY_CREDENTIAL` is present in the current environment. The three live tests therefore remain explicitly ignored and no new live clarification, correction or scanned-image evidence is claimed. PR #76's earlier live failure root cause remains unresolved until those tests run with an ephemeral narrow credential; the desktop and founder Device PIN are not required for that rerun.
 
 On 29 July 2026, the persistent internal-beta gateway repeated that contract with
 the newly created Luna-funded project key: 399 input, 216 output and 615 total

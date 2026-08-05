@@ -33,6 +33,22 @@ Natural explanation to the user
 
 The loop may pause for missing information, approval, connectivity or a tool result. A pause is a state of the same household work, not a hand-off to an unrelated document workflow.
 
+## Callable engine seam
+
+The first implementation seam for this loop is `HouseholdAdministrationEngine::handle_turn` in `desktop/src-tauri/src/household_administration/`. It accepts platform-independent household, conversation, actor, message, source/work reference, authorised context, action-definition and correlation values. It returns a natural response, resulting Household Work, clarification/action proposals, audit events and a typed safe failure category.
+
+The engine uses narrow Rust interfaces for:
+
+- recent conversation reads and member/Luna message appends;
+- Household Work listing and persistence;
+- bounded logical source retrieval;
+- untrusted Household Administration reasoning; and
+- deterministic time.
+
+The same interface is exercised by in-memory integration adapters and the Tauri compatibility adapters. A managed reasoning adapter can receive an explicitly injected endpoint and narrow gateway credential for opt-in headless live diagnostics, so the engine does not need a Device PIN or operating-system vault.
+
+Tauri remains responsible for the desktop session, legacy `DocumentArrival` translation, local file access, encrypted SQLite, OS-vault credentials and desktop compatibility capture. A future web host should supply server-side adapters to this same engine interface; this decision does not introduce a web endpoint, web authentication, storage connector or background worker.
+
 ## Conceptual responsibilities
 
 ### Sources

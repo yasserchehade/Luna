@@ -1362,6 +1362,16 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         household_id: &str,
         request: HouseholdAdministrationRequest,
     ) -> Result<HouseholdAdministrationResult, IntelligenceFailure> {
+        let untrusted =
+            self.reason_about_household_administration_untrusted(household_id, &request)?;
+        validate_household_result(&request, untrusted)
+    }
+
+    pub(crate) fn reason_about_household_administration_untrusted(
+        &self,
+        household_id: &str,
+        request: &HouseholdAdministrationRequest,
+    ) -> Result<UntrustedHouseholdAdministrationResult, IntelligenceFailure> {
         let selection = IntelligenceSelection {
             provider_id: MANAGED_INTELLIGENCE_PROVIDER_ID.to_owned(),
             model_id: MANAGED_INTELLIGENCE_MODEL_ID.to_owned(),
@@ -1382,14 +1392,11 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
         let mut last_failure = IntelligenceFailure::GatewayUnavailable;
         for attempt in 0..MAX_SAFE_RETRY_ATTEMPTS {
             match self.gateway.reason_about_household_administration(
-                &request,
+                request,
                 credential.as_deref(),
                 provider_credential,
             ) {
-                Ok(untrusted) => {
-                    let result = validate_household_result(&request, untrusted)?;
-                    return Ok(result);
-                }
+                Ok(untrusted) => return Ok(untrusted),
                 Err(failure) if failure.is_retryable() && attempt + 1 < MAX_SAFE_RETRY_ATTEMPTS => {
                     last_failure = failure;
                 }
@@ -1712,7 +1719,7 @@ impl<V: CredentialVault> CloudIntelligenceStore<V> {
     }
 }
 
-fn validate_household_result(
+pub(crate) fn validate_household_result(
     request: &HouseholdAdministrationRequest,
     mut result: UntrustedHouseholdAdministrationResult,
 ) -> Result<HouseholdAdministrationResult, IntelligenceFailure> {

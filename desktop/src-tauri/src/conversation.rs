@@ -16,13 +16,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cabinet::ensure_incoming_folder;
-use crate::household_work::{
-    ActionApproval, ActionExecution, HouseholdWork, HouseholdWorkKind, HouseholdWorkStatus,
-    ProposedAction, ValidatedHouseholdWorkDirection,
-};
+use crate::household_administration::{apply_result, HouseholdAdministrationFailureCategory};
+use crate::household_work::HouseholdWork;
 use crate::intelligence::{
     CandidateDirectionInterpretation, CloudConsentDecision, HouseholdAdministrationResult,
-    HouseholdWorkOperation, IntelligenceResult,
+    IntelligenceResult,
 };
 use crate::portable_memory::{
     PortableDocumentRelationshipKind, PortableHistoryEvent, PortableReference,
@@ -1598,134 +1596,27 @@ impl<V: CredentialVault> ConversationStore<V> {
                         .flatten()
                 })
             });
-        if matches!(result.work.operation, HouseholdWorkOperation::None) {
-            return Ok(existing);
-        }
-        if matches!(result.work.operation, HouseholdWorkOperation::Update) && existing.is_none() {
-            return Err(ConversationError::NotFound);
-        }
-
-        let existing_status = existing.as_ref().map(|work| work.status);
-        if let Some(status) = result.work.status.filter(|status| status.is_terminal()) {
-            if !matches!(result.work.operation, HouseholdWorkOperation::Update)
-                || result
-                    .validated_member_direction
-                    .and_then(ValidatedHouseholdWorkDirection::terminal_status)
-                    != Some(status)
-            {
-                return Err(ConversationError::InvalidHouseholdWorkTransition);
+        let work = apply_result(
+            household_id,
+            conversation_id,
+            source_ref.as_deref(),
+            existing,
+            result,
+            now,
+        )
+        .map_err(|failure| match failure.category {
+            HouseholdAdministrationFailureCategory::MissingExistingWork => {
+                ConversationError::NotFound
             }
+            _ => ConversationError::InvalidHouseholdWorkTransition,
+        })?;
+        if matches!(result.work.operation, crate::HouseholdWorkOperation::None) {
+            return Ok(work);
         }
-        if existing_status.is_some_and(HouseholdWorkStatus::is_terminal)
-            && (result.validated_member_direction != Some(ValidatedHouseholdWorkDirection::Reopen)
-                || result
-                    .work
-                    .status
-                    .is_some_and(HouseholdWorkStatus::is_terminal))
-        {
-            return Err(ConversationError::InvalidHouseholdWorkTransition);
+        if let Some(work) = work.as_ref() {
+            self.save_household_work(household_id, work)?;
         }
-
-        let mut work = existing.unwrap_or_else(|| {
-            HouseholdWork::new(
-                format!(
-                    "work-{}-{}-{}",
-                    now,
-                    conversation_id,
-                    arrival_id.unwrap_or_default()
-                ),
-                household_id,
-                result.work.kind.unwrap_or(HouseholdWorkKind::Other),
-                result
-                    .work
-                    .summary
-                    .clone()
-                    .unwrap_or_else(|| "Household work requires attention.".to_owned()),
-                now,
-            )
-        });
-        if let Some(kind) = result.work.kind {
-            work.kind = kind;
-        }
-        if let Some(summary) = result
-            .work
-            .summary
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            work.summary = summary.trim().to_owned();
-        }
-        for fact in &result.work.facts {
-            work.facts.retain(|existing| existing.key != fact.key);
-            work.facts.push(fact.clone());
-        }
-        if let Some(source_ref) = source_ref {
-            if !work.source_refs.contains(&source_ref) {
-                work.source_refs.push(source_ref);
-            }
-        }
-        let conversation_ref = format!("conversation-{conversation_id}");
-        if !work.source_refs.contains(&conversation_ref) {
-            work.source_refs.push(conversation_ref);
-        }
-        work.due_at = result.work.due_at.clone().or(work.due_at);
-        work.urgency = result.work.urgency.clone().or(work.urgency);
-        if let Some(status) = result.work.status {
-            work.status = status;
-        } else if result.clarification.is_some() {
-            work.status = HouseholdWorkStatus::NeedsClarification;
-        } else if result
-            .proposed_actions
-            .iter()
-            .any(|action| action.approval_required)
-        {
-            work.status = HouseholdWorkStatus::AwaitingApproval;
-        } else {
-            work.status = HouseholdWorkStatus::Active;
-        }
-        if !result.proposed_actions.is_empty() {
-            work.proposed_actions = result
-                .proposed_actions
-                .iter()
-                .enumerate()
-                .map(|(index, action)| ProposedAction {
-                    id: format!("{}-action-{}", work.id, index + 1),
-                    kind: action.kind,
-                    summary: action.summary.trim().to_owned(),
-                    arguments: action.arguments.clone(),
-                    approval: if action.approval_required {
-                        ActionApproval::Required
-                    } else {
-                        ActionApproval::NotRequired
-                    },
-                    execution: ActionExecution::NotStarted,
-                })
-                .collect();
-        }
-        if matches!(
-            work.status,
-            HouseholdWorkStatus::Completed
-                | HouseholdWorkStatus::Dismissed
-                | HouseholdWorkStatus::NoLongerRelevant
-        ) {
-            work.closed_at = Some(now.to_owned());
-        } else {
-            work.closed_at = None;
-        }
-        let event = match result.work.operation {
-            HouseholdWorkOperation::Create => "Household Work created",
-            HouseholdWorkOperation::Update => "Household Work updated",
-            HouseholdWorkOperation::None => unreachable!("no-op results return before mutation"),
-        };
-        work.record_audit(event, now);
-        if let Some(clarification) = result.clarification.as_ref() {
-            work.record_audit(
-                format!("Clarification requested: {}", clarification.question.trim()),
-                now,
-            );
-        }
-        self.save_household_work(household_id, &work)?;
-        Ok(Some(work))
+        Ok(work)
     }
 
     pub fn list_document_arrivals(
