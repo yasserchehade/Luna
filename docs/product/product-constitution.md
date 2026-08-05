@@ -82,6 +82,16 @@ These are binding principles for product, design, architecture, implementation a
 9. **Competencies before integrations.** Luna grows by learning competencies such as understanding obligations, preparing responses and resolving household work. Gmail, Outlook, uploaded PDFs and other sources are inputs to those competencies.
 10. **MVP before architectural completeness.** Future abstractions must not complicate proving the first useful household-administration loop.
 
+## MVP product surface
+
+The Luna MVP is web-first. The primary experience is a responsive application that opens on `Today`, where Luna starts with a concise briefing of completed work, work requiring attention or approval and upcoming obligations. Conversation remains continuously available through a persistent composer, and Household Work appears as structured reports within that conversation-led workspace.
+
+The desktop client is deferred, not deleted. Native filesystem access, local models, offline operation, portable-memory UX and operating-system integrations are future capabilities that require validated demand; they are not MVP prerequisites.
+
+The Cabinet is a logical household-document layer rather than a local filesystem product. Luna owns document meaning, household relationships, source references and Household Work. Future connected user-controlled storage providers own file bytes, versions, sharing and storage infrastructure. Luna should use existing infrastructure where that infrastructure is not part of its differentiation.
+
+See [ADR 0020](../adr/0020-make-the-luna-mvp-web-first.md) and [the web MVP experience](./web-mvp-experience.md).
+
 ## What Luna is and is not
 
 Luna is:

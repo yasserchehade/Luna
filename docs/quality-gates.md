@@ -1,21 +1,23 @@
 # Luna quality gates
 
-This plan defines the stop points that prevent Luna from advancing while behavior, safety or specification compliance is unproven. These gates are additive to each implementation ticket's acceptance criteria.
+This plan defines stop points that prevent Luna from advancing while behavior, safety or specification compliance is unproven. ADR 0020 makes web validation primary and retains desktop gates only for explicitly approved deferred work.
 
 ## Approved test seams
 
-Tests observe behavior only through these public boundaries:
+Tests observe behavior through public boundaries:
 
-1. **Application seam** — drive the installed Tauri interface like a household member and observe Conversation, To do, Cabinet, History and Options.
-2. **Local-core seam** — invoke Luna's public Rust commands using a real temporary local database and temporary cabinet.
-3. **Boundary contracts** — replace only external boundaries such as intelligence providers, credential vaults, clocks, network availability and native dialogs.
-4. **Packaged-app seam** — install and smoke-test the actual Windows and macOS artifacts.
+1. **Web application seam** — drive the responsive browser interface like a household member and observe the Today briefing, Conversation, Household Work, working context and visible outcomes.
+2. **Web service seam** — invoke versioned household API commands with authenticated household context and real test persistence once the service exists.
+3. **Boundary contracts** — replace only external boundaries such as intelligence, identity, storage-provider adapters, clocks, network availability and execution tools.
+4. **Deferred desktop seams** — local Rust commands, installed Tauri behavior and packaged Windows/macOS artifacts remain valid only for approved desktop maintenance or extraction work.
 
-Tests must not reach into private functions, mock Luna's internal collaborators or inspect the database as a shortcut around a public interface. Expected results must come from specifications, fixtures or worked examples rather than restating the implementation.
+Tests must not reach into private functions, inspect persistence as a shortcut around a public interface or treat model output as accepted state. Expected results come from specifications, fixtures and worked examples rather than restating implementation.
 
-Member-direction interpretation is a boundary contract: deterministic test interpreters may propose typed candidate directions, but tests must observe acceptance, clarification, refusal and execution through the local-core or installed-application seam. Interpretation test doubles do not bypass owning-domain validation.
+The production `/today` frontend uses interaction tests through its rendered route plus contract tests through the `TodayService` seam. The current adapter is fixture-backed; browser acceptance runs at `/today` across desktop, tablet and mobile widths. A future service integration must add API-boundary coverage without replacing these household-member-facing checks or making snapshots the primary evidence.
 
-Tauri supports unit and integration testing through its mock runtime and desktop testing on Windows and macOS through WebdriverIO's Tauri service:
+Current frontend evidence and exact review instructions are recorded in [Today frontend validation](./testing/web-today.md).
+
+Historical Tauri references remain available for deferred desktop work:
 
 - <https://v2.tauri.app/develop/tests/>
 - <https://v2.tauri.app/develop/tests/webdriver/>
@@ -23,83 +25,84 @@ Tauri supports unit and integration testing through its mock runtime and desktop
 
 ## Universal stop points
 
-### Every TDD slice
+### Every implementation slice
 
-- Write one behavioral test at an approved seam.
-- Observe it fail for the expected reason.
-- Add only enough implementation to make it pass.
-- Do not start another behavior while the slice is red.
-- Defer refactoring until review.
+- Add one behavioral test at an approved seam.
+- Observe the expected failure before relying on the test as regression evidence where practical.
+- Add only enough implementation for the behavior.
+- Keep mock/prototype state visibly separate from production claims.
+- Defer unrelated refactoring and integrations.
 
 ### Every local commit
 
-- Formatting passes.
-- Linting passes.
+- Formatting and linting pass for changed surfaces.
 - Type checking passes.
-- The focused test passes.
-- The complete local suite passes.
+- Focused and complete relevant tests pass.
+- Relevant production or review build passes.
 - Secret and sensitive-output checks pass.
+- `git diff --check` passes.
 - The diff contains no unrelated changes.
 
 ### Every ticket pull request
 
 - Every acceptance criterion is demonstrated through an approved seam.
-- The required Ubuntu core check is green: Rust formatting, the complete Rust suite, strict Clippy and TypeScript typechecking.
-- Windows and macOS desktop build checks are green.
-- Account-service lint and contract checks are green when account or Supabase paths change.
-- A final-head `Full desktop validation` run is green before merging changes that affect runtime behaviour, the interface, configuration or packaging.
-- The Standards review passes against repository guidance and the smell baseline.
-- The Spec review passes against the originating GitHub issue and parent specification.
+- Web changes pass web tests, typecheck and production build.
+- Extracted Rust/service changes pass Rust formatting, complete tests and strict Clippy.
+- Windows/macOS desktop checks run only when deferred desktop code, packaging or a shared crate they consume changes.
+- Account-service lint and contract checks run when account or Supabase paths change.
+- Production web behavior has a final-head browser acceptance result before merge.
+- Standards and Spec reviews pass against repository guidance and the originating issue.
 - No unresolved P0 or P1 finding remains.
-- CI output and any required manual evidence are attached to the issue.
+- CI and required manual evidence are linked from the issue or PR.
 
 ## GitHub Actions execution policy
 
-Pull requests run the fast core suite once on `ubuntu-latest` and compile the desktop application on `windows-latest` and `macos-latest`. The account-service workflow is path-scoped so unrelated desktop changes do not start Supabase. Documentation-only changes do not start desktop workflows.
+CI must be path-scoped by product surface:
 
-Full installed-application E2E and release-mode no-bundle builds run automatically after relevant changes reach `main`. They can also be dispatched manually against the final pull-request head. This avoids repeating the most expensive Windows and macOS work after every intermediate push without weakening the final acceptance gate: runtime, interface, configuration and packaging changes still require a successful manually dispatched full run before merge.
+- `apps/web/**` changes run web tests, typecheck and build;
+- Rust or desktop paths retain Ubuntu core and Windows/macOS checks where relevant;
+- account-service workflows remain scoped to account or Supabase paths; and
+- documentation-only changes do not start runtime workflows.
 
-All workflows use only standard GitHub-hosted runners. Dependency downloads use pnpm caching through `actions/setup-node`, while Rust registry, Git and suitable `target` outputs use `Swatinem/rust-cache`. Workflow-level concurrency cancels superseded runs on the same ref.
+Path-filtered workflow names must not be configured as unconditional repository ruleset checks because skipped workflows may remain pending. Use always-created aggregate checks or rules scoped to protected paths.
 
-Path-filtered workflow names must not be configured as unconditional repository ruleset checks because GitHub leaves a path-skipped required workflow pending. If required status checks are added, use always-created aggregate checks or rules scoped to the paths they protect.
+All workflows use standard GitHub-hosted runners unless a separate operational decision approves otherwise. Dependencies should use supported package and Rust caching, and same-ref concurrency should cancel superseded runs.
 
-## Milestone checkpoints
+## Current checkpoints
 
-| Checkpoint | Closing issue | Required evidence before continuing |
-| --- | --- | --- |
-| Foundation | #2 | Tauri launches on Windows and macOS, the approved Option A shell renders, a local setting survives restart and the application test seam works. |
-| Trust and cabinet | #5 | Account, MFA, trusted-device recovery, cabinet preview, filesystem ownership and access-denial cases pass; a manual recovery drill is recorded. |
-| First filing | #9 | PDF, JPG and PNG fixtures pass from arrival through clarification and verified filing; the original remains untouched; interrupted-write recovery is proven. |
-| Learned behavior | #12 | A second contextual match is handled automatically; changed provider, property, addressee, account or document type returns to clarification; corrections and duplicates remain reversible. |
-| Resilience | #15 | Consent denial, provider failure, offline work, unavailable cabinet, replay, tampering and concurrent-device conflicts are exercised without silent fallback, overwrite or secret exposure. |
-| Beta release | #16 | The repeated golden path passes using signed Windows and macOS installers; keyboard, accessibility, recovery, data-loss and security checks have recorded evidence. |
+| Checkpoint | Required evidence before continuing |
+| --- | --- |
+| Web experience selection | Variant A is selected and promoted to `/today`; final production-route review must confirm navigation, persistent composer, context, work actions and loading/empty/failure states across desktop, tablet and mobile. |
+| Web API contract | Authenticated Household Work, Conversation, briefing projection and bounded upload commands have explicit authority, concurrency, idempotency and audit behavior. |
+| Uploaded-document web slice | One bounded source becomes one durable Household Work item; read-only, clarification, correction, approval, completion and dismissal pass through the web seam without duplication. |
+| Connector readiness | The uploaded-document journey is stable before email or user-controlled storage adapters begin. |
 
-A milestone-closing issue cannot close while its checkpoint is incomplete, even if its own narrower acceptance criteria pass.
+The historical desktop foundation, Cabinet, filing, portable-memory and installed-app checkpoints remain evidence for deferred capability; they do not block the web prototype or become web MVP prerequisites.
 
-## Cloud Assistance environment gates
+## Managed intelligence environment gates
 
-The prototype's evaluated-real-provider criterion may be demonstrated by the pinned LiteLLM deployment running ephemerally on an operator's loopback interface. It must use the fixed synthetic canary, disposable credentials and the same privacy, exact-route, structured-result, usage and revocation checks as a remote deployment. This is release-environment evidence, not a standard-suite dependency or a supported desktop sidecar.
+OpenAI and gateway credentials remain server-side and never enter browser code, source content, Household Work or diagnostics. Any live-provider canary uses synthetic content, disposable credentials, exact route/schema checks and body-free logs.
 
-Before Luna-managed Intelligence is available to external testers, the gateway must be remotely operated behind authenticated TLS ingress with managed secrets, attributable client credentials, abuse controls and verified body-free logs. ADR 0018 selects a named Cloudflare Tunnel from the operator-controlled prototype machine as the no-separate-host-cost internal-beta ingress, with distinct customer and Access-protected administration hostnames. Issue #53 owns the running deployment and evidence gate; it does not block completion of issue #13's prototype contract after the local real-provider canary passes.
+Before managed intelligence is available to external web testers, its service boundary must use authenticated TLS ingress, managed secrets, attributable access, abuse controls and verified content-free operational logs. The browser receives only authenticated Luna API behavior, never a provider or gateway credential.
 
-Managed gateway credentials are provisioned automatically and are not customer configuration. Bring-your-own Intelligence is enabled only through Options after the issue #55 canary proved BYOK-only process and virtual-key isolation, provider-key non-persistence, credential-free logs, missing-key failure and HTTP 403 for a managed route. Remote use still depends on issue #53's authenticated TLS ingress evidence.
+Provider choice, BYOK and customer provider-key UI remain deferred and must not appear in the primary web experience.
 
 ## Severity and release policy
 
 | Severity | Meaning | Policy |
 | --- | --- | --- |
 | P0 | Data loss, privacy breach, authority violation or secret exposure | Stop immediately; blocks commit, merge and release. |
-| P1 | Acceptance criterion or core workflow failure | Blocks merge and progression to dependent work. |
-| P2 | Non-critical usability or presentation defect | May be deferred only by an explicit decision recorded on the issue. |
+| P1 | Acceptance criterion or core workflow failure | Blocks merge and dependent work. |
+| P2 | Non-critical usability or presentation defect | May be deferred only through an explicit recorded decision. |
 
-Failures and waivers must be visible. A check cannot be ignored silently, and a flaky test is treated as a failing test until its cause is understood.
+Failures and waivers must remain visible. A flaky test is failing until its cause is understood.
 
 ## Evidence record
 
-Each implementation issue is the record for its quality gate. Before closing it, attach or link:
+Before an implementation issue closes, attach or link:
 
-- CI runs and test results;
+- CI and test results;
 - acceptance-criterion demonstrations;
-- platform-specific manual results where automation is insufficient;
-- Standards and Spec review outcomes;
-- any accepted P2 deferral, including its follow-up issue.
+- responsive, accessibility and browser-specific evidence where automation is insufficient;
+- Standards and Spec review outcomes; and
+- accepted P2 deferrals with follow-up ownership.
