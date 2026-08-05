@@ -8,6 +8,14 @@ On 5 August 2026, the founder selected **Variant A — Briefing stream** as the 
 
 The three-variant prototype remains primary-source design evidence on branch `codex/web-first-mvp-prototype`, starting at commit `3047f435d214c3e59bd0469873acea704176e289`. Future implementation must promote Variant A into a real, production-quality route rather than merging the throwaway switcher or the losing Variant B and C implementations into the product.
 
+## Production frontend status
+
+Variant A is promoted into the production frontend foundation at `/today` on branch `codex/promote-variant-a-today`. The root web route redirects to `Today`. The production route has no variant switcher, founder-review controls, query-driven fixture states or visible implementation notes. The historical three-variant prototype remains available only at its explicit `/prototype/web-first` path as design evidence.
+
+The route currently consumes the web-facing `TodayService` interface through an in-browser mock adapter. The adapter owns fixture briefing data and local mutation behavior for selection, approval, correction, dismissal, completion, attachment and conversation. UI modules do not import fixture data directly and do not copy Rust domain types. This is a frontend contract and interaction foundation, not evidence of production authentication, persistence, background review, OpenAI, email or storage connectivity.
+
+Backend integration remains blocked on founder acceptance of the production route. Once accepted, the next implementation design should map the approved web-facing contracts to a minimal authenticated household service without changing the accepted information hierarchy.
+
 ## Experience promise
 
 Opening Luna should feel like checking in with a competent household employee who has already been working. Luna starts the conversation with a concise briefing, presents household outcomes in plain language and keeps a natural conversation available without making the member operate a workflow.
@@ -133,9 +141,9 @@ The composer remains available in ready, empty, loading and recoverable-failure 
 
 Luna speaks in outcomes: what it found, why it matters, what it handled, what it recommends and what it genuinely needs from the member.
 
-## Prototype states and interactions
+## Frontend states and interactions
 
-The mock prototype must demonstrate:
+The production route demonstrates through the mock adapter:
 
 - selecting navigation and Household Work;
 - context-panel updates;
@@ -146,4 +154,4 @@ The mock prototype must demonstrate:
 - loading, empty and failure briefings; and
 - visible disclosure that all mutations are local mock state.
 
-It deliberately excludes authentication, persistence, live OpenAI calls, connectors, background work and production briefing generation.
+It deliberately excludes authentication, persistence, live OpenAI calls, connectors, background work and production briefing generation. Loading uses a structured skeleton; empty, unavailable, recoverable-error and partial-failure states preserve the composer and distinguish no work from unavailable work.

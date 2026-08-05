@@ -8,15 +8,15 @@ This sequence replaces the desktop and email-first order for future planning. Th
 
 ### 1. Select the web Today experience
 
-Review the three `apps/web` variants across desktop, tablet and mobile. Choose the briefing hierarchy, persistent-composer behavior and working-context disclosure. Record the selected variant and rationale, then rewrite it as the real route without carrying prototype variants or the switcher into production.
+**In founder acceptance:** Variant A is selected and promoted to the production `/today` route with a mock service adapter. The production route does not carry the variant switcher or losing variants into navigation.
 
 ### 2. Define the multi-user web API boundary
 
 Specify authenticated briefing projections, Conversation turns, Household Work commands and bounded uploads. Define household authorization, optimistic concurrency, idempotency, audit, source identity and recoverable failure behavior before choosing which desktop modules to expose or port.
 
-### 3. Resolve and extract PR #76 reusable capability
+### 3. Adapt the merged Household Administration foundation
 
-Reproduce the live clarification, correction and image-delegation failures. Extract only reviewed Household Work rules, strict intelligence schemas, bounded source transport, no-op/terminal invariants and deterministic tests. Do not merge PR #76 into the web frontend and do not preserve local SQLite, Tauri or credential-vault assumptions by default.
+PR #76 is merged after its live clarification, correction and image-delegation diagnostics passed. Adapt only its reviewed engine ports, Household Work rules, strict reasoning schema, bounded source transport, no-op/terminal invariants and deterministic tests behind the web service. Do not import local SQLite, Tauri or credential-vault assumptions into the browser or web host.
 
 ### 4. Implement server-owned Household Work and Conversation
 

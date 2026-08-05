@@ -13,7 +13,9 @@ Tests observe behavior through public boundaries:
 
 Tests must not reach into private functions, inspect persistence as a shortcut around a public interface or treat model output as accepted state. Expected results come from specifications, fixtures and worked examples rather than restating implementation.
 
-The mock web prototype uses component interaction tests and pure state-contract tests. Production web work must add browser-level acceptance coverage at the real route and API boundary without making snapshots the primary evidence.
+The production `/today` frontend uses interaction tests through its rendered route plus contract tests through the `TodayService` seam. The current adapter is fixture-backed; browser acceptance runs at `/today` across desktop, tablet and mobile widths. A future service integration must add API-boundary coverage without replacing these household-member-facing checks or making snapshots the primary evidence.
+
+Current frontend evidence and exact review instructions are recorded in [Today frontend validation](./testing/web-today.md).
 
 Historical Tauri references remain available for deferred desktop work:
 
@@ -70,7 +72,7 @@ All workflows use standard GitHub-hosted runners unless a separate operational d
 
 | Checkpoint | Required evidence before continuing |
 | --- | --- |
-| Web experience selection | Founder selects a briefing hierarchy across desktop, tablet and mobile; navigation, persistent composer, context, work actions and loading/empty/failure states are demonstrated. |
+| Web experience selection | Variant A is selected and promoted to `/today`; final production-route review must confirm navigation, persistent composer, context, work actions and loading/empty/failure states across desktop, tablet and mobile. |
 | Web API contract | Authenticated Household Work, Conversation, briefing projection and bounded upload commands have explicit authority, concurrency, idempotency and audit behavior. |
 | Uploaded-document web slice | One bounded source becomes one durable Household Work item; read-only, clarification, correction, approval, completion and dismissal pass through the web seam without duplication. |
 | Connector readiness | The uploaded-document journey is stable before email or user-controlled storage adapters begin. |

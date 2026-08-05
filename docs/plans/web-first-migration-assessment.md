@@ -6,7 +6,7 @@
 
 Luna should not port the Tauri interface to the browser. The web MVP needs a new briefing-led interface and a multi-user service boundary. Existing desktop and Rust work is valuable when it captures Household Work, authority, validation, source, audit or recovery rules; it is not automatically reusable when it assumes a local process, local SQLite database, filesystem path, operating-system vault or Trusted Device.
 
-The first implementation is a mock-data prototype in `apps/web`. It intentionally does not connect PR #76, a production backend, OpenAI, authentication, email or storage providers.
+The first production frontend foundation is the fixture-backed `/today` route in `apps/web`, promoted from accepted prototype Variant A. It intentionally does not connect a production backend, OpenAI, authentication, email or storage providers.
 
 ## Existing-work classification
 
@@ -14,10 +14,10 @@ The first implementation is a mock-data prototype in `apps/web`. It intentionall
 
 | Existing area | Reuse direction |
 | --- | --- |
-| Household Work structures and lifecycle rules in `desktop/src-tauri/src/conversation.rs` | Extract the small domain contract and transition rules behind a service boundary; preserve stable IDs, one-work-per-source behavior and terminal/no-op invariants. |
-| OpenAI household request/result contracts and validation in `intelligence.rs` | Reuse schemas, context categories, evidence references and Luna-owned validation after resolving PR #76 live-boundary failures. |
-| Responses transport and bounded PDF/image handling in `litellm.rs` | Move to a server-owned intelligence adapter. Never send gateway or provider credentials to the browser. |
-| Audit, idempotency and deterministic gateway seams | Reuse concepts and tests; redesign storage and concurrency for a shared service. |
+| `HouseholdAdministrationEngine::handle_turn` and its narrow ports | Adapt the callable engine behind a server-owned web host; preserve stable IDs, one-work-per-source behavior and terminal/no-op invariants. |
+| Household request/result contracts and validation in `desktop/src-tauri/src/household_administration/` | Reuse schemas, context categories, evidence references and Luna-owned validation without importing Tauri or local persistence. |
+| Direct Responses transport and bounded PDF/image handling in `household_administration/openai.rs` | Keep credentials and source transport server-side. LiteLLM remains deferred historical compatibility code. |
+| Audit, idempotency and deterministic reasoning seams | Reuse concepts and tests; redesign storage and concurrency for a shared service. |
 | Supabase account/household contracts | Evaluate as the initial web identity and relational persistence foundation; enforce household membership and authority server-side. |
 | Source and conversation terminology | Retain: sources provide evidence, Conversation is the interaction, Household Work owns lifecycle. |
 
@@ -66,17 +66,17 @@ The Tauri React interface and `frontend/app/prototype/luna` are historical proto
 
 The web prototype may reuse visual lessons such as a persistent composer and explicit context, but not the old information architecture.
 
-## PR #76 assessment
+## Merged Household Administration foundation
 
-PR #76 contains reusable Household Work and managed-intelligence work, including strict structured output, bounded document transport, no-op behavior, terminal authority, attention projection and source-linked updates. It also has unresolved live failures for clarification, correction and image delegation.
+PR #76 was accepted and squash-merged as `5ca15c0f03978472fce9b01fccf667b53c63498a`. It established the reusable, platform-independent Household Administration engine, direct OpenAI adapter, strict structured output, bounded document transport, no-op behavior, terminal authority, attention projection and source-linked updates. Its headless live clarification, correction and scanned-image diagnostics passed before merge.
 
-Do not merge PR #76 into the web frontend. After the web service contract is defined:
+Do not connect the merged desktop-hosted implementation directly to browser modules. After the production `/today` route receives founder acceptance and the web service contract is defined:
 
-1. reproduce and diagnose the live boundary failures independently;
-2. extract reviewed domain rules, schemas and tests into the selected service location;
-3. adapt local IDs, persistence and credentials to the multi-user boundary;
-4. expose a versioned API consumed by `apps/web`; and
-5. connect one fixture-backed web journey to that API before adding connectors.
+1. map the accepted web-facing view and command contracts to the smallest authenticated service interface;
+2. adapt reviewed engine ports, IDs, persistence and credentials to the multi-user boundary;
+3. preserve Luna-owned authority, validation, audit, idempotency and bounded source rules;
+4. expose a versioned interface consumed by `apps/web`; and
+5. replace one mocked uploaded-document journey before adding connectors.
 
 The mock prototype must remain decoupled until that contract is stable.
 
@@ -119,7 +119,7 @@ The least disruptive current layout is:
 
 ```text
 apps/
-  web/          # new mock-data web MVP prototype
+  web/          # production Today frontend with a mock service adapter
 desktop/        # deferred Tauri application; unchanged
 frontend/       # historical Option A prototype
 ```
@@ -152,10 +152,10 @@ Household Work, Conversation, OpenAI reasoning, Luna-owned authority, source evi
 
 ## Recommended migration sequence
 
-1. Founder-review the three web prototype variants and select the interaction hierarchy.
-2. Rewrite the selected variant as the real `Today` route; remove prototype variants and switcher from the production branch.
-3. Define the minimal authenticated web API for briefing, conversation, Household Work commands and bounded upload.
-4. Resolve PR #76 live-boundary failures and extract only reusable schemas, rules and tests behind that API.
+1. **Complete:** founder selected Variant A as the interaction hierarchy.
+2. **In founder review:** Variant A is rewritten as the production `/today` route behind a mock service adapter.
+3. Define the minimal authenticated web API for briefing, conversation, Household Work commands and bounded upload only after route acceptance.
+4. Adapt the merged reusable schemas, rules and tests behind that API without importing desktop runtime dependencies.
 5. Implement one persisted uploaded-document Household Work journey in the web app.
 6. Add production authentication, household authorization, audit and concurrency evidence.
 7. Prove the journey before designing background briefing generation, email or cloud-storage connectors.

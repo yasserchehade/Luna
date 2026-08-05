@@ -1,8 +1,8 @@
 # Unified uploaded-document Household Work journey
 
-**Status:** Governing uploaded-document capability plan; the primary delivery surface is now the web application under ADR 0020. PR #76 is an unmerged desktop implementation attempt with reusable contracts and unresolved live boundaries.
+**Status:** Governing uploaded-document capability plan; the primary delivery surface is the web application under ADR 0020. PR #76 was accepted and squash-merged as the platform-independent Household Administration foundation after its headless live boundaries passed.
 
-**Dependencies:** Select the founder-reviewed web experience, define a multi-user web API, then extract or port only reusable Household Work and managed-intelligence contracts after PR #76's live clarification, correction and image-delegation failures are resolved. This slice must not begin Gmail or storage-provider integration.
+**Dependencies:** Complete founder acceptance of the production `/today` route, define a multi-user web API, then adapt only the reusable Household Work, reasoning and source contracts from the merged engine. This slice must not begin Gmail or storage-provider integration.
 
 ## Issue statement
 
@@ -10,7 +10,7 @@ Prove the first unified Household Work agent journey through Luna's responsive w
 
 > A user uploads a household document and communicates naturally. OpenAI receives the document, relevant conversation and household context, identifies Household Work, and Luna stores and discusses that work without asking the user to repeat information available in the document.
 
-This remains the first implementation slice for the agreed MVP. The first web prototype uses mock data only; the production slice will use a bounded web upload to prove the reasoning, durable work and conversation loop. Email and connected storage ingestion are explicitly later.
+This remains the first implementation slice for the agreed MVP. The production `/today` frontend currently uses a mock service adapter; the persisted slice will use a bounded web upload to prove the reasoning, durable work and conversation loop. Email and connected storage ingestion are explicitly later.
 
 ## User journey
 

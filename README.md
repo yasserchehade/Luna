@@ -19,16 +19,16 @@ The MVP is web-first and briefing-led. Members open `Today` to see what Luna han
 - `docs/plans/luna-first-vertical-tickets.md` — superseded historical desktop ticket map.
 - `docs/quality-gates.md` — approved test seams and QA/QC stop points.
 
-## Web-first prototype
+## Web application
 
-The founder-reviewable prototype lives in `apps/web`. It uses local fixture state and does not connect authentication, OpenAI, email, cloud storage or production services.
+The production frontend foundation lives in `apps/web`. Its primary route is `/today`, promoted from approved prototype Variant A. It uses a typed mock `TodayService` adapter and does not connect authentication, OpenAI, email, cloud storage or production services.
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm --filter luna-web-prototype dev
 ```
 
-Open <http://localhost:3000/prototype/web-first?variant=A>. Use `variant=A`, `B` or `C` to compare the three information hierarchies. Loading, empty and error states are available with `state=loading`, `state=empty` and `state=error`.
+Open <http://localhost:3000/today>. The root route redirects there. The historical founder-review prototype remains at <http://localhost:3000/prototype/web-first> for explicit design comparison only; it is not part of production navigation.
 
 ```powershell
 pnpm --filter luna-web-prototype test
@@ -36,7 +36,7 @@ pnpm --filter luna-web-prototype typecheck
 pnpm --filter luna-web-prototype build
 ```
 
-The prototype variants and switcher are throwaway design evidence. After founder selection, rewrite the selected hierarchy as the real `Today` route and remove the losing variants and switcher from production work.
+The production route includes the proactive briefing, Household Work reports, continuous conversation, persistent composer, responsive working context and local mock actions. Replace the mock adapter only after the route is accepted and the authenticated household-service contract is separately approved.
 
 ## Deferred desktop application
 
