@@ -14,6 +14,8 @@ The MVP is web-first and briefing-led. Members open `Today` to see what Luna han
 - `docs/architecture/agent-architecture.md` — the one-agent reasoning and execution boundary.
 - `docs/domain-model.md` — domain boundaries, relationships and invariants.
 - `docs/adr/0020-make-the-luna-mvp-web-first.md` — accepted web-first and desktop-deferral decision.
+- `docs/adr/0021-use-a-minimal-rust-web-adapter-for-household-administration.md` — accepted web-to-engine adapter and persistence decision.
+- `docs/architecture/web-household-administration-backend.md` — HTTP, persistence and source boundaries.
 - `docs/plans/web-first-migration-assessment.md` — desktop freeze, reusable work and web-service migration boundaries.
 - `docs/plans/unified-uploaded-document-household-work.md` — the first Household Work capability slice.
 - `docs/plans/luna-first-vertical-tickets.md` — superseded historical desktop ticket map.
@@ -21,10 +23,18 @@ The MVP is web-first and briefing-led. Members open `Today` to see what Luna han
 
 ## Web application
 
-The production frontend foundation lives in `apps/web`. Its primary route is `/today`, promoted from approved prototype Variant A. It uses a typed mock `TodayService` adapter and does not connect authentication, OpenAI, email, cloud storage or production services.
+The production frontend lives in `apps/web`. Its primary route is `/today`, promoted from approved prototype Variant A. Production uses the HTTP `TodayService` adapter and the Rust service in `services/web-api`; the mock adapter remains for isolated frontend tests.
 
 ```powershell
 pnpm install --frozen-lockfile
+$env:OPENAI_API_KEY="<LUNA_PROJECT_API_KEY>"
+$env:LUNA_OPENAI_MODEL="<EXPLICIT_SUPPORTED_MODEL>"
+cargo run --manifest-path services/web-api/Cargo.toml
+```
+
+In a second terminal:
+
+```powershell
 pnpm --filter luna-web-prototype dev
 ```
 
@@ -36,7 +46,9 @@ pnpm --filter luna-web-prototype typecheck
 pnpm --filter luna-web-prototype build
 ```
 
-The production route includes the proactive briefing, Household Work reports, continuous conversation, persistent composer, responsive working context and local mock actions. Replace the mock adapter only after the route is accepted and the authenticated household-service contract is separately approved.
+The backend binds only to `127.0.0.1:8787` and stores local development state under `.luna/web` by default. `LUNA_WEB_DATA_DIR` changes that private location. Optional `LUNA_DEV_MEMBER_ID`, `LUNA_DEV_MEMBER_NAME`, `LUNA_DEV_HOUSEHOLD_ID` and `LUNA_DEV_HOUSEHOLD_NAME` values configure the trusted local review identity. These are development defaults, not production authentication.
+
+The production route includes the proactive briefing, durable Household Work, one global conversation, bounded PDF/JPG/PNG upload, explicit approval/correction/completion/dismissal and refresh persistence. Gmail, cloud storage, workers and Daily Briefing automation remain deferred.
 
 ## Deferred desktop application
 

@@ -47,9 +47,11 @@ The engine uses narrow Rust interfaces for:
 - untrusted Household Administration reasoning; and
 - deterministic time.
 
-The same interface is exercised by in-memory integration adapters and the Tauri compatibility adapter. The MVP production implementation is `OpenAiHouseholdAdministrationReasoningAdapter`, which receives a server-side API key and explicit model configuration and calls the OpenAI Responses API directly. Opt-in headless live diagnostics compose that adapter without Tauri, Device PIN, an operating-system vault, LiteLLM or a managed gateway.
+The same interface is exercised by in-memory integration adapters, the web adapter and the Tauri compatibility adapter. The MVP production implementation is `OpenAiHouseholdAdministrationReasoningAdapter`, which receives a server-side API key and explicit model configuration and calls the OpenAI Responses API directly. Opt-in headless live diagnostics compose that adapter without Tauri, Device PIN, an operating-system vault, LiteLLM or a managed gateway.
 
-Tauri remains responsible for the desktop session, legacy `DocumentArrival` translation, local file access, encrypted SQLite, OS-vault credentials and desktop compatibility capture. A future web host should supply server-side adapters to this same engine interface; this decision does not introduce a web endpoint, web authentication, storage connector or background worker.
+`services/web-api` is the first web host for this seam. It supplies server-side SQLite, bounded-source and global-conversation adapters and exposes only the endpoints required by `Today`. Tauri remains responsible for the desktop session, legacy `DocumentArrival` translation, local file access, encrypted SQLite, OS-vault credentials and desktop compatibility capture. The web adapter does not introduce production authentication, a cloud-storage connector or a background worker.
+
+Explicit member buttons use `HouseholdAdministrationEngine::handle_work_command` for approval, completion, dismissal and fact correction. This is a Luna-owned authority path and never asks OpenAI to approve its own proposal.
 
 ## Conceptual responsibilities
 

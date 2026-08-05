@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createMockTodayService } from "./mockTodayService";
+import { createHttpTodayService } from "./httpTodayService";
 import type { HouseholdWorkView, TodayService } from "./contracts";
 import { useToday } from "./useToday";
 import { BriefingHeader, BriefingStream } from "./components/BriefingStream";
@@ -19,7 +19,7 @@ function layoutForWidth(width: number): LayoutMode {
 }
 
 export function TodayRoute({ service }: { service?: TodayService }) {
-  const todayService = useMemo(() => service ?? createMockTodayService(), [service]);
+  const todayService = useMemo(() => service ?? createHttpTodayService(), [service]);
   const today = useToday(todayService);
   const [layout, setLayout] = useState<LayoutMode>("desktop");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);

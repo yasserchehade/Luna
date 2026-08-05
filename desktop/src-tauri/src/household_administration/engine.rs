@@ -7,10 +7,11 @@ use crate::{
 };
 
 use super::{
-    ConversationPort, HandleHouseholdAdministrationTurn, HouseholdAdministrationClock,
-    HouseholdAdministrationFailure, HouseholdAdministrationFailureCategory,
-    HouseholdAdministrationOutcome, HouseholdAdministrationReasoning, HouseholdWorkPort,
-    ReasoningPortError, SourcePort, SourcePortError, HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION,
+    ConversationPort, HandleHouseholdAdministrationTurn, HandleHouseholdWorkCommand,
+    HouseholdAdministrationClock, HouseholdAdministrationFailure,
+    HouseholdAdministrationFailureCategory, HouseholdAdministrationOutcome,
+    HouseholdAdministrationReasoning, HouseholdWorkCommand, HouseholdWorkPort, ReasoningPortError,
+    SourcePort, SourcePortError, HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION,
 };
 
 const RECENT_CONVERSATION_LIMIT: usize = 12;
@@ -240,6 +241,141 @@ impl<'a> HouseholdAdministrationEngine<'a> {
             proposed_actions: validated.proposed_actions,
             audit_events,
         })
+    }
+
+    pub fn handle_work_command(
+        &self,
+        input: HandleHouseholdWorkCommand,
+    ) -> Result<HouseholdAdministrationOutcome, HouseholdAdministrationFailure> {
+        if input.household_id.trim().is_empty()
+            || input.conversation_id <= 0
+            || input.work_id.trim().is_empty()
+            || input.authorised_actor.trim().is_empty()
+            || input.request_id.trim().is_empty()
+        {
+            return Err(failure(
+                HouseholdAdministrationFailureCategory::InvalidInput,
+                "The Household Work command is incomplete.",
+            ));
+        }
+        let (member_message, luna_message) = command_messages(&input.command);
+        self.conversations
+            .append_member_message(&input.household_id, input.conversation_id, &member_message)
+            .map_err(|_| persistence_failure())?;
+        let mut work = self
+            .household_work
+            .list(&input.household_id)
+            .map_err(|_| persistence_failure())?
+            .into_iter()
+            .find(|work| work.id == input.work_id)
+            .ok_or_else(|| {
+                failure(
+                    HouseholdAdministrationFailureCategory::MissingExistingWork,
+                    "The Household Work selected for this command no longer exists.",
+                )
+            })?;
+        if work.status.is_terminal() {
+            return Err(failure(
+                HouseholdAdministrationFailureCategory::InvalidCorrectionTarget,
+                "Terminal Household Work cannot be changed by this command.",
+            ));
+        }
+        let now = self.clock.now();
+        let audit = match input.command {
+            HouseholdWorkCommand::ApproveAction { action_id } => {
+                let action = work
+                    .proposed_actions
+                    .iter_mut()
+                    .find(|action| {
+                        action.id == action_id && action.approval == ActionApproval::Required
+                    })
+                    .ok_or_else(|| {
+                        failure(
+                            HouseholdAdministrationFailureCategory::InvalidInput,
+                            "The proposed action is no longer awaiting approval.",
+                        )
+                    })?;
+                action.approval = ActionApproval::Approved;
+                work.status = HouseholdWorkStatus::Monitoring;
+                format!("Proposed action approved by {}", input.authorised_actor)
+            }
+            HouseholdWorkCommand::Complete => {
+                work.status = HouseholdWorkStatus::Completed;
+                work.closed_at = Some(now.clone());
+                format!("Household Work completed by {}", input.authorised_actor)
+            }
+            HouseholdWorkCommand::Dismiss => {
+                work.status = HouseholdWorkStatus::Dismissed;
+                work.closed_at = Some(now.clone());
+                format!("Household Work dismissed by {}", input.authorised_actor)
+            }
+            HouseholdWorkCommand::CorrectFact { key, value } => {
+                let value = value.trim();
+                if value.is_empty() {
+                    return Err(failure(
+                        HouseholdAdministrationFailureCategory::InvalidInput,
+                        "The corrected fact value is empty.",
+                    ));
+                }
+                let fact = work
+                    .facts
+                    .iter_mut()
+                    .find(|fact| fact.key == key)
+                    .ok_or_else(|| {
+                        failure(
+                            HouseholdAdministrationFailureCategory::InvalidCorrectionTarget,
+                            "The Household Work fact selected for correction no longer exists.",
+                        )
+                    })?;
+                fact.value = value.to_owned();
+                fact.evidence_refs = vec!["conversation-member".to_owned()];
+                format!(
+                    "Household Work fact corrected by {}",
+                    input.authorised_actor
+                )
+            }
+        };
+        work.record_audit(audit, now);
+        self.household_work
+            .save(&input.household_id, &work)
+            .map_err(|_| persistence_failure())?;
+        self.conversations
+            .append_luna_message(
+                &input.household_id,
+                input.conversation_id,
+                &luna_message,
+                None,
+            )
+            .map_err(|_| persistence_failure())?;
+        Ok(HouseholdAdministrationOutcome {
+            request_id: input.request_id,
+            message: luna_message,
+            work: Some(work.clone()),
+            clarification: None,
+            proposed_actions: Vec::new(),
+            audit_events: work.audit_events,
+        })
+    }
+}
+
+fn command_messages(command: &HouseholdWorkCommand) -> (String, String) {
+    match command {
+        HouseholdWorkCommand::ApproveAction { .. } => (
+            "Approve this proposed action.".to_owned(),
+            "I approved that action and will keep the Household Work in view.".to_owned(),
+        ),
+        HouseholdWorkCommand::Complete => (
+            "This household work is complete.".to_owned(),
+            "I marked that Household Work complete.".to_owned(),
+        ),
+        HouseholdWorkCommand::Dismiss => (
+            "Dismiss this household work.".to_owned(),
+            "I dismissed that Household Work.".to_owned(),
+        ),
+        HouseholdWorkCommand::CorrectFact { key, value } => (
+            format!("Correct {key:?} to {}.", value.trim()),
+            "I corrected that fact and left the rest unchanged.".to_owned(),
+        ),
     }
 }
 

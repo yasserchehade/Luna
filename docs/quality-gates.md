@@ -13,7 +13,7 @@ Tests observe behavior through public boundaries:
 
 Tests must not reach into private functions, inspect persistence as a shortcut around a public interface or treat model output as accepted state. Expected results come from specifications, fixtures and worked examples rather than restating implementation.
 
-The production `/today` frontend uses interaction tests through its rendered route plus contract tests through the `TodayService` seam. The current adapter is fixture-backed; browser acceptance runs at `/today` across desktop, tablet and mobile widths. A future service integration must add API-boundary coverage without replacing these household-member-facing checks or making snapshots the primary evidence.
+The production `/today` frontend uses interaction tests through its rendered route plus contract tests through both mock and HTTP `TodayService` adapters. Browser acceptance runs at `/today` across desktop, tablet and mobile widths. Rust API tests exercise the HTTP-to-engine-to-persistence boundary without replacing these household-member-facing checks or making snapshots the primary evidence.
 
 Current frontend evidence and exact review instructions are recorded in [Today frontend validation](./testing/web-today.md).
 

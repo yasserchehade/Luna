@@ -119,6 +119,10 @@ The internal domain term for Household Work that requires attention, a decision 
 **Source**:
 An email, message, document, attachment, calendar event or connected-service record that provides evidence for Household Work. A Source does not own the work lifecycle.
 
+**Opaque Source Reference**:
+A server-issued identifier that lets Household Work and conversation refer to an uploaded Source without exposing its storage key or filesystem location to a client.
+_Avoid_: File path, upload path
+
 **Document**:
 The logical household record that connects one or more arrivals or versions to household context and filing decisions.
 _Avoid_: File

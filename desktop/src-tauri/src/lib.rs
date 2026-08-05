@@ -36,9 +36,10 @@ pub use document_intelligence::{
 };
 pub use household_administration::{
     ConversationPort, ConversationPortError, FixedHouseholdAdministrationClock,
-    HandleHouseholdAdministrationTurn, HouseholdAdministrationClock, HouseholdAdministrationEngine,
-    HouseholdAdministrationFailure, HouseholdAdministrationFailureCategory,
-    HouseholdAdministrationOutcome, HouseholdAdministrationReasoning, HouseholdWorkPort,
+    HandleHouseholdAdministrationTurn, HandleHouseholdWorkCommand, HouseholdAdministrationClock,
+    HouseholdAdministrationEngine, HouseholdAdministrationFailure,
+    HouseholdAdministrationFailureCategory, HouseholdAdministrationOutcome,
+    HouseholdAdministrationReasoning, HouseholdWorkCommand, HouseholdWorkPort,
     HouseholdWorkPortError, OpenAiHouseholdAdministrationReasoningAdapter, ReasoningPortError,
     SourcePort, SourcePortError, SystemHouseholdAdministrationClock,
     HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION,

@@ -10,13 +10,13 @@ The three-variant prototype remains primary-source design evidence on branch `co
 
 ## Production frontend status
 
-Variant A is promoted into the production frontend foundation at `/today` on branch `codex/promote-variant-a-today`. The root web route redirects to `Today`. The production route has no variant switcher, founder-review controls, query-driven fixture states or visible implementation notes. The historical three-variant prototype remains available only at its explicit `/prototype/web-first` path as design evidence.
+Variant A is promoted into the production frontend foundation at `/today`. The root web route redirects to `Today`. The production route has no variant switcher, founder-review controls, query-driven fixture states or visible implementation notes. The historical three-variant prototype remains available only at its explicit `/prototype/web-first` path as design evidence.
 
-The route currently consumes the web-facing `TodayService` interface through an in-browser mock adapter. The adapter owns fixture briefing data and local mutation behavior for approval, correction, dismissal, completion, attachment and conversation. UI modules do not import fixture data directly and do not copy Rust domain types. This is a frontend contract and interaction foundation, not evidence of production authentication, persistence, background review, OpenAI, email or storage connectivity.
+The production route consumes the web-facing `TodayService` interface through an HTTP adapter connected to the Rust `HouseholdAdministrationEngine`. The browser does not call OpenAI and does not copy Rust Household Administration logic. A mock adapter remains for isolated frontend interaction tests and the historical prototype only.
 
-`TodayService` exposes one chronological household conversation. Messages may cite zero, one or several contextual Household Work identifiers, and a conversational result identifies every affected work item or a clarification request. Household Work does not own a separate per-report conversation. The mock adapter resolves explicit work references first, treats selected work only as an optional hint, preserves unrelated work and asks a clarifying question when a consequential reference is ambiguous.
+`TodayService` exposes one durable chronological household conversation. Messages may cite zero, one or several contextual Household Work identifiers, and a conversational result identifies every affected work item or a clarification request. Household Work does not own a separate per-report conversation. The engine resolves source-linked and explicit work references, treats selected work only as an optional hint, preserves unrelated work and rejects unsafe ambiguous corrections.
 
-Backend integration remains blocked on founder acceptance of the production route. Once accepted, the next implementation design should map the approved web-facing contracts to a minimal authenticated household service without changing the accepted information hierarchy.
+The first backend is a local MVP adapter with trusted development identity, SQLite and a private bounded source store. It proves the uploaded-document journey and refresh persistence; it is not evidence of production authentication, deployment, background review, email or connected cloud storage.
 
 ## Experience promise
 
