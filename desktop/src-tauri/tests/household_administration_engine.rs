@@ -136,6 +136,24 @@ struct FixtureReasoningPort {
     request: Arc<Mutex<Option<HouseholdAdministrationRequest>>>,
 }
 
+struct CapturingReasoningPort<R> {
+    inner: R,
+    result: Arc<Mutex<Option<Result<UntrustedHouseholdAdministrationResult, ReasoningPortError>>>>,
+}
+
+impl<R: HouseholdAdministrationReasoning> HouseholdAdministrationReasoning
+    for CapturingReasoningPort<R>
+{
+    fn reason(
+        &self,
+        request: &HouseholdAdministrationRequest,
+    ) -> Result<UntrustedHouseholdAdministrationResult, ReasoningPortError> {
+        let result = self.inner.reason(request);
+        *self.result.lock().expect("reasoning result lock") = Some(result.clone());
+        result
+    }
+}
+
 impl HouseholdAdministrationReasoning for FixtureReasoningPort {
     fn reason(
         &self,
@@ -834,6 +852,59 @@ fn live_openai_reasoning() -> OpenAiHouseholdAdministrationReasoningAdapter {
         .expect("set server-side OPENAI_API_KEY and explicit LUNA_OPENAI_MODEL")
 }
 
+fn sanitised_live_result(
+    result: &Arc<Mutex<Option<Result<UntrustedHouseholdAdministrationResult, ReasoningPortError>>>>,
+) -> String {
+    match result.lock().expect("reasoning result lock").as_ref() {
+        Some(Ok(result)) => format!(
+            "provider={} model={} operation={:?} work_id={:?} status={:?} facts={:?} clarification={} action_kinds={:?} input_tokens={:?} output_tokens={:?}",
+            result.provider_id,
+            result.model_id,
+            result.work.operation,
+            result.work.work_id,
+            result.work.status,
+            result.work.facts.iter().map(|fact| {
+                let value_class = if fact.key == WorkFactKey::Property {
+                    let value = fact.value.to_ascii_lowercase();
+                    if value.contains("rental") {
+                        "rental"
+                    } else if value.contains("seabreeze") {
+                        "authorised-address"
+                    } else if value.contains("home") {
+                        "home"
+                    } else {
+                        "other"
+                    }
+                } else {
+                    "redacted"
+                };
+                let evidence_classes = fact.evidence_refs.iter().map(|reference| {
+                    if reference == "document-41" {
+                        "source"
+                    } else if reference == "conversation-member" {
+                        "conversation"
+                    } else if reference == "household-property-seabreeze" {
+                        "household-context"
+                    } else {
+                        "other"
+                    }
+                }).collect::<Vec<_>>();
+                (fact.key.clone(), value_class, evidence_classes)
+            }).collect::<Vec<_>>(),
+            result.clarification.is_some(),
+            result
+                .proposed_actions
+                .iter()
+                .map(|action| action.kind)
+                .collect::<Vec<_>>(),
+            result.usage.input_tokens,
+            result.usage.output_tokens,
+        ),
+        Some(Err(error)) => format!("reasoning_error={error:?}"),
+        None => "reasoning_result=missing".to_owned(),
+    }
+}
+
 fn live_image_source(png: Vec<u8>) -> FixtureSourcePort {
     FixtureSourcePort {
         source: HouseholdAdministrationSource {
@@ -860,13 +931,18 @@ fn live_openai_reasoning_isolates_clarification_without_desktop_state() {
         fail_save: false,
     };
     let source = live_image_source(sanitised_agl_bill_png());
-    let reasoning = live_openai_reasoning();
+    let captured = Arc::new(Mutex::new(None));
+    let reasoning = CapturingReasoningPort {
+        inner: live_openai_reasoning(),
+        result: captured.clone(),
+    };
     let clock = FixedHouseholdAdministrationClock::new("2026-08-05T11:00:00Z");
     let engine =
         HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
     let outcome = engine
         .handle_turn(turn_input("The rental property.", "live-clarification"))
         .expect("live clarification result");
+    eprintln!("live clarification {}", sanitised_live_result(&captured));
     let updated = outcome.work.expect("updated Household Work");
     assert_eq!(updated.id, "work-1");
     assert!(updated.facts.iter().any(|fact| {
@@ -904,16 +980,20 @@ fn live_openai_reasoning_isolates_correction_without_desktop_state() {
         fail_save: false,
     };
     let source = live_image_source(sanitised_agl_bill_png());
-    let reasoning = live_openai_reasoning();
+    let captured = Arc::new(Mutex::new(None));
+    let reasoning = CapturingReasoningPort {
+        inner: live_openai_reasoning(),
+        result: captured.clone(),
+    };
     let clock = FixedHouseholdAdministrationClock::new("2026-08-05T11:01:00Z");
     let engine =
         HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
-    let outcome = engine
-        .handle_turn(turn_input(
-            "That bill is for the rental property, not our home.",
-            "live-correction",
-        ))
-        .expect("live correction result");
+    let outcome = engine.handle_turn(turn_input(
+        "That bill is for the rental property, not our home.",
+        "live-correction",
+    ));
+    eprintln!("live correction {}", sanitised_live_result(&captured));
+    let outcome = outcome.expect("live correction result");
     let updated = outcome.work.expect("updated Household Work");
     assert_eq!(updated.id, "work-1");
     assert!(updated.facts.iter().any(|fact| {
@@ -937,13 +1017,18 @@ fn live_openai_reasoning_isolates_scanned_image_without_desktop_state() {
     let conversations = MemoryConversationPort::default();
     let work = MemoryHouseholdWorkPort::default();
     let source = live_image_source(sanitised_sydney_water_bill_png());
-    let reasoning = live_openai_reasoning();
+    let captured = Arc::new(Mutex::new(None));
+    let reasoning = CapturingReasoningPort {
+        inner: live_openai_reasoning(),
+        result: captured.clone(),
+    };
     let clock = FixedHouseholdAdministrationClock::new("2026-08-05T11:02:00Z");
     let engine =
         HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
     let outcome = engine
         .handle_turn(turn_input("Take care of this.", "live-scanned-image"))
         .expect("live scanned-image result");
+    eprintln!("live scanned image {}", sanitised_live_result(&captured));
     let created = outcome.work.expect("created Household Work");
     assert!(created
         .facts

@@ -199,7 +199,7 @@ fn openai_household_administration_request(
                 "role": "system",
                 "content": [{
                     "type": "input_text",
-                    "text": "You are Luna's household-administration reasoning engine. Use the supplied source, relevant conversation and authorised household context. Return only the requested structured proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification. Corrections and clarifications must patch only the relevant facts and preserve unrelated Household Work state."
+                    "text": "You are Luna's household-administration reasoning engine. Use the supplied source, relevant conversation and authorised household context. Return only the requested structured proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification. For an update, the work.facts array is a PATCH, never a replacement: include only facts newly supplied or corrected by currentMessage. Never repeat unchanged facts from the source or existing Household Work. Leave kind, summary, status, dueAt and urgency null unless currentMessage directly changes that field. If currentMessage answers a clarification or corrects a fact, target the existing sourceLinkedHouseholdWork work ID, preserve the exact member phrase as the fact value unless an explicit household-context mapping proves a more precise identity, and use conversation-member as its evidence reference. Leave proposedActions empty unless currentMessage requests a new proposal."
                 }]
             },
             {"role": "user", "content": content}
@@ -825,5 +825,55 @@ mod tests {
             adapter.reason(&incompatible_request),
             Err(ReasoningPortError::OpenAiContractMismatch)
         );
+    }
+
+    #[test]
+    fn direct_openai_prompt_requires_member_corrections_as_partial_fact_patches() {
+        let transport = Arc::new(FixtureTransport {
+            response: Ok(json!({
+                "id": "resp_openai_partial_patch",
+                "model": "gpt-5.6-sol",
+                "output_text": serde_json::to_string(&json!({
+                    "reply": "I updated the property.",
+                    "work": {
+                        "operation": "update",
+                        "workId": "work-1",
+                        "kind": null,
+                        "summary": null,
+                        "status": null,
+                        "facts": [{
+                            "key": "property",
+                            "value": "The rental property",
+                            "evidenceRefs": ["conversation-member"],
+                            "certainty": "confirmed"
+                        }],
+                        "dueAt": null,
+                        "urgency": null
+                    },
+                    "clarification": null,
+                    "proposedActions": []
+                })).expect("structured result"),
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            })),
+            requests: Mutex::new(Vec::new()),
+        });
+        let adapter = OpenAiHouseholdAdministrationReasoningAdapter::with_transport(
+            "server-secret",
+            "gpt-5.6",
+            transport.clone(),
+        )
+        .expect("configured adapter");
+
+        adapter.reason(&request()).expect("valid partial patch");
+
+        let requests = transport.requests.lock().expect("requests");
+        let instructions = requests[0]["input"][0]["content"][0]["text"]
+            .as_str()
+            .expect("system instructions");
+        assert!(instructions.contains("facts array is a PATCH"));
+        assert!(instructions.contains("exact member phrase"));
+        assert!(instructions.contains("conversation-member"));
+        assert!(instructions.contains("Never repeat unchanged facts"));
+        assert!(instructions.contains("Leave kind, summary, status, dueAt and urgency null"));
     }
 }

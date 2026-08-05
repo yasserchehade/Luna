@@ -1,6 +1,6 @@
 # Household Administration core extraction assessment
 
-Status: first narrow extraction and direct OpenAI adapter implemented; live direct-OpenAI diagnostics pending credentials
+Status: first narrow extraction and direct OpenAI adapter implemented; headless live acceptance passed
 
 Assessed implementation baseline: PR #76 extraction head `66ce7751c8f128b060feee4b87bf1b772e5958cd`
 
@@ -20,7 +20,9 @@ The production Tauri command delegates to the same interface through desktop ada
 
 The implementation remains a coherent module in the existing Rust library rather than a new workspace crate. This is the smallest extraction that avoids a broad package reorganisation. The module itself imports no Tauri, SQLite, credential-vault, Cabinet, navigation, frontend or filesystem-path type. A later packaging change is still required before a web host can depend on a Rust crate that does not compile the surrounding desktop runtime.
 
-Headless integration coverage is in `desktop/src-tauri/tests/household_administration_engine.rs`. Twelve deterministic tests pass without a Tauri runtime, Device PIN, OS vault, application launch or network. Five direct-adapter unit tests cover strict structured output, Luna-owned envelope metadata, PDF/image input, configuration/contract failure and provider error categories. Three ignored live diagnostics compose the same engine with fixture sources, in-memory persistence and `OpenAiHouseholdAdministrationReasoningAdapter`. They require only server-side `OPENAI_API_KEY` and explicit `LUNA_OPENAI_MODEL`. Neither variable is available in the current environment, so clarification, correction and scanned-image live evidence is still pending; no managed gateway or desktop fallback is required.
+Headless integration coverage is in `desktop/src-tauri/tests/household_administration_engine.rs`. Twelve deterministic tests pass without a Tauri runtime, Device PIN, OS vault, application launch or network. Six direct-adapter unit tests cover strict structured output, Luna-owned envelope metadata, PDF/image input, configuration/contract failure, provider error categories and partial clarification/correction instructions. Three ignored live diagnostics compose the same engine with fixture sources, in-memory persistence and `OpenAiHouseholdAdministrationReasoningAdapter`.
+
+On 5 August 2026 all three live diagnostics passed using a dedicated project key loaded only into the test process and explicit `LUNA_OPENAI_MODEL=gpt-5.6`; the OpenAI response envelope identified `gpt-5.6-sol`. The first clarification run exposed a specific prompt defect: the provider repeated the complete fact set and resolved the member phrase to a generic authorised address instead of returning one member-supplied patch. The correction run was also nondeterministic at Luna's validation boundary. The smallest correction made the prompt state that `work.facts` is a patch, unchanged facts must not be repeated, unrelated fields stay null, and member clarification/correction values use exact member wording with conversation provenance. A deterministic transport-contract regression locks those instructions. Final clarification and correction each returned one `Property` patch for `work-1`, preserved unrelated facts and proposals and created no duplicate. The image-only PNG created and persisted new Household Work with visible provider, property, account, amount and due-date facts. No Tauri runtime, desktop UI, Device PIN, managed gateway, LiteLLM or application launch was used.
 
 ## Decision summary
 
@@ -243,11 +245,11 @@ The previously observed generic failure can therefore be reproduced through the 
 | Legacy Document Handling remains a second durable owner | Treat `DocumentArrival` as source/projection compatibility only and preserve Household Work as the transition authority. |
 | Cabinet/portable capture can still fail a valid turn | Move capture to a post-commit desktop compatibility action with separately visible failure. |
 | The existing crate name causes false confidence | Establish an actually independent crate with dependency checks; do not merely rename the desktop crate. |
-| The exact PR #76 live failure is still unknown | Preserve the scenario as a fixture and require the new harness to expose a typed category before attempting a behavioural fix. |
+| OpenAI repeats complete state instead of a partial correction | The direct adapter prompt defines `work.facts` as a patch, requires conversation provenance for member-supplied values and leaves unrelated fields null; a deterministic transport-contract test and headless live clarification/correction tests enforce the boundary. |
 | Web-first documentation and PR #76 branch history may be temporarily divergent | Do not mix unrelated web implementation into this extraction. Rebase/cherry-pick only through the normal reviewed branch process. |
 
 ## Implemented extraction task
 
 The narrow extraction introduced `HouseholdAdministrationEngine::handle_turn`, fixture reasoning/source adapters and in-memory repository coverage without changing React, the web interface, Household Work semantics, connectors, background processing or the Daily Briefing. The existing desktop crate was retained to avoid broad package movement; the module can move to a standalone crate when a real non-desktop host is ready to consume it.
 
-The next decision is whether to provide server-side `OPENAI_API_KEY` and explicit `LUNA_OPENAI_MODEL` for the three opt-in headless diagnostics. Until that evidence exists, deterministic PR #76 behaviour and direct-adapter translation are independently validated, but final live clarification, correction and scanned-image acceptance is not cleared.
+The direct OpenAI clarification, correction and scanned-image acceptance evidence is complete. The next step is founder final acceptance of PR #76; this assessment does not authorise merge or the deferred Gmail, storage, web-integration, worker or Daily Briefing phases.
