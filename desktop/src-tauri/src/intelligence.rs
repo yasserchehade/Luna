@@ -1809,7 +1809,8 @@ pub(crate) fn validate_household_result(
     }
     if result.request_id != request.request_id
         || result.provider_id != MANAGED_INTELLIGENCE_PROVIDER_ID
-        || result.model_id != MANAGED_INTELLIGENCE_MODEL_ID
+        || result.model_id.trim().is_empty()
+        || result.model_id.chars().count() > 256
         || result.reply.trim().is_empty()
         || result.reply.chars().count() > 4_000
         || result.work.facts.len() > 16

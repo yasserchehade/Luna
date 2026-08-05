@@ -1,8 +1,11 @@
 use std::{
     collections::BTreeMap,
+    io::Cursor,
     sync::{Arc, Mutex},
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
 use luna_core::{
     ActionApproval, ActionExecution, AvailableHouseholdTool, ConversationPort,
     ConversationPortError, FixedHouseholdAdministrationClock, HandleHouseholdAdministrationTurn,
@@ -11,7 +14,7 @@ use luna_core::{
     HouseholdAdministrationRequest, HouseholdAdministrationSource, HouseholdContextItem,
     HouseholdWork, HouseholdWorkKind, HouseholdWorkOperation, HouseholdWorkPort,
     HouseholdWorkPortError, HouseholdWorkProposal, HouseholdWorkStatus, IntelligenceUsage,
-    ManagedHouseholdAdministrationReasoningAdapter, ProposedAction, ProposedActionKind,
+    OpenAiHouseholdAdministrationReasoningAdapter, ProposedAction, ProposedActionKind,
     ReasoningPortError, SourcePort, SourcePortError, UntrustedHouseholdAdministrationResult,
     WorkFact, WorkFactCertainty, WorkFactKey,
 };
@@ -826,48 +829,61 @@ fn persistence_failure_has_an_exact_failure_category() {
     );
 }
 
-fn live_managed_reasoning() -> ManagedHouseholdAdministrationReasoningAdapter {
-    let endpoint = std::env::var("LUNA_MANAGED_INTELLIGENCE_URL")
-        .expect("set LUNA_MANAGED_INTELLIGENCE_URL for the opt-in live diagnostic");
-    let credential = std::env::var("LUNA_MANAGED_INTELLIGENCE_GATEWAY_CREDENTIAL")
-        .expect("set LUNA_MANAGED_INTELLIGENCE_GATEWAY_CREDENTIAL for the opt-in live diagnostic");
-    ManagedHouseholdAdministrationReasoningAdapter::new(endpoint, credential.into_bytes())
+fn live_openai_reasoning() -> OpenAiHouseholdAdministrationReasoningAdapter {
+    OpenAiHouseholdAdministrationReasoningAdapter::from_env()
+        .expect("set server-side OPENAI_API_KEY and explicit LUNA_OPENAI_MODEL")
 }
 
-fn live_image_source(text: &str) -> FixtureSourcePort {
-    let mut source = fixture_source("document-41", "image/png", text);
-    source.source.original_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".to_owned();
-    source.source.original_size_bytes = 68;
-    source
+fn live_image_source(png: Vec<u8>) -> FixtureSourcePort {
+    FixtureSourcePort {
+        source: HouseholdAdministrationSource {
+            reference: "document-41".to_owned(),
+            filename: "sanitised-household-bill.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            original_base64: BASE64.encode(&png),
+            extracted_text: None,
+            original_size_bytes: png.len() as u64,
+            extracted_text_truncated: false,
+        },
+    }
 }
 
 #[test]
-#[ignore = "requires an explicitly injected live managed gateway endpoint and credential"]
-fn live_managed_reasoning_isolates_clarification_without_desktop_state() {
+#[ignore = "requires server-side OPENAI_API_KEY and explicit LUNA_OPENAI_MODEL"]
+fn live_openai_reasoning_isolates_clarification_without_desktop_state() {
     let conversations = MemoryConversationPort::default();
+    let existing = existing_bill(HouseholdWorkStatus::NeedsClarification);
+    let preserved_facts = existing.facts.clone();
+    let preserved_actions = existing.proposed_actions.clone();
     let work = MemoryHouseholdWorkPort {
-        works: Mutex::new(vec![existing_bill(HouseholdWorkStatus::NeedsClarification)]),
+        works: Mutex::new(vec![existing]),
         fail_save: false,
     };
-    let source = live_image_source(
-        "Synthetic AGL bill for $184.72 due 15 August 2026. Property is not shown.",
-    );
-    let reasoning = live_managed_reasoning();
+    let source = live_image_source(sanitised_agl_bill_png());
+    let reasoning = live_openai_reasoning();
     let clock = FixedHouseholdAdministrationClock::new("2026-08-05T11:00:00Z");
     let engine =
         HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
     let outcome = engine
         .handle_turn(turn_input("The rental property.", "live-clarification"))
         .expect("live clarification result");
-    eprintln!(
-        "live-managed scenario=clarification status={:?}",
-        outcome.work.map(|work| work.status)
-    );
+    let updated = outcome.work.expect("updated Household Work");
+    assert_eq!(updated.id, "work-1");
+    assert!(updated.facts.iter().any(|fact| {
+        fact.key == WorkFactKey::Property && fact.value.to_ascii_lowercase().contains("rental")
+    }));
+    for fact in preserved_facts {
+        assert!(updated.facts.contains(&fact));
+    }
+    assert_eq!(updated.proposed_actions, preserved_actions);
+    assert_eq!(work.works.lock().expect("work lock").len(), 1);
+    assert!(!outcome.message.trim().is_empty());
+    assert!(!outcome.message.trim_start().starts_with('{'));
 }
 
 #[test]
-#[ignore = "requires an explicitly injected live managed gateway endpoint and credential"]
-fn live_managed_reasoning_isolates_correction_without_desktop_state() {
+#[ignore = "requires server-side OPENAI_API_KEY and explicit LUNA_OPENAI_MODEL"]
+fn live_openai_reasoning_isolates_correction_without_desktop_state() {
     let conversations = MemoryConversationPort::default();
     let mut existing = existing_bill(HouseholdWorkStatus::Active);
     existing.facts.push(WorkFact {
@@ -876,12 +892,19 @@ fn live_managed_reasoning_isolates_correction_without_desktop_state() {
         evidence_refs: vec!["document-41".to_owned()],
         certainty: WorkFactCertainty::Likely,
     });
+    let preserved_facts = existing
+        .facts
+        .iter()
+        .filter(|fact| fact.key != WorkFactKey::Property)
+        .cloned()
+        .collect::<Vec<_>>();
+    let preserved_actions = existing.proposed_actions.clone();
     let work = MemoryHouseholdWorkPort {
         works: Mutex::new(vec![existing]),
         fail_save: false,
     };
-    let source = live_image_source("Synthetic AGL bill for account 7788 and $184.72.");
-    let reasoning = live_managed_reasoning();
+    let source = live_image_source(sanitised_agl_bill_png());
+    let reasoning = live_openai_reasoning();
     let clock = FixedHouseholdAdministrationClock::new("2026-08-05T11:01:00Z");
     let engine =
         HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
@@ -891,29 +914,200 @@ fn live_managed_reasoning_isolates_correction_without_desktop_state() {
             "live-correction",
         ))
         .expect("live correction result");
-    eprintln!(
-        "live-managed scenario=correction status={:?}",
-        outcome.work.map(|work| work.status)
-    );
+    let updated = outcome.work.expect("updated Household Work");
+    assert_eq!(updated.id, "work-1");
+    assert!(updated.facts.iter().any(|fact| {
+        fact.key == WorkFactKey::Property && fact.value.to_ascii_lowercase().contains("rental")
+    }));
+    assert!(!updated.facts.iter().any(|fact| {
+        fact.key == WorkFactKey::Property && fact.value.eq_ignore_ascii_case("our home")
+    }));
+    for fact in preserved_facts {
+        assert!(updated.facts.contains(&fact));
+    }
+    assert_eq!(updated.proposed_actions, preserved_actions);
+    assert_eq!(work.works.lock().expect("work lock").len(), 1);
+    assert!(!outcome.message.trim().is_empty());
+    assert!(!outcome.message.trim_start().starts_with('{'));
 }
 
 #[test]
-#[ignore = "requires an explicitly injected live managed gateway endpoint and credential"]
-fn live_managed_reasoning_isolates_scanned_image_without_desktop_state() {
+#[ignore = "requires server-side OPENAI_API_KEY and explicit LUNA_OPENAI_MODEL"]
+fn live_openai_reasoning_isolates_scanned_image_without_desktop_state() {
     let conversations = MemoryConversationPort::default();
     let work = MemoryHouseholdWorkPort::default();
-    let source = live_image_source(
-        "Synthetic scanned Sydney Water bill for the rental property. $96.40 due 20 August 2026.",
-    );
-    let reasoning = live_managed_reasoning();
+    let source = live_image_source(sanitised_sydney_water_bill_png());
+    let reasoning = live_openai_reasoning();
     let clock = FixedHouseholdAdministrationClock::new("2026-08-05T11:02:00Z");
     let engine =
         HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
     let outcome = engine
         .handle_turn(turn_input("Take care of this.", "live-scanned-image"))
         .expect("live scanned-image result");
-    eprintln!(
-        "live-managed scenario=scanned-image status={:?}",
-        outcome.work.map(|work| work.status)
-    );
+    let created = outcome.work.expect("created Household Work");
+    assert!(created
+        .facts
+        .iter()
+        .any(|fact| fact.key == WorkFactKey::Provider && fact.value.contains("Sydney Water")));
+    assert!(created
+        .facts
+        .iter()
+        .any(|fact| fact.key == WorkFactKey::Amount && fact.value.contains("96.40")));
+    assert!(created.facts.iter().any(|fact| {
+        fact.key == WorkFactKey::DueDate
+            && (fact.value.contains("2026-08-20") || fact.value.contains("20 August 2026"))
+    }));
+    assert_eq!(work.works.lock().expect("work lock").len(), 1);
+    assert!(!outcome.message.trim().is_empty());
+}
+
+fn sanitised_agl_bill_png() -> Vec<u8> {
+    sanitised_bill_png(&[
+        "AGL ENERGY",
+        "ACCOUNT 7788",
+        "AMOUNT $184.72",
+        "DUE 15 AUGUST 2026",
+    ])
+}
+
+fn sanitised_sydney_water_bill_png() -> Vec<u8> {
+    sanitised_bill_png(&[
+        "SYDNEY WATER",
+        "ACCOUNT 7788",
+        "AMOUNT $96.40",
+        "DUE 20 AUGUST 2026",
+        "RENTAL PROPERTY",
+    ])
+}
+
+fn sanitised_bill_png(lines: &[&str]) -> Vec<u8> {
+    let mut image = ImageBuffer::from_pixel(1_000, 620, Rgb([255_u8, 255_u8, 255_u8]));
+    for (index, line) in lines.iter().enumerate() {
+        draw_fixture_text(
+            &mut image,
+            70,
+            70 + index as u32 * 100,
+            if index == 0 { 10 } else { 7 },
+            line,
+        );
+    }
+    let mut png = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(image)
+        .write_to(&mut png, ImageFormat::Png)
+        .expect("encode sanitised PNG fixture");
+    png.into_inner()
+}
+
+fn draw_fixture_text(
+    image: &mut ImageBuffer<Rgb<u8>, Vec<u8>>,
+    start_x: u32,
+    start_y: u32,
+    scale: u32,
+    text: &str,
+) {
+    let mut x = start_x;
+    for character in text.chars() {
+        for (row, bits) in fixture_glyph(character).into_iter().enumerate() {
+            for column in 0..5 {
+                if bits & (1 << (4 - column)) != 0 {
+                    for dx in 0..scale {
+                        for dy in 0..scale {
+                            image.put_pixel(
+                                x + column * scale + dx,
+                                start_y + row as u32 * scale + dy,
+                                Rgb([20, 35, 55]),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        x += 6 * scale;
+    }
+}
+
+fn fixture_glyph(character: char) -> [u8; 7] {
+    match character {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'C' => [
+            0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'G' => [
+            0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        '0' => [
+            0b01110, 0b10011, 0b10101, 0b10101, 0b10101, 0b11001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
+        ],
+        '6' => [
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ],
+        '$' => [
+            0b00100, 0b01111, 0b10100, 0b01110, 0b00101, 0b11110, 0b00100,
+        ],
+        '.' => [0, 0, 0, 0, 0, 0b00110, 0b00110],
+        ' ' => [0; 7],
+        _ => [0b11111, 0b10001, 0b00010, 0b00100, 0b01000, 0, 0b01000],
+    }
 }

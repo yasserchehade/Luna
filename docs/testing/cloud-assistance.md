@@ -2,6 +2,8 @@
 
 > **Reset note:** The provider and credential tests remain useful infrastructure evidence. Tests that assert current-message-only disclosure, separate document permissions or document-only reasoning are historical and must be replaced by the shared context-aware Household Work agent tests described in `docs/plans/mvp-reset-follow-up-issues.md`.
 
+> **MVP route:** Direct OpenAI is the MVP reasoning path. LiteLLM and multi-provider support are deferred until justified by validated product demand. Historical gateway, BYOK and provisioning evidence below remains labelled infrastructure evidence and does not define the default Household Administration route.
+
 Tests use the approved local-core, boundary-contract and installed-application seams.
 
 | Requirement | Evidence |
@@ -26,12 +28,13 @@ Tests use the approved local-core, boundary-contract and installed-application s
 | Deterministic contract | all `DeterministicIntelligenceGateway` application and boundary tests |
 | Invalid output rejection | `invalid_structured_identity_is_rejected_and_recorded_as_waiting` |
 | Household structured output | `household_request_uses_the_strict_accepted_output_schema`, `conforming_household_response_parses_successfully`, `household_response_missing_a_required_field_is_rejected_cleanly` and `household_transport_metadata_comes_from_luna_and_the_response_envelope` |
+| Direct OpenAI adapter contract | `direct_openai_adapter_uses_strict_output_and_luna_owned_envelope_metadata`, `direct_openai_adapter_rejects_missing_model_owned_fields`, `direct_openai_adapter_sends_pdf_as_a_file_part`, `direct_openai_adapter_maps_provider_failures_to_specific_categories` and `direct_openai_adapter_fails_closed_for_configuration_and_contract_mismatch` |
 | Bounded household document input | `an_oversized_document_is_rejected_before_it_is_read_or_preserved`, `text_pdf_input_is_bounded_and_binary_is_a_file_part` and `image_only_pdf_and_image_use_supported_non_text_content_parts` |
 | Household Work transition authority | `hallucinated_terminal_household_work_states_are_rejected`, `explicit_member_payment_authorises_completion_inside_luna`, `a_read_only_question_cannot_close_household_work` and `explicit_correction_can_reopen_source_linked_terminal_work` |
 | Household Work no-op and attention | `a_none_operation_preserves_existing_awaiting_approval_work_exactly` and `terminal_household_work_is_removed_from_attention_for_every_terminal_state` |
 | Headless Household Administration engine | `desktop/src-tauri/tests/household_administration_engine.rs` covers clear PDF-like content, clarification, correction, read-only questions, completion, dismissal and scanned-image/OCR content through `HouseholdAdministrationEngine::handle_turn` with no Tauri runtime, Device PIN, OS vault, application launch or network |
 | Headless engine failure categories | `malformed_provider_result_has_an_exact_failure_category`, `incompatible_contract_version_has_an_exact_failure_category`, `missing_existing_work_has_an_exact_failure_category`, `invalid_correction_target_has_an_exact_failure_category` and `persistence_failure_has_an_exact_failure_category` |
-| Opt-in live engine diagnostics | the ignored `live_managed_reasoning_isolates_*_without_desktop_state` tests substitute an injected managed reasoning adapter while source, conversation and Household Work remain fixtures/in memory |
+| Opt-in live engine diagnostics | the ignored `live_openai_reasoning_isolates_*_without_desktop_state` tests use direct OpenAI with server-side `OPENAI_API_KEY`, explicit `LUNA_OPENAI_MODEL`, fixture source data and in-memory conversation/Household Work persistence |
 | Untrusted Evidence bounds and provenance | `oversized_or_untraceable_provider_evidence_is_rejected_through_the_gateway_boundary` |
 | No provider-owned mutation | the allow-once application test proves the Original remains unfiled |
 | Owning-domain validation | `invalid_candidate_amount_is_rejected_into_a_recoverable_waiting_state`, `invalid_candidate_calendar_date_is_rejected_by_document_handling` and `candidate_cannot_replace_context_that_already_has_member_direction` |
@@ -62,7 +65,7 @@ The OpenAI/LiteLLM canary is an explicit release-environment check, not an autom
 
 The extracted engine's deterministic suite passes all required Household Administration scenarios and exposes exact failure categories without desktop orchestration. Household Work success audit events remain part of the work mutation and are persisted through the same Household Work repository save; a separate audit interface was intentionally not added because it would duplicate that owning persistence seam and make the first extraction shallower.
 
-The live managed diagnostic interface is ready, but no `LUNA_MANAGED_INTELLIGENCE_URL` or `LUNA_MANAGED_INTELLIGENCE_GATEWAY_CREDENTIAL` is present in the current environment. The three live tests therefore remain explicitly ignored and no new live clarification, correction or scanned-image evidence is claimed. PR #76's earlier live failure root cause remains unresolved until those tests run with an ephemeral narrow credential; the desktop and founder Device PIN are not required for that rerun.
+The direct OpenAI diagnostic interface is ready, but no `OPENAI_API_KEY` or `LUNA_OPENAI_MODEL` is present in the current environment. The three live tests therefore remain explicitly ignored and no new live clarification, correction or scanned-image evidence is claimed. They require no Tauri runtime, desktop UI, Device PIN, managed intelligence gateway, LiteLLM or local application launch.
 
 On 29 July 2026, the persistent internal-beta gateway repeated that contract with
 the newly created Luna-funded project key: 399 input, 216 output and 615 total
@@ -97,6 +100,6 @@ A remote host is not required to merge the prototype. Issue #53 owns the separat
 
 The standard branch checks run the Rust suite, Options component tests, server-contract tests, TypeScript checking, Supabase schema lint and account-service contract. Paddle is sandbox-only and all server-contract tests use deterministic transports; no real charge or paid provider call is made.
 
-Bring-your-own Intelligence is a separate follow-on gate. Provider-key entry in Options is enabled only after Luna has provisioned BYOK gateway access to the Trusted Device. The pinned LiteLLM build and Luna adapter distinguish Luna gateway authentication from a forwarded provider credential, reject cleartext remote endpoints, and prove BYOK-only route isolation, fail-closed missing-key behavior, credential-free logs and non-persistence.
+Bring-your-own Intelligence is deferred historical infrastructure, not an MVP gate. Existing Options, LiteLLM and BYOK tests remain evidence of earlier boundaries but do not select the Household Administration reasoning path.
 
 Source-boundary review additionally verifies `conversation.rs` and `document_intelligence.rs` import no LiteLLM type. `litellm.rs` is private to the Rust crate.

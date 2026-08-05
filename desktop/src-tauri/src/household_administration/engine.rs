@@ -10,11 +10,10 @@ use super::{
     ConversationPort, HandleHouseholdAdministrationTurn, HouseholdAdministrationClock,
     HouseholdAdministrationFailure, HouseholdAdministrationFailureCategory,
     HouseholdAdministrationOutcome, HouseholdAdministrationReasoning, HouseholdWorkPort,
-    ReasoningPortError, SourcePort, SourcePortError,
+    ReasoningPortError, SourcePort, SourcePortError, HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION,
 };
 
 const RECENT_CONVERSATION_LIMIT: usize = 12;
-const RESPONSE_SCHEMA_VERSION: &str = "household-administration.v1";
 
 pub struct HouseholdAdministrationEngine<'a> {
     conversations: &'a dyn ConversationPort,
@@ -149,7 +148,7 @@ impl<'a> HouseholdAdministrationEngine<'a> {
                 "Luna validates all proposals. The member {} remains the authority. OpenAI cannot approve, execute, send, schedule, mutate context or close work.",
                 input.authorised_actor
             ),
-            response_schema_version: RESPONSE_SCHEMA_VERSION.to_owned(),
+            response_schema_version: HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION.to_owned(),
             constraints: IntelligenceExecutionConstraints {
                 timeout_ms: 30_000,
                 max_output_tokens: 1_200,
@@ -388,6 +387,46 @@ pub(crate) fn apply_result(
 
 fn reasoning_failure(error: ReasoningPortError) -> HouseholdAdministrationFailure {
     match error {
+        ReasoningPortError::MissingApiKey => failure(
+            HouseholdAdministrationFailureCategory::MissingApiKey,
+            "Luna's OpenAI reasoning service is not configured.",
+        ),
+        ReasoningPortError::InvalidApiKey => failure(
+            HouseholdAdministrationFailureCategory::InvalidApiKey,
+            "Luna could not authenticate with OpenAI.",
+        ),
+        ReasoningPortError::ModelUnavailable => failure(
+            HouseholdAdministrationFailureCategory::ModelUnavailable,
+            "Luna's configured OpenAI model is unavailable.",
+        ),
+        ReasoningPortError::RateLimited => failure(
+            HouseholdAdministrationFailureCategory::RateLimited,
+            "OpenAI is temporarily rate limiting Luna. Please try again shortly.",
+        ),
+        ReasoningPortError::RequestTooLarge => failure(
+            HouseholdAdministrationFailureCategory::RequestTooLarge,
+            "The source is too large for Luna's OpenAI processing limit.",
+        ),
+        ReasoningPortError::UnsupportedMedia => failure(
+            HouseholdAdministrationFailureCategory::UnsupportedMedia,
+            "Luna cannot send this source type to OpenAI.",
+        ),
+        ReasoningPortError::NetworkFailure => failure(
+            HouseholdAdministrationFailureCategory::NetworkFailure,
+            "Luna could not reach OpenAI.",
+        ),
+        ReasoningPortError::Timeout => failure(
+            HouseholdAdministrationFailureCategory::Timeout,
+            "OpenAI did not respond within Luna's processing limit.",
+        ),
+        ReasoningPortError::StructuredResponseInvalid => failure(
+            HouseholdAdministrationFailureCategory::StructuredResponseInvalid,
+            "OpenAI returned an invalid Household Administration result.",
+        ),
+        ReasoningPortError::OpenAiContractMismatch => failure(
+            HouseholdAdministrationFailureCategory::OpenAiContractMismatch,
+            "The OpenAI Household Administration contract is incompatible.",
+        ),
         ReasoningPortError::Unavailable => failure(
             HouseholdAdministrationFailureCategory::ReasoningUnavailable,
             "Luna's Household Administration reasoning is temporarily unavailable.",

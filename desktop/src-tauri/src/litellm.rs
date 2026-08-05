@@ -1,5 +1,8 @@
 //! Isolated LiteLLM transport adapter.
 //!
+//! Deferred for the MVP. Household Administration uses the direct OpenAI
+//! adapter; this module remains only for historical gateway/BYOK compatibility.
+//!
 //! No LiteLLM request, response or error type leaves this module. Luna selects
 //! the exact provider and model before this adapter translates the request.
 
@@ -305,79 +308,7 @@ fn litellm_household_request(request: &HouseholdAdministrationRequest) -> serde_
 }
 
 fn household_administration_response_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["reply", "work", "clarification", "proposedActions"],
-        "properties": {
-            "reply": {"type": "string", "minLength": 1, "maxLength": 4000},
-            "work": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["operation", "workId", "kind", "summary", "status", "facts", "dueAt", "urgency"],
-                "properties": {
-                    "operation": {"type": "string", "enum": ["none", "create", "update"]},
-                    "workId": {"type": ["string", "null"]},
-                    "kind": {"type": ["string", "null"], "enum": ["bill", "renewal", "request", "appointment", "other", null]},
-                    "summary": {"type": ["string", "null"], "maxLength": 1024},
-                    "status": {"type": ["string", "null"], "enum": ["active", "needsClarification", "awaitingApproval", "inProgress", "monitoring", "completed", "dismissed", "noLongerRelevant", "blocked", null]},
-                    "facts": {
-                        "type": "array",
-                        "maxItems": 16,
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["key", "value", "evidenceRefs", "certainty"],
-                            "properties": {
-                                "key": {"type": "string", "enum": ["provider", "property", "account", "amount", "dueDate", "requiredAction", "urgency", "other"]},
-                                "value": {"type": "string", "minLength": 1, "maxLength": 1024},
-                                "evidenceRefs": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "maxLength": 256}},
-                                "certainty": {"type": "string", "enum": ["confirmed", "likely", "unknown"]}
-                            }
-                        }
-                    },
-                    "dueAt": {"type": ["string", "null"]},
-                    "urgency": {"type": ["string", "null"], "enum": ["low", "normal", "high", null]}
-                }
-            },
-            "clarification": {
-                "type": ["object", "null"],
-                "additionalProperties": false,
-                "required": ["question", "reason", "field"],
-                "properties": {
-                    "question": {"type": "string", "minLength": 1, "maxLength": 500},
-                    "reason": {"type": ["string", "null"], "maxLength": 1024},
-                    "field": {"type": ["string", "null"], "enum": ["provider", "property", "account", "amount", "dueDate", "requiredAction", "urgency", "other", null]}
-                }
-            },
-            "proposedActions": {
-                "type": "array",
-                "maxItems": 4,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["kind", "summary", "arguments", "approvalRequired"],
-                    "properties": {
-                        "kind": {"type": "string", "enum": ["draftReply", "reminder"]},
-                        "summary": {"type": "string", "minLength": 1, "maxLength": 500},
-                        "arguments": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["recipient", "subject", "body", "remindAt", "message"],
-                            "properties": {
-                                "recipient": {"type": ["string", "null"], "maxLength": 1024},
-                                "subject": {"type": ["string", "null"], "maxLength": 1024},
-                                "body": {"type": ["string", "null"], "maxLength": 1024},
-                                "remindAt": {"type": ["string", "null"], "maxLength": 1024},
-                                "message": {"type": ["string", "null"], "maxLength": 1024}
-                            }
-                        },
-                        "approvalRequired": {"type": "boolean"}
-                    }
-                }
-            }
-        }
-    })
+    crate::household_administration::household_administration_response_schema()
 }
 
 fn litellm_request(request: &IntelligenceRequest) -> serde_json::Value {

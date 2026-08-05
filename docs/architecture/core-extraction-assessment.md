@@ -1,8 +1,8 @@
 # Household Administration core extraction assessment
 
-Status: first narrow extraction implemented locally; live managed diagnostics pending
+Status: first narrow extraction and direct OpenAI adapter implemented; live direct-OpenAI diagnostics pending credentials
 
-Assessed implementation: PR #76 head `0b42ca0`
+Assessed implementation baseline: PR #76 extraction head `66ce7751c8f128b060feee4b87bf1b772e5958cd`
 
 Scope: assessment plus the first narrow engine extraction; no broad runtime reorganisation is included
 
@@ -16,11 +16,11 @@ HouseholdAdministrationEngine::handle_turn(HandleHouseholdAdministrationTurn)
 
 The module now owns application-independent turn orchestration, recent-conversation loading, source loading through a logical reference, active and source-linked Household Work selection, request construction, untrusted-result validation, merge/no-op/terminal rules, Household Work audit events, persistence calls, natural response assembly and typed failure categories.
 
-The production Tauri command delegates to the same interface through desktop adapters. Tauri retains session/actor validation, legacy `DocumentArrival` lookup and authorised review-card context translation, local bounded file loading, encrypted SQLite adapters, OS-vault managed reasoning and portable-memory compatibility capture. None of those types enters the engine input.
+The production Tauri command delegates to the same interface through desktop adapters. For Household Administration reasoning it now constructs the direct OpenAI adapter from trusted runtime configuration rather than using Device PIN-bound gateway provisioning. Tauri retains session/actor validation, legacy `DocumentArrival` lookup and authorised review-card context translation, local bounded file loading, encrypted SQLite adapters and portable-memory compatibility capture. None of those types enters the engine input.
 
 The implementation remains a coherent module in the existing Rust library rather than a new workspace crate. This is the smallest extraction that avoids a broad package reorganisation. The module itself imports no Tauri, SQLite, credential-vault, Cabinet, navigation, frontend or filesystem-path type. A later packaging change is still required before a web host can depend on a Rust crate that does not compile the surrounding desktop runtime.
 
-Headless integration coverage is in `desktop/src-tauri/tests/household_administration_engine.rs`. Twelve deterministic tests pass without a Tauri runtime, Device PIN, OS vault, application launch or network. Three ignored live diagnostics compose the same engine with fixture sources, in-memory persistence and `ManagedHouseholdAdministrationReasoningAdapter`, which accepts an explicitly injected endpoint and narrow gateway credential. The current environment has neither required variable, so clarification, correction and scanned-image live failures have not been rerun and their original provider-side cause remains unknown.
+Headless integration coverage is in `desktop/src-tauri/tests/household_administration_engine.rs`. Twelve deterministic tests pass without a Tauri runtime, Device PIN, OS vault, application launch or network. Five direct-adapter unit tests cover strict structured output, Luna-owned envelope metadata, PDF/image input, configuration/contract failure and provider error categories. Three ignored live diagnostics compose the same engine with fixture sources, in-memory persistence and `OpenAiHouseholdAdministrationReasoningAdapter`. They require only server-side `OPENAI_API_KEY` and explicit `LUNA_OPENAI_MODEL`. Neither variable is available in the current environment, so clarification, correction and scanned-image live evidence is still pending; no managed gateway or desktop fallback is required.
 
 ## Decision summary
 
@@ -119,7 +119,7 @@ The engine is configured with a small number of substitutable collaborators:
 | Interface | Responsibility | Production adapters needed now | Test adapter |
 | --- | --- | --- | --- |
 | Turn repository | Load conversation, Household Work and household context; atomically commit messages, work and audit records | Existing encrypted SQLite desktop adapter | In-memory repository |
-| Reasoning interface | Accept the core-owned OpenAI reasoning contract and return untrusted output plus envelope-owned metadata | Existing LiteLLM/OpenAI transport adapted out of `CloudIntelligenceStore` | Fixture reasoning adapter |
+| Reasoning interface | Accept the core-owned OpenAI reasoning contract and return untrusted output plus envelope-owned metadata | Direct OpenAI Responses adapter; LiteLLM deferred | Fixture reasoning adapter |
 | Source-content interface | Resolve a stable source reference into bounded text/file/image content | Existing local-file/`DocumentArrival` adapter | Fixture source adapter |
 | Clock and identifier source | Supply deterministic timestamps and identifiers | System implementation | Fixed implementation |
 
@@ -142,7 +142,7 @@ Model, validation or persistence failure must not leave a misleading partial tur
 | Package/module | Contents | Must not contain |
 | --- | --- | --- |
 | `crates/household-administration-core` | Domain types, turn engine, context assembly, OpenAI reasoning contract, validation, transitions, audit facts and interface traits | Tauri, SQLite, HTTP, credentials, paths, React or Cabinet code |
-| `crates/household-administration-openai` | LiteLLM/OpenAI transport, supported file/image input translation, HTTP failures, retries and response-envelope extraction | Household Work mutation, member authority decisions or persistence |
+| `crates/household-administration-openai` | Direct OpenAI Responses transport, supported file/image input translation, HTTP failures and response-envelope extraction | LiteLLM/provider routing, Household Work mutation, member authority decisions or persistence |
 | `desktop/src-tauri` desktop adapter | Tauri commands, desktop actor/session validation, encrypted SQLite repository, OS-vault credentials, local source reader and composition | New product logic |
 | `desktop/src` desktop client | React rendering, navigation, focus and Tauri invocation | Domain routing heuristics after the unified seam is available |
 | future web/background hosts | Composition and client adapters around the same core | Duplicate Household Work or validation implementations |
@@ -165,7 +165,7 @@ flowchart TD
     Engine --> Repository["Turn repository interface"]
     Engine --> Source["Source-content interface"]
 
-    Reasoning --> OpenAI["OpenAI/LiteLLM adapter"]
+    Reasoning --> OpenAI["Direct OpenAI adapter"]
     Repository --> DesktopSQLite["Desktop encrypted SQLite adapter"]
     Source --> DesktopFiles["Desktop local-file adapter"]
 
@@ -198,7 +198,7 @@ These dependencies are acceptable only because they implement or surround the de
 4. Move context assembly and the core-owned OpenAI contract out of the Tauri command into `HouseholdAdministrationEngine::handle_turn`.
 5. Adapt existing conversation/Household Work SQLite methods behind the repository interface. Keep Trusted Device encryption inside this desktop adapter.
 6. Introduce the bounded source-content interface. Adapt `DocumentArrival.original_path`, extraction and multimodal bytes in the desktop source adapter; remove path/base64 fields from the core-facing input.
-7. Adapt the existing LiteLLM/OpenAI implementation to the reasoning interface, injecting credentials from the host instead of reading Device PIN-bound vault state inside the engine.
+7. Implement the direct OpenAI Responses adapter behind the reasoning interface, injecting `OPENAI_API_KEY` and explicit `LUNA_OPENAI_MODEL` from the trusted host. Keep LiteLLM deferred and outside the default MVP route.
 8. Reduce `submit_household_administration` to actor/session validation, input translation, one engine call and output translation. Move Cabinet/portable capture out of the turn's success condition.
 9. Run the same core acceptance suite against in-memory adapters and the desktop SQLite/OpenAI adapters before changing any client behaviour.
 
@@ -250,4 +250,4 @@ The previously observed generic failure can therefore be reproduced through the 
 
 The narrow extraction introduced `HouseholdAdministrationEngine::handle_turn`, fixture reasoning/source adapters and in-memory repository coverage without changing React, the web interface, Household Work semantics, connectors, background processing or the Daily Briefing. The existing desktop crate was retained to avoid broad package movement; the module can move to a standalone crate when a real non-desktop host is ready to consume it.
 
-The next decision is whether to provide an ephemeral narrow managed-gateway credential and endpoint for the three opt-in headless diagnostics. Until that evidence exists, the deterministic PR #76 behaviours are independently validated but the previously observed live managed-provider failures are not cleared.
+The next decision is whether to provide server-side `OPENAI_API_KEY` and explicit `LUNA_OPENAI_MODEL` for the three opt-in headless diagnostics. Until that evidence exists, deterministic PR #76 behaviour and direct-adapter translation are independently validated, but final live clarification, correction and scanned-image acceptance is not cleared.

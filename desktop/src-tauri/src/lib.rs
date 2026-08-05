@@ -39,8 +39,9 @@ pub use household_administration::{
     HandleHouseholdAdministrationTurn, HouseholdAdministrationClock, HouseholdAdministrationEngine,
     HouseholdAdministrationFailure, HouseholdAdministrationFailureCategory,
     HouseholdAdministrationOutcome, HouseholdAdministrationReasoning, HouseholdWorkPort,
-    HouseholdWorkPortError, ReasoningPortError, SourcePort, SourcePortError,
-    SystemHouseholdAdministrationClock,
+    HouseholdWorkPortError, OpenAiHouseholdAdministrationReasoningAdapter, ReasoningPortError,
+    SourcePort, SourcePortError, SystemHouseholdAdministrationClock,
+    HOUSEHOLD_ADMINISTRATION_CONTRACT_VERSION,
 };
 pub use household_work::{
     ActionApproval, ActionExecution, HouseholdWork, HouseholdWorkKind, HouseholdWorkStatus,
@@ -537,25 +538,14 @@ impl SourcePort for DesktopSourceAdapter<'_> {
     }
 }
 
-struct DesktopReasoningAdapter<'a> {
-    household_id: &'a str,
-    intelligence: &'a IntelligenceState,
-}
+struct DesktopReasoningAdapter;
 
-impl HouseholdAdministrationReasoning for DesktopReasoningAdapter<'_> {
+impl HouseholdAdministrationReasoning for DesktopReasoningAdapter {
     fn reason(
         &self,
         request: &HouseholdAdministrationRequest,
     ) -> Result<UntrustedHouseholdAdministrationResult, ReasoningPortError> {
-        self.intelligence
-            .reason_about_household_administration_untrusted(self.household_id, request)
-            .map_err(|error| match error {
-                IntelligenceFailure::InvalidStructuredResult => ReasoningPortError::MalformedResult,
-                IntelligenceFailure::UnsupportedCapability => {
-                    ReasoningPortError::IncompatibleContractVersion
-                }
-                _ => ReasoningPortError::Unavailable,
-            })
+        OpenAiHouseholdAdministrationReasoningAdapter::from_env()?.reason(request)
     }
 }
 
@@ -628,10 +618,7 @@ fn submit_household_administration(
     let sources = DesktopSourceAdapter {
         arrival: arrival.as_ref(),
     };
-    let reasoning = DesktopReasoningAdapter {
-        household_id: &request.household_id,
-        intelligence: intelligence.inner(),
-    };
+    let reasoning = DesktopReasoningAdapter;
     let clock = SystemHouseholdAdministrationClock;
     let engine = HouseholdAdministrationEngine::new(
         &conversations,

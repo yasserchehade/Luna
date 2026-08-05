@@ -71,6 +71,26 @@ pub trait SourcePort: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ReasoningPortError {
+    #[error("the server-side OpenAI API key is missing")]
+    MissingApiKey,
+    #[error("the OpenAI API key is invalid or revoked")]
+    InvalidApiKey,
+    #[error("the configured OpenAI model is unavailable")]
+    ModelUnavailable,
+    #[error("OpenAI rate-limited the request")]
+    RateLimited,
+    #[error("the OpenAI request exceeds the supported limit")]
+    RequestTooLarge,
+    #[error("the source media type is unsupported by the OpenAI reasoning route")]
+    UnsupportedMedia,
+    #[error("the OpenAI network request failed")]
+    NetworkFailure,
+    #[error("the OpenAI request timed out")]
+    Timeout,
+    #[error("OpenAI returned an invalid structured Household Administration result")]
+    StructuredResponseInvalid,
+    #[error("the OpenAI Household Administration contract is incompatible")]
+    OpenAiContractMismatch,
     #[error("the Household Administration reasoning route is unavailable")]
     Unavailable,
     #[error("the Household Administration result is malformed")]
