@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::{
     AvailableHouseholdTool, HouseholdActionProposal, HouseholdClarification, HouseholdContextItem,
-    HouseholdWork,
+    HouseholdWork, WorkFactKey,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +17,24 @@ pub struct HandleHouseholdAdministrationTurn {
     pub available_actions: Vec<AvailableHouseholdTool>,
     pub authorised_actor: String,
     pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandleHouseholdWorkCommand {
+    pub household_id: String,
+    pub conversation_id: i64,
+    pub work_id: String,
+    pub command: HouseholdWorkCommand,
+    pub authorised_actor: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HouseholdWorkCommand {
+    ApproveAction { action_id: String },
+    Complete,
+    Dismiss,
+    CorrectFact { key: WorkFactKey, value: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -199,7 +199,7 @@ fn openai_household_administration_request(
                 "role": "system",
                 "content": [{
                     "type": "input_text",
-                    "text": "You are Luna's household-administration reasoning engine. Use the supplied source, relevant conversation and authorised household context. Return only the requested structured proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification. For an update, the work.facts array is a PATCH, never a replacement: include only facts newly supplied or corrected by currentMessage. Never repeat unchanged facts from the source or existing Household Work. Leave kind, summary, status, dueAt and urgency null unless currentMessage directly changes that field. If currentMessage answers a clarification or corrects a fact, target the existing sourceLinkedHouseholdWork work ID, preserve the exact member phrase as the fact value unless an explicit household-context mapping proves a more precise identity, and use conversation-member as its evidence reference. Leave proposedActions empty unless currentMessage requests a new proposal."
+                    "text": "You are Luna's household-administration reasoning engine. Use the supplied source, relevant conversation and authorised household context. Return only the requested structured proposal. Never claim authority, approve an action, execute a tool, invent evidence or ask for information already supplied. Ask at most one focused clarification. When currentMessage explicitly delegates a newly supplied source (for example, 'Take care of this') and sourceLinkedHouseholdWork is null, operation must be create; create the Household Work even if one focused clarification is still required. For an update, the work.facts array is a PATCH, never a replacement: include only facts newly supplied or corrected by currentMessage. Never repeat unchanged facts from the source or existing Household Work. Leave kind, summary, status, dueAt and urgency null unless currentMessage directly changes that field. If currentMessage answers a clarification or corrects a fact, target the existing sourceLinkedHouseholdWork work ID, preserve the exact member phrase as the fact value unless an explicit household-context mapping proves a more precise identity, and use conversation-member as its evidence reference. Leave proposedActions empty unless currentMessage requests a new proposal."
                 }]
             },
             {"role": "user", "content": content}
@@ -647,6 +647,10 @@ mod tests {
         assert_eq!(body["store"], false);
         assert_eq!(body["text"]["format"]["type"], "json_schema");
         assert_eq!(body["text"]["format"]["strict"], true);
+        assert!(body["input"][0]["content"][0]["text"]
+            .as_str()
+            .expect("system instruction")
+            .contains("operation must be create"));
         let schema = &body["text"]["format"]["schema"];
         assert!(schema["properties"].get("requestId").is_none());
         assert!(schema["properties"].get("providerId").is_none());

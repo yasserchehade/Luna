@@ -110,6 +110,7 @@ export type AttachmentResult = {
   attachmentId: string;
   displayName: string;
   sizeLabel: string;
+  persisted?: boolean;
 };
 
 export type TodayServiceErrorCode = "unavailable" | "invalidAttachment" | "notFound" | "mutationFailed";

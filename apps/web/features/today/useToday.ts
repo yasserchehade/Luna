@@ -173,7 +173,9 @@ export function useToday(service: TodayService) {
     try {
       const result = await service.attachSource(file);
       setAttachment(result);
-      setNotice(`${result.displayName} is ready to discuss. Nothing has been uploaded.`);
+      setNotice(result.persisted
+        ? `${result.displayName} is uploaded and ready to discuss.`
+        : `${result.displayName} is ready to discuss. Nothing has been uploaded.`);
     } catch (error) {
       setActionError(safeMessage(error));
     } finally {

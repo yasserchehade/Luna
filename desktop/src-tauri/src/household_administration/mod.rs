@@ -16,6 +16,6 @@ pub use ports::{
     SystemHouseholdAdministrationClock,
 };
 pub use types::{
-    HandleHouseholdAdministrationTurn, HouseholdAdministrationFailure,
-    HouseholdAdministrationFailureCategory, HouseholdAdministrationOutcome,
+    HandleHouseholdAdministrationTurn, HandleHouseholdWorkCommand, HouseholdAdministrationFailure,
+    HouseholdAdministrationFailureCategory, HouseholdAdministrationOutcome, HouseholdWorkCommand,
 };
