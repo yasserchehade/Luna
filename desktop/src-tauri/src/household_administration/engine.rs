@@ -159,6 +159,17 @@ impl<'a> HouseholdAdministrationEngine<'a> {
             .reasoning
             .reason(&reasoning_request)
             .map_err(reasoning_failure)?;
+        if input.source_reference.is_some()
+            && source_linked.is_none()
+            && explicit_target.is_none()
+            && is_explicit_delegation(member_message)
+            && matches!(untrusted.work.operation, HouseholdWorkOperation::None)
+        {
+            return Err(failure(
+                HouseholdAdministrationFailureCategory::MalformedProviderResult,
+                "OpenAI returned no Household Work for an explicit source delegation.",
+            ));
+        }
         if matches!(untrusted.work.operation, HouseholdWorkOperation::Update) {
             let Some(work_id) = untrusted.work.work_id.as_deref() else {
                 return Err(failure(
@@ -625,6 +636,18 @@ fn is_correction(message: &str) -> bool {
         "correction",
         "correct ",
         "instead",
+    ]
+    .iter()
+    .any(|phrase| message.contains(phrase))
+}
+
+fn is_explicit_delegation(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "take care of this",
+        "handle this",
+        "deal with this",
+        "sort this out",
     ]
     .iter()
     .any(|phrase| message.contains(phrase))

@@ -676,6 +676,38 @@ fn scanned_image_fixture_uses_the_same_household_administration_contract() {
 }
 
 #[test]
+fn explicit_new_source_delegation_rejects_a_provider_no_op() {
+    let conversations = MemoryConversationPort::default();
+    let work = MemoryHouseholdWorkPort::default();
+    let source = fixture_source(
+        "document-41",
+        "image/png",
+        "OCR: Sydney Water. Rental property. $96.40 due 20 August 2026.",
+    );
+    let reasoning = FixtureReasoningPort {
+        request: Arc::new(Mutex::new(None)),
+        result: Ok(provider_result(
+            "request-delegation-no-op",
+            "I found the bill. Which property is it for?",
+            no_work_proposal(),
+        )),
+    };
+    let clock = FixedHouseholdAdministrationClock::new("2026-08-05T10:05:30Z");
+    let engine =
+        HouseholdAdministrationEngine::new(&conversations, &work, &source, &reasoning, &clock);
+
+    let failure = engine
+        .handle_turn(turn_input("Take care of this.", "request-delegation-no-op"))
+        .expect_err("reject a no-op for an explicit new-source delegation");
+
+    assert_eq!(
+        failure.category,
+        HouseholdAdministrationFailureCategory::MalformedProviderResult
+    );
+    assert!(work.works.lock().expect("work lock").is_empty());
+}
+
+#[test]
 fn malformed_provider_result_has_an_exact_failure_category() {
     let conversations = MemoryConversationPort::default();
     let work = MemoryHouseholdWorkPort::default();
